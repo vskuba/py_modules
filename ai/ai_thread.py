@@ -5,11 +5,11 @@ import threading
 import time
 import traceback
 
-from ai_pydantic.framework.ai_framework import AiFrameworkModel, AbstractAiFramework
-from ai_pydantic.framework.ai_framework_agent import AbstractAiFrameworkAgent
-from ai_pydantic.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
-from ai_pydantic.framework.ai_framework_task import AbstractAiFrameworkTask
-from ai_pydantic.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
+from ai.framework.ai_framework import AiFrameworkModel, AbstractAiFramework
+from ai.framework.ai_framework_agent import AbstractAiFrameworkAgent
+from ai.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
+from ai.framework.ai_framework_task import AbstractAiFrameworkTask
+from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
 from async_.async_ import async_loop_init, async_waiting_is_active, async_waiting_clear
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get

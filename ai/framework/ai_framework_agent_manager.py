@@ -3,8 +3,8 @@ import yaml
 
 from abc import abstractmethod
 
-from ai_pydantic.framework.ai_framework import AbstractAiFrameworkManager
-from ai_pydantic.framework.ai_framework_agent_model import AiAgentYaml, AbstractAiFrameworkAgentModel
+from ai.framework.ai_framework import AbstractAiFrameworkManager
+from ai.framework.ai_framework_agent_model import AiAgentYaml, AbstractAiFrameworkAgentModel
 from logging_.logging_ import logger_info
 
 

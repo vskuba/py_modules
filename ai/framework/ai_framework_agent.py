@@ -2,8 +2,8 @@ import asyncio
 import queue
 import traceback
 
-from ai_pydantic.framework.ai_framework import AbstractAiFramework, AiFrameworkModel
-from ai_pydantic.framework.ai_framework_agent_manager import AbstractAiFrameworkAgentManager
+from ai.framework.ai_framework import AbstractAiFramework, AiFrameworkModel
+from ai.framework.ai_framework_agent_manager import AbstractAiFrameworkAgentManager
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 

@@ -6,10 +6,10 @@ import traceback
 from pathlib import Path
 from typing import cast, Callable
 
-from ai_pydantic.tool.ai_tool_agent import agent_list, agent_invoke
-from ai_pydantic.tool.ai_tool_chat import chat_me, chat_me_question
-from ai_pydantic.tool.ai_tool_memory import qdrant_memory_search_text, qdrant_memory_save
-from ai_pydantic.tool.ai_tool_task import task_abort
+from ai.tool.ai_tool_agent import agent_list, agent_invoke
+from ai.tool.ai_tool_chat import chat_me, chat_me_question
+from ai.tool.ai_tool_memory import qdrant_memory_search_text, qdrant_memory_save
+from ai.tool.ai_tool_task import task_abort
 from config.config import config_get
 from logging_.logging_ import logger_info
 from mcp_.mcp_ import mcp_config_list_get, mcp_config_get
@@ -104,7 +104,7 @@ def ai_tools_permanent_get() -> list[Callable]:
     ]
 
     if state_get('mode_gui'):
-        from ai_pydantic.tool.ai_tool_web import web_read_page
+        from ai.tool.ai_tool_web import web_read_page
 
         tools_inbuilt = [
             # ------ Chat

@@ -5,8 +5,8 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
-from ai_pydantic.framework.ai_framework import AbstractAiFrameworkManager
-from ai_pydantic.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel, AiTaskYaml
+from ai.framework.ai_framework import AbstractAiFrameworkManager
+from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel, AiTaskYaml
 from logging_.logging_ import logger_info
 
 

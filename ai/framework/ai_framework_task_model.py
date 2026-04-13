@@ -4,7 +4,7 @@ from dataclasses import field, dataclass
 from typing import Any, Callable, Optional
 from pydantic import BaseModel
 
-from ai_pydantic.framework.ai_framework import AiFrameworkModel
+from ai.framework.ai_framework import AiFrameworkModel
 
 
 class AiTaskYamlSubTask(BaseModel):

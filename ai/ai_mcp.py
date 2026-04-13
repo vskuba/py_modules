@@ -5,7 +5,7 @@ import traceback
 from typing import Callable, Dict, Any
 
 from mcp import ClientSession, StdioServerParameters, stdio_client
-from ai_pydantic.framework.ai_framework import AiFrameworkModel
+from ai.framework.ai_framework import AiFrameworkModel
 from logging_.logging_ import logger_info
 from mcp_.mcp_ import mcp_config_tools_json_get, mcp_config_get
 

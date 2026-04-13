@@ -19,7 +19,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ai_pydantic.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
+from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
 from sqllite3.sqllite3_llm_short_memory import sqllite3_llm_short_memory_messages, sqllite3_llm_short_memory_message_add

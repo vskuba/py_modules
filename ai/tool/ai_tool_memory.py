@@ -5,7 +5,7 @@ from sentence_transformers import SentenceTransformer
 from qdrant_client.http.models import Distance, VectorParams, PointStruct, TextIndexParams, TokenizerType
 from qdrant_client.http import models
 
-from ai_pydantic.tool.ai_tool_agent import agent_invoke
+from ai.tool.ai_tool_agent import agent_invoke
 from logging_.logging_ import logger_info
 from qdrant_.qdrant_ import _qdrant_db_get_client
 

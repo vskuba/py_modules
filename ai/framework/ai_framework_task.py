@@ -4,9 +4,9 @@ import traceback
 
 from abc import abstractmethod
 
-from ai_pydantic.framework.ai_framework import AbstractAiFramework, AiFrameworkModel
-from ai_pydantic.framework.ai_framework_task_manager import AbstractAiFrameworkTaskManager
-from ai_pydantic.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
+from ai.framework.ai_framework import AbstractAiFramework, AiFrameworkModel
+from ai.framework.ai_framework_task_manager import AbstractAiFrameworkTaskManager
+from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
