@@ -16,6 +16,7 @@ from mcp_.mcp_ import mcp_config_list_get, mcp_config_get
 from state.state import state_get
 
 all_tools: list[Callable] = []
+all_tools_permanent: list[Callable] = []
 
 
 def ai_tools_get() -> list[Callable]:
