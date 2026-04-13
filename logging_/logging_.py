@@ -116,7 +116,7 @@ async def log_response_body(response: httpx.Response):
     if dialog:
         logger_info(
             f"👤-🧠 Текущая история общения: {'(total_tokens: ' + str(total_tokens) + ')' if total_tokens > 0 else ''}\n"
-            f"{'\n'.join(dialog)}",
+            '\n'.join(dialog),
         )
 
 
