@@ -5,7 +5,7 @@ from state.state import state_get
 qdrant_client: AsyncQdrantClient | None = None
 
 
-def _qdrant_db_get_client() -> AsyncQdrantClient:
+def _qdrant_db_get_client() -> AsyncQdrantClient | None:
     """
     Створює та повертає клієнт Qdrant (Singleton)
     """
