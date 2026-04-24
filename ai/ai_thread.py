@@ -39,12 +39,12 @@ def ai_thread_framework_run(ai_frameworks: list, window=None):
             framework_model = None
 
             try:
-                framework_model = queue_get()['task'].get_nowait()
+                framework_model = queue_get('task').get_nowait()
             except queue.Empty:
                 time.sleep(0.1)
 
             try:
-                framework_model = queue_get()['agent'].get_nowait()
+                framework_model = queue_get('agent').get_nowait()
             except queue.Empty:
                 time.sleep(0.1)
 
@@ -59,15 +59,15 @@ def ai_thread_framework_run(ai_frameworks: list, window=None):
 
             if window:
                 if isinstance(framework_model, AbstractAiFrameworkTaskModel):
-                    queue_get()['chat'].put({'text': f'Запускаю задачу {framework_model.title}', 'who': 'agent'})
+                    queue_get('chat').put({'text': f'Запускаю задачу {framework_model.title}', 'who': 'agent'})
                 if isinstance(framework_model, AbstractAiFrameworkAgentModel):
                     if framework_model.is_sub_thread:
-                        queue_get()['chat'].put({
+                        queue_get('chat').put({
                             'text': f'Спрашиваю у агента "{framework_model.title}": ' + framework_model.prompt,
                             'who': 'agent'}
                         )
                     else:
-                        queue_get()['chat'].put({'text': f'Запускаю агента "{framework_model.title}"', 'who': 'agent'})
+                        queue_get('chat').put({'text': f'Запускаю агента "{framework_model.title}"', 'who': 'agent'})
 
             if not ai_framework:
                 raise ValueError(f'Не могу определить ai_framework')

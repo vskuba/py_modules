@@ -38,7 +38,7 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
             await asyncio.sleep(0.1)
 
             try:
-                queue_get()['task_abort'].get_nowait()
+                queue_get('task_abort').get_nowait()
                 logger_info(f'🛑 Команда на остановку задачи "{framework_model.name}"')
                 await self.framework_report(framework_model)
                 return
@@ -64,12 +64,12 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
 
                 if self.framework_manager.is_complete(framework_model):
                     self.framework_manager.task_active_set(None)
-                    queue_get()['task_complete'].put(True)
+                    queue_get('task_complete').put(True)
                     await self.framework_report(framework_model)
                     return
                 else:
                     framework_model = self.framework_manager.switch_next_sub_task(framework_model)
-                    queue_get()['task_continue'].put(framework_model)
+                    queue_get('task_continue').put(framework_model)
                     await self.framework_report(framework_model)
                     continue
 
@@ -80,13 +80,13 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
                     f"Полный стек вызовов:\n{backtrace}"
                 )
 
-                queue_get()['chat'].put({"text": 'Произошла ошибка: %s' % e, "who": 'agent'})
+                queue_get('chat').put({"text": 'Произошла ошибка: %s' % e, "who": 'agent'})
 
                 # rate limit handling
                 if getattr(e, 'status_code', None) in [429, 413]:
                     await self.framework_report(framework_model)
                     return
 
-                queue_get()['chat'].put({"text": 'Работа будет продолжена', "who": 'agent'})
+                queue_get('chat').put({"text": 'Работа будет продолжена', "who": 'agent'})
                 catch_exception = True
                 continue

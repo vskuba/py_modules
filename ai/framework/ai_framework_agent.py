@@ -19,7 +19,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
             await asyncio.sleep(0.1)
 
             try:
-                queue_get()['agent_abort'].get_nowait()
+                queue_get('agent_abort').get_nowait()
                 logger_info(f'🛑 Команда на остановку агента "{framework_model.name}"')
                 await self.framework_report(framework_model)
                 return
@@ -50,7 +50,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 )
 
                 if framework_model.is_gui_mode:
-                    queue_get()['chat'].put({"text": 'Произошла ошибка: %s' % e, "who": 'agent'})
+                    queue_get('chat').put({"text": 'Произошла ошибка: %s' % e, "who": 'agent'})
 
                 # rate limit handling
                 if getattr(e, 'status_code', None) in [429, 413]:
@@ -58,7 +58,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                     return
 
                 if framework_model.is_gui_mode:
-                    queue_get()['chat'].put({"text": 'Работа будет продолжена', "who": 'agent'})
+                    queue_get('chat').put({"text": 'Работа будет продолжена', "who": 'agent'})
 
                 catch_exception = True
                 continue

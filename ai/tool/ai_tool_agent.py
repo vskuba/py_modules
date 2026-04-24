@@ -52,23 +52,23 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
 
     async def on_complete(response_text):
         logger_info(f'Вызвана функция on_complete для агента {agent_model.name}')
-        queue_get()['chat'].put({
+        queue_get('chat').put({
             'text': f'Ответ от агента "{agent_model.title}": {response_text}',
             'who': 'agent'
         })
-        queue_get()['agent_response'].put(response_text)
+        queue_get('agent_response').put(response_text)
 
     agent_model.on_complete = on_complete
     agent_model.is_sub_thread = True
 
-    queue_get()['agent'].put(agent_model)
+    queue_get('agent').put(agent_model)
 
     await async_waiting_start()
 
     try:
         while True:
             try:
-                agent_response_text = queue_get()['agent_response'].get_nowait()
+                agent_response_text = queue_get('agent_response').get_nowait()
                 break
             except queue.Empty:
                 await asyncio.sleep(0.1)

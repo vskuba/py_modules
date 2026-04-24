@@ -7,8 +7,8 @@ def task_abort(final_text: str) -> bool:
     In case if you have instruction 'finish task', 'complete task' etc do not use this tool.
     Argument final_text is used for display in task report.
     """
-    queue_get()['task_abort'].put(True)
-    queue_get()['chat'].put(
+    queue_get('task_abort').put(True)
+    queue_get('chat').put(
         {
             "text": final_text,
             "who": 'agent',

@@ -14,7 +14,7 @@ def queue_init(queues: list[str]):
     return _queues_cache
 
 
-def queue_get(name: str) -> Queue:
+def queue_get(name: str) -> queue.Queue:
     if name not in _queues_cache:
         _queues_cache[name] = queue.Queue()
 

@@ -10,7 +10,7 @@ async def chat_me_question(question: str) -> str:
     This tool allows you to ask the user a question and receive an answer.
     The function argument is 'question'. The function will return a text string containing the answer to the question.
     """
-    queue_get()['chat'].put(
+    queue_get('chat').put(
         {
             "text": question,
             "who": 'agent',
@@ -23,7 +23,7 @@ async def chat_me_question(question: str) -> str:
     await async_waiting_start()
 
     await asyncio.sleep(0.1)
-    chat_last_message = queue_get()['chat_response'].get_nowait()
+    chat_last_message = queue_get('chat_response').get_nowait()
 
     return f"Пользователь ответил '{chat_last_message}'"
 
@@ -34,7 +34,7 @@ async def chat_me(text: str) -> str:
     The argument is a text string containing your message.
     The tool will return the word 'Accepted' as a result, indicating that the message was delivered to the user.
     """
-    queue_get()['chat'].put(
+    queue_get('chat').put(
         {
             "text": text,
             "who": 'agent',
