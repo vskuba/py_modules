@@ -19,3 +19,7 @@ def queue_get(name: str) -> queue.Queue:
         _queues_cache[name] = queue.Queue()
 
     return _queues_cache[name]
+
+
+def queue_get_all() -> dict[str, queue.Queue]:
+    return _queues_cache
