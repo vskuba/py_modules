@@ -26,9 +26,9 @@ def queue_init(queues: list[str]):
     return _queues_cache
 
 
-def queue_get(name: str) -> Queue | None:
+def queue_get(name: str) -> Queue:
     if name not in _queues_cache:
         conn = redis_conn_get()
         _queues_cache[name] = Queue(name, connection=conn)
 
-    return _queues_cache.get(name)
+    return _queues_cache[name]
