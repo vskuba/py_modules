@@ -2,7 +2,7 @@ import queue
 
 from typing import Dict
 
-_queues_cache: Dict[str, Queue] = {}
+_queues_cache: Dict[str, queue.Queue] = {}
 
 
 def queue_init(queues: list[str]):
