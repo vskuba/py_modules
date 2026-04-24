@@ -2,7 +2,7 @@ from typing import Dict, Any
 from state.state import state_get, state_set
 
 
-def queue_get() -> Dict[str, Any]:
+def queue_get() -> Dict[str, Any] | None:
     """
     Возращает очереди в ввиде json из глобальной перменной queue
     """
