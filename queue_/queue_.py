@@ -1,6 +1,5 @@
 import queue
 
-from rq import Queue
 from typing import Dict
 
 _queues_cache: Dict[str, Queue] = {}
