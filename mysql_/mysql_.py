@@ -15,3 +15,11 @@ def mysql_conn_get() -> pymysql.Connection:
         cursorclass=pymysql.cursors.DictCursor,
         charset='utf8mb4'  # Рекомендуется для корректной работы с текстом/эмодзи
     )
+
+
+def mysql_get_db():
+    connection = mysql_conn_get()
+    try:
+        yield connection
+    finally:
+        connection.close()
