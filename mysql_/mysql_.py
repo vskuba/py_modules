@@ -1,11 +1,14 @@
+import asyncio
+
 import pymysql
 import pymysql.cursors
 import aiomysql
 
 from typing import Optional
-from aiomysql import Pool
+from aiomysql.pool import _create_pool, Pool
 
 pool: Optional[aiomysql.Pool] = None
+pool_lock = asyncio.Lock()
 
 host = 'mysql'
 user = 'developer'
@@ -45,15 +48,24 @@ async def mysql_get_db_async():
 async def mysql_pool_get() -> Pool:
     global pool
     if pool is None:
-        pool = aiomysql.create_pool(
-            host=host,
-            user=user,
-            password=password,
-            db=db,
-            autocommit=True,
-            cursorclass=aiomysql.DictCursor,
-            minsize=5,
-            maxsize=10
-        )
+        async with pool_lock:
+            pool = await _create_pool(
+                host=host,
+                user=user,
+                password=password,
+                db=db,
+                autocommit=True,
+                cursorclass=aiomysql.DictCursor,
+                minsize=5,
+                maxsize=10
+            )
 
     return pool
+
+
+async def mysql_pool_close():
+    global pool
+    if pool is not None:
+        pool.close()
+        await pool.wait_closed()
+        pool = None
