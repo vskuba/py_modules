@@ -36,6 +36,7 @@ class AiFrameworkResult:
 @dataclass
 class AiFrameworkModel:
     name: str
+    user_id: int
     tools: list[Callable] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None
@@ -93,7 +94,7 @@ class AbstractAiFramework(ABC):
             return None
 
         all_messages = []
-        for msg_json in await memory_short_messages('default_id', framework_model.name):
+        for msg_json in await memory_short_messages(framework_model.user_id, framework_model.name):
             msg_obj_list = message_adapter.validate_json(msg_json)
             all_messages.extend(msg_obj_list)
 
@@ -113,7 +114,7 @@ class AbstractAiFramework(ABC):
 
             msg_json = message_adapter.dump_json([msg]).decode('utf-8')
             await memory_short_message_add(
-                'default_id',
+                framework_model.user_id,
                 role,
                 framework_model.name,
                 msg_json
