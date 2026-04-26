@@ -43,6 +43,7 @@ class AiFrameworkModel:
     is_sub_thread: bool = False
     is_gui_mode: bool = True
     memory_short_disabled: bool = False
+    memory_short_length: int = 10
 
 
 @dataclass
@@ -94,7 +95,11 @@ class AbstractAiFramework(ABC):
             return None
 
         all_messages = []
-        for msg_json in await memory_short_messages(framework_model.user_id, framework_model.name):
+        for msg_json in await memory_short_messages(
+                framework_model.user_id,
+                framework_model.name,
+                framework_model.memory_short_length
+        ):
             msg_obj_list = message_adapter.validate_json(msg_json)
             all_messages.extend(msg_obj_list)
 
