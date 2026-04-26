@@ -4,8 +4,10 @@ from logging_.logging_ import logger_info
 
 
 def mysql_migration_up():
+    logger_info('Yoyo: миграции mysql старт')
+
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    migrations_path = os.path.abspath(os.path.join(current_dir, "..", "..", "migrations"))
+    migrations_path = os.path.abspath(os.path.join(current_dir, "..", "..", "..", "migrations"))
 
     db_url = 'mysql://developer:password@mysql/project'
     backend = get_backend(db_url)
@@ -19,4 +21,4 @@ def mysql_migration_up():
     with backend.lock():
         backend.apply_migrations(backend.to_apply(migrations))
 
-    logger_info('Yoyo: Миграции применены успешно')
+    logger_info('Yoyo: миграции mysql завершено')
