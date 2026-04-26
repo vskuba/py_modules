@@ -19,10 +19,10 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from ai.ai_memory_short import memory_short_message_add, memory_short_messages
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
-from sqllite3.sqllite3_llm_short_memory import sqllite3_llm_short_memory_messages, sqllite3_llm_short_memory_message_add
 from state.state import state_set
 
 message_adapter = TypeAdapter(list[ModelMessage])
@@ -88,12 +88,12 @@ class AbstractAiFramework(ABC):
     async def framework_run(self, framework_model: AiFrameworkModel):
         pass
 
-    def message_history_get(self, framework_model: AiFrameworkModel) -> list[Any] | None:
+    async def message_history_get(self, framework_model: AiFrameworkModel) -> list[Any] | None:
         if framework_model.memory_short_disabled:
             return None
 
         all_messages = []
-        for msg_json in sqllite3_llm_short_memory_messages('default_id', framework_model.name):
+        for msg_json in await memory_short_messages('default_id', framework_model.name):
             msg_obj_list = message_adapter.validate_json(msg_json)
             all_messages.extend(msg_obj_list)
 
@@ -112,7 +112,7 @@ class AbstractAiFramework(ABC):
                 role = 'assistant'
 
             msg_json = message_adapter.dump_json([msg]).decode('utf-8')
-            sqllite3_llm_short_memory_message_add(
+            memory_short_message_add(
                 'default_id',
                 role,
                 framework_model.name,
