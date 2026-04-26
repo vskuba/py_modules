@@ -39,7 +39,7 @@ class AiFrameworkModel:
     prompt: str
     system_prompt: str
     user_id: int
-    tools: list[Callable] = field(default_factory=list)
+    tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None
     is_sub_thread: bool = False

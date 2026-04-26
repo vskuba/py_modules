@@ -18,6 +18,8 @@ class AbstractAiFrameworkAgentManager(AbstractAiFrameworkManager):
             with open(self.filepath_get(name), 'r') as f:
                 yaml_dict = yaml.safe_load(f)
 
+            yaml_dict.name = name
+
             agent_yaml = AiAgentYaml(**yaml_dict)
             agent_yaml.filename = name
 
