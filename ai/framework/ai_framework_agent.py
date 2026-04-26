@@ -33,7 +33,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 self.engine_prepare(framework_model)
 
                 result = await self.engine_run(framework_model)
-                response = self.engine_result_handle(result, framework_model)
+                response = await self.engine_result_handle(result, framework_model)
 
                 if response is not None:
                     if framework_model.on_complete:

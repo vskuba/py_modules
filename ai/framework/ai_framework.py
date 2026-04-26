@@ -67,14 +67,14 @@ class AbstractAiFramework(ABC):
         pass
 
     @abstractmethod
-    def engine_result_handle(self, result, framework_model: AiFrameworkModel) -> AiFrameworkResult | None:
+    async def engine_result_handle(self, result, framework_model: AiFrameworkModel) -> AiFrameworkResult | None:
         # save short memory
         messages_new = result.new_messages()
         if messages_new:
             output_message = []
             if not isinstance(result.output, str):
                 output_message = [result.output]
-            self.message_history_add(framework_model, messages_new + output_message)
+            await self.message_history_add(framework_model, messages_new + output_message)
 
         # create report
         model_name = framework_model.name
@@ -99,7 +99,7 @@ class AbstractAiFramework(ABC):
 
         return all_messages
 
-    def message_history_add(self, framework_model: AiFrameworkModel, messages_new: list[Any]):
+    async def message_history_add(self, framework_model: AiFrameworkModel, messages_new: list[Any]):
         if framework_model.memory_short_disabled:
             return None
 
@@ -112,7 +112,7 @@ class AbstractAiFramework(ABC):
                 role = 'assistant'
 
             msg_json = message_adapter.dump_json([msg]).decode('utf-8')
-            memory_short_message_add(
+            await memory_short_message_add(
                 'default_id',
                 role,
                 framework_model.name,
