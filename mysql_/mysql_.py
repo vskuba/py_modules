@@ -42,9 +42,9 @@ async def mysql_get_db_async():
         yield conn
 
 
-async def mysql_pool_get() -> Pool | None:
+async def mysql_pool_get() -> Pool:
     global pool
-    if not pool:
+    if pool is None:
         pool = aiomysql.create_pool(
             host=host,
             user=user,
