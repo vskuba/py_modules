@@ -1,8 +1,6 @@
 import asyncio
 import copy
 import queue
-import threading
-import time
 import traceback
 
 from ai.framework.ai_framework import AiFrameworkModel, AbstractAiFramework
@@ -10,30 +8,14 @@ from ai.framework.ai_framework_agent import AbstractAiFrameworkAgent
 from ai.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
 from ai.framework.ai_framework_task import AbstractAiFrameworkTask
 from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
-from async_.async_ import async_loop_init, async_waiting_is_active, async_waiting_clear
+from async_.async_ import async_waiting_is_active, async_waiting_clear
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
-thread_started: dict[str, AiFrameworkModel] = {}
+async_task_running: dict[str, asyncio.Task] = {}
 
 
-def ai_thread_run_async(ai_framework: AbstractAiFramework, framework_model: AiFrameworkModel):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop_task = loop.create_task(ai_framework.framework_run(framework_model))
-
-        if not framework_model.is_sub_thread:
-            async_loop_init(loop, loop_task, framework_model.name)
-
-        loop.run_until_complete(loop_task)
-    except asyncio.CancelledError:
-        logger_info("🛑 Поток успешно отменен")
-    finally:
-        loop.close()
-
-
-def ai_thread_framework_run(ai_frameworks: list, window=None):
+async def ai_thread_framework_run(ai_frameworks: list, window=None):
     while True:
         try:
             framework_model = None
@@ -41,14 +23,15 @@ def ai_thread_framework_run(ai_frameworks: list, window=None):
             try:
                 framework_model = queue_get('task').get_nowait()
             except queue.Empty:
-                time.sleep(0.1)
+                pass
 
             try:
                 framework_model = queue_get('agent').get_nowait()
             except queue.Empty:
-                time.sleep(0.1)
+                pass
 
             if not framework_model:
+                await asyncio.sleep(0.1)
                 continue
 
             ai_framework = None
@@ -72,19 +55,17 @@ def ai_thread_framework_run(ai_frameworks: list, window=None):
             if not ai_framework:
                 raise ValueError(f'Не могу определить ai_framework')
 
-            if framework_model.name not in thread_started:
-                thread = threading.Thread(
-                    target=ai_thread_run_async,
-                    args=(ai_framework, framework_model),
-                    daemon=True
+            if isinstance(framework_model, AiFrameworkModel) and framework_model.name not in async_task_running:
+                logger_info(f"🎭 Запуск агента '{framework_model.name}' в асинхронной задаче")
+
+                async_task = asyncio.create_task(ai_framework.framework_run(framework_model))
+                async_task_running[framework_model.name] = async_task
+
+                framework_model_copy = copy.deepcopy(framework_model)
+
+                async_task.add_done_callback(
+                    lambda t, m=framework_model_copy: task_done_callback(t, m, window)
                 )
-                thread.start()
-
-                logger_info(f'Старт нового потока "{framework_model.name}"')
-                thread_started[framework_model.name] = framework_model
-
-                framework_model_monitor = copy.deepcopy(framework_model)
-                thread_monitor(window, thread, framework_model_monitor)
 
         except Exception as e:
             backtrace = traceback.format_exc()
@@ -93,17 +74,26 @@ def ai_thread_framework_run(ai_frameworks: list, window=None):
                 f"Полный стек вызовов:\n{backtrace}"
             )
 
+def task_done_callback(task, framework_model, window):
+    name = framework_model.name
 
-def thread_monitor(window, thread: threading.Thread, framework_model: AiFrameworkModel):
-    if thread.is_alive():
-        threading.Timer(0.5, thread_monitor, args=(window, thread, framework_model)).start()
-    else:
-        if framework_model.name in thread_started:
-            del thread_started[framework_model.name]
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger_info(f"🛑 Задача '{name}' была отменена")
+    except Exception as e:
+        logger_info(f"❌ Задача '{name}' завершилась с ошибкой: {e}\n{traceback.format_exc()}")
 
-        if framework_model.is_sub_thread and async_waiting_is_active():
-            async_waiting_clear()
+    if name in async_task_running:
+        del async_task_running[name]
 
-        if not framework_model.is_sub_thread:
-            if window:
-                window.thread_monitor(framework_model)
+    # Логика sub_thread
+    if framework_model.is_sub_thread and async_waiting_is_active():
+        async_waiting_clear()
+
+    # Логика уведомления окна
+    if not framework_model.is_sub_thread:
+        if window:
+            window.thread_monitor(framework_model)
+
+    logger_info(f"✅ Задача '{name}' завершена")
