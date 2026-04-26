@@ -36,6 +36,8 @@ class AiFrameworkResult:
 @dataclass
 class AiFrameworkModel:
     name: str
+    prompt: str
+    system_prompt: str
     user_id: int
     tools: list[Callable] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)

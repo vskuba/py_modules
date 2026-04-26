@@ -33,18 +33,12 @@ class AiSubTask:
 class AbstractAiFrameworkTaskModel(AiFrameworkModel):
     def __init__(
             self,
-            name: str,
             title: str,
-            prompt: str,
-            system_prompt: str,
             sub_task_current_index: int,
             input_fields: list[str]
     ):
         self.id = str(uuid.uuid4())
-        self.name = name
         self.title = title
-        self.prompt: str = prompt
-        self.system_prompt = system_prompt
         self.sub_task_current_index = sub_task_current_index
         self.input_fields = input_fields
         self.input_values: dict[str, str] = {}
