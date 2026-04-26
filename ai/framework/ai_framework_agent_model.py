@@ -8,6 +8,7 @@ from ai.framework.ai_framework import AiFrameworkModel
 
 
 class AiAgentYaml(BaseModel):
+    name: str
     title: str
     description: str
     system_prompt: str
