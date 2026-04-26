@@ -3,7 +3,7 @@ import copy
 import queue
 import traceback
 
-from ai.framework.ai_framework import AiFrameworkModel, AbstractAiFramework
+from ai.framework.ai_framework import AiFrameworkModel
 from ai.framework.ai_framework_agent import AbstractAiFrameworkAgent
 from ai.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
 from ai.framework.ai_framework_task import AbstractAiFrameworkTask
