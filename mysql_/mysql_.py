@@ -49,6 +49,7 @@ async def mysql_pool_get() -> Pool:
     global pool
     if pool is None:
         async with pool_lock:
+            loop = asyncio.get_running_loop()
             pool = await _create_pool(
                 host=host,
                 user=user,
@@ -57,7 +58,8 @@ async def mysql_pool_get() -> Pool:
                 autocommit=True,
                 cursorclass=aiomysql.DictCursor,
                 minsize=5,
-                maxsize=10
+                maxsize=10,
+                loop = loop
             )
 
     return pool
