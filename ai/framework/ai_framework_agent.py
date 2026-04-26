@@ -53,7 +53,11 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                     queue_get('chat').put({"text": 'Произошла ошибка: %s' % e, "who": 'agent'})
 
                 # rate limit handling
-                if getattr(e, 'status_code', None) in [429, 413]:
+                error_code = getattr(e, 'status_code', None)
+                if error_code in [429, 413]:
+                    logger_info(
+                        f"❌ Код ошибки: {error_code}."
+                    )
                     await self.framework_report(framework_model)
                     return
 
