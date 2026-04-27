@@ -17,7 +17,7 @@ class AbstractAiFrameworkAgentManager(AbstractAiFrameworkManager):
     def filepath_get(self, name: str) -> str:
         pass
 
-    def load_yml(self, name: str) -> dict:
+    def load_yaml(self, name: str) -> dict:
         path = self.filepath_get(name)
         try:
             with open(path, 'r', encoding='utf-8') as f:
@@ -40,7 +40,7 @@ class AbstractAiFrameworkAgentManager(AbstractAiFrameworkManager):
 
     def load(self, name: str) -> AbstractAiFrameworkAgentModel:
         try:
-            yaml_dict = self.load_yml(name)
+            yaml_dict = self.load_yaml(name)
             yaml_dict['name'] = name
             agent_yaml = AiAgentYaml(**yaml_dict)
 
