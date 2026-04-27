@@ -4,7 +4,7 @@ import traceback
 
 from abc import abstractmethod
 
-from ai.framework.ai_framework import AbstractAiFramework, AiFrameworkModel
+from ai.framework.ai_framework import AbstractAiFramework
 from ai.framework.ai_framework_task_manager import AbstractAiFrameworkTaskManager
 from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
 from logging_.logging_ import logger_info
@@ -32,7 +32,7 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
     def task_history_load(self, task: AbstractAiFrameworkTaskModel) -> list:
         pass
 
-    async def framework_run(self, framework_model: AiFrameworkModel):
+    async def framework_run(self, framework_model: AbstractAiFrameworkTaskModel):
         catch_exception: bool = False
         while True:
             await asyncio.sleep(0.1)
@@ -51,6 +51,7 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
                     catch_exception = False
 
                 logger_info('🚀 Задача из очереди: "%s"' % framework_model.name)
+
                 self.framework_manager.task_active_set(framework_model)
 
                 self.engine_prepare(framework_model)

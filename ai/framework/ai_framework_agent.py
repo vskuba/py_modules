@@ -2,8 +2,9 @@ import asyncio
 import queue
 import traceback
 
-from ai.framework.ai_framework import AbstractAiFramework, AiFrameworkModel
+from ai.framework.ai_framework import AbstractAiFramework
 from ai.framework.ai_framework_agent_manager import AbstractAiFrameworkAgentManager
+from ai.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
@@ -13,7 +14,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
         super().__init__(framework_manager)
         self.framework_manager: AbstractAiFrameworkAgentManager = framework_manager
 
-    async def framework_run(self, framework_model: AiFrameworkModel):
+    async def framework_run(self, framework_model: AbstractAiFrameworkAgentModel):
         catch_exception: bool = False
         while True:
             await asyncio.sleep(0.1)

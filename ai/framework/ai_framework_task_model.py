@@ -15,12 +15,12 @@ class AiTaskYamlSubTask(BaseModel):
 
 
 class AiTaskYaml(BaseModel):
+    name: str
     title: str
     history_save: bool = False
     mcp_servers: list[str] = field(default_factory=list)
     system_prompt: str
     sub_tasks: list[AiTaskYamlSubTask] = field(default_factory=list)
-    filename: str | None = None
 
 
 @dataclass
@@ -34,15 +34,16 @@ class AbstractAiFrameworkTaskModel(AiFrameworkModel):
     def __init__(
             self,
             title: str,
+            yaml: AiTaskYaml,
             sub_task_current_index: int,
             input_fields: list[str]
     ):
         self.id = str(uuid.uuid4())
         self.title = title
+        self.yaml: AiTaskYaml = yaml
         self.sub_task_current_index = sub_task_current_index
         self.input_fields = input_fields
         self.input_values: dict[str, str] = {}
-        self.yaml: AiTaskYaml | None = None
         self.history_save: bool = False
 
     def input_values_set(self, values: dict[str, str]):

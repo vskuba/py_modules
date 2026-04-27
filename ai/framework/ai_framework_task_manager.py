@@ -5,7 +5,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
-from ai.framework.ai_framework import AbstractAiFrameworkManager
+from ai.framework.ai_framework import AbstractAiFrameworkManager, AiFrameworkModel
 from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel, AiTaskYaml
 from logging_.logging_ import logger_info
 
@@ -14,13 +14,17 @@ class AbstractAiFrameworkTaskManager(AbstractAiFrameworkManager):
     def __init__(self):
         self.active_task: AbstractAiFrameworkTaskModel | None = None
 
+    @abstractmethod
+    def filepath_get(self, name: str) -> str:
+        pass
+
     def load(self, name: str) -> AbstractAiFrameworkTaskModel:
         try:
             with open(self.filepath_get(name), 'r') as f:
                 yaml_dict = yaml.safe_load(f)
 
+            yaml_dict['name'] = name
             task_yaml = AiTaskYaml(**yaml_dict)
-            task_yaml.filename = name
 
             self.validate(task_yaml)
 
@@ -36,18 +40,6 @@ class AbstractAiFrameworkTaskManager(AbstractAiFrameworkManager):
                 f"Полный стек вызовов:\n{backtrace}"
             )
             raise
-
-    @abstractmethod
-    def dir(self) -> str:
-        pass
-
-    @abstractmethod
-    def list(self) -> list[str]:
-        pass
-
-    @abstractmethod
-    def filepath_get(self, name: str) -> str:
-        pass
 
     @abstractmethod
     def create(
