@@ -7,7 +7,7 @@ async def memory_short_message_add(user_id, role, agent, content):
         async with conn.cursor() as cursor:
             # Используем %s для MySQL
             sql = '''
-                INSERT INTO memory (user_id, role, agent, content)
+                INSERT INTO memory_short (user_id, role, agent, content)
                 VALUES (%s, %s, %s, %s)
             '''
             await cursor.execute(sql, (user_id, role, agent, content))
@@ -19,7 +19,7 @@ async def memory_short_messages(user_id, agent, limit=50) -> list:
     async with pool.acquire() as conn:
         async with conn.cursor() as cursor:
             sql = '''
-                SELECT content FROM memory 
+                SELECT content FROM memory_short 
                 WHERE user_id = %s AND agent = %s 
                 ORDER BY id DESC 
                 LIMIT %s
