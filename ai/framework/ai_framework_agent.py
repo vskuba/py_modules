@@ -16,6 +16,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
 
     async def framework_run(self, framework_model: AbstractAiFrameworkAgentModel):
         catch_exception: bool = False
+        catch_exception_retry_attempt: int = 0
         while True:
             await asyncio.sleep(0.1)
 
@@ -28,8 +29,13 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 pass
 
             try:
+                if catch_exception_retry_attempt > 3:
+                    catch_exception_retry_attempt = 0
+                    return
+
                 if catch_exception and framework_model:
                     logger_info('Возобновляем агента..')
+                    catch_exception_retry_attempt += 1
 
                 self.engine_prepare(framework_model)
 
