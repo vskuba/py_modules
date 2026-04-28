@@ -47,6 +47,7 @@ class AiFrameworkModel:
     memory_short_disabled: bool = False
     memory_short_length: int = 10
     memory_session_uuid: str = str(uuid.uuid4())
+    llm: str | None = None
 
 
 @dataclass
@@ -138,6 +139,9 @@ class AbstractAiFramework(ABC):
 
     def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
+        if framework_model.llm:
+            model_name = framework_model.llm
+
         model = None
 
         http_client = httpx.AsyncClient(
