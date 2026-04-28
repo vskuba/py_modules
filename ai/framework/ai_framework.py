@@ -1,15 +1,14 @@
 import os
 import re
 import uuid
-from pathlib import Path
 
 import httpx
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any
 from pydantic import TypeAdapter
 
-from pydantic_ai import Agent, ModelRequest, ModelResponse, ModelMessage
+from pydantic_ai import Agent, ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
@@ -20,10 +19,11 @@ from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from ai.ai_memory_short import memory_short_message_add, memory_short_messages, memory_short_session_uuid_get
+from ai.framework.ai_framework_manager import AbstractAiFrameworkManager
+from ai.framework.ai_framework_model import AiFrameworkModel
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
-from state.state import state_set
 
 message_adapter = TypeAdapter(list[ModelMessage])
 
@@ -31,30 +31,6 @@ message_adapter = TypeAdapter(list[ModelMessage])
 @dataclass
 class AiFrameworkResult:
     text: str
-
-
-@dataclass
-class AiFrameworkModel:
-    name: str
-    prompt: str
-    system_prompt: str
-    user_id: int
-    tools: list[str] = field(default_factory=list)
-    mcp_servers: list[str] = field(default_factory=list)
-    on_complete: Callable | None = None
-    is_sub_thread: bool = False
-    is_gui_mode: bool = True
-    memory_short_disabled: bool = False
-    memory_short_length: int = 10
-    memory_session_uuid: str = str(uuid.uuid4())
-    llm: str | None = None
-
-
-@dataclass
-class AbstractAiFrameworkManager(ABC):
-    @abstractmethod
-    def load(self, name: str) -> AiFrameworkModel:
-        pass
 
 
 class AbstractAiFramework(ABC):
@@ -65,7 +41,7 @@ class AbstractAiFramework(ABC):
         self.message_history: dict[str, list[Any]] = {}
 
     @abstractmethod
-    def engine_prepare(self, framework_model: AiFrameworkModel) -> Agent:
+    async def engine_prepare(self, framework_model: AiFrameworkModel) -> Agent:
         pass
 
     @abstractmethod
@@ -74,68 +50,46 @@ class AbstractAiFramework(ABC):
 
     @abstractmethod
     async def engine_result_handle(self, result, framework_model: AiFrameworkModel) -> AiFrameworkResult | None:
-        # save short memory
-        messages_new = result.new_messages()
-        if messages_new:
-            output_message = []
-            if not isinstance(result.output, str):
-                output_message = [result.output]
-            await self.message_history_add(framework_model, messages_new + output_message)
-
-        # create report
+        # save massages for memory short
         model_name = framework_model.name
         if model_name not in self.message_history:
             self.message_history[model_name] = []
-        self.message_history[model_name] += result.all_messages()
-
+        self.message_history[model_name] = result.all_messages()
         pass
 
     @abstractmethod
     async def framework_run(self, framework_model: AiFrameworkModel):
         pass
 
-    async def message_history_get(self, framework_model: AiFrameworkModel) -> list[Any] | None:
+    async def message_history_get(self, framework_model: AiFrameworkModel) -> str:
         if framework_model.memory_short_disabled:
-            return None
+            return ""
 
-        all_messages = []
-        for msg_json in await memory_short_messages(
-                framework_model.user_id,
-                framework_model.name,
-                framework_model.memory_short_length
-        ):
-            msg_obj_list = message_adapter.validate_json(msg_json)
-            all_messages.extend(msg_obj_list)
+        # 1. Получаем историю (список словарей)
+        history_rows = await memory_short_messages(
+            framework_model.user_id,
+            framework_model.name,
+            framework_model.memory_short_length
+        )
 
-        if len(all_messages) > 0:
-            framework_model.memory_session_uuid = await memory_short_session_uuid_get(
-                framework_model.user_id,
-                framework_model.name
-            )
+        # 2. Обработка UUID сессии
+        if not history_rows:
+            return ''
 
-        return all_messages
+        framework_model.memory_session_uuid = history_rows[-1].get('session_uuid')
 
-    async def message_history_add(self, framework_model: AiFrameworkModel, messages_new: list[Any]):
-        if framework_model.memory_short_disabled:
-            return None
+        # 3. Формирование текста
+        formatted_parts = ["\n\n=== ПРЕДЫДУЩАЯ ПЕРЕПИСКА ==="]
 
-        for msg in messages_new:
-            if not isinstance(msg, (ModelRequest, ModelResponse)):
-                continue
+        for row in history_rows:
+            role = str(row.get('role', 'user')).upper()
+            content = str(row.get('content', '')).strip()
 
-            role = 'user'
-            if not isinstance(msg, ModelRequest):
-                role = 'assistant'
+            formatted_parts.append(f"{role}: {content}")
 
-            msg_json = message_adapter.dump_json([msg]).decode('utf-8')
-            await memory_short_message_add(
-                framework_model.memory_session_uuid,
-                framework_model.user_id,
-                role,
-                framework_model.name,
-                'kind_type',
-                msg_json
-            )
+        formatted_parts.append("=== КОНЕЦ ПРЕДЫДУЩЕЙ ПЕРЕПИСКИ ===\n")
+
+        return "\n".join(formatted_parts)
 
     def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
@@ -221,111 +175,72 @@ class AbstractAiFramework(ABC):
         logger_info('🛠 Local инструменты добавлены: ' + ', '.join(tools_local_added))
 
     async def framework_report(self, framework_model: AiFrameworkModel):
-        report = []
-        total_tokens = 0
+        if not self.message_history:
+            return
 
-        if self.message_history:
-            for agent_name, messages in self.message_history.items():
-                report.append(f"=== АГЕНТ: {agent_name} ===\n")
+        if framework_model.is_sub_thread:
+            return
 
-                for m in messages:
-                    role = '❓'
-                    parts = []
+        logger_info('История сообщений: ' + str(self.message_history))
 
-                    # 1. ЗАПРОС (System / User)
-                    if hasattr(m, 'kind') and m.kind == 'request':
-                        role = '👤'
-                        if hasattr(m, 'parts'):
-                            for p in m.parts:
-                                content = getattr(p, 'content', '')
-                                if not content: continue
+        for agent_name, messages in self.message_history.items():
+            for m in messages:
+                session_uuid = framework_model.memory_session_uuid
+                user_id = framework_model.user_id
 
-                                p_type = str(type(p))
-                                if "SystemPromptPart" in p_type:
-                                    role = '⚙️'
-                                elif "ToolReturnPart" in p_type or "ToolResult" in p_type:
-                                    role = '🔧'  # Меняем иконку на ключ для ответов инструментов
-                                    content = f"РЕЗУЛЬТАТ: {content}"
+                # 1. ЗАПРОСЫ (User, System, Tool Return)
+                if hasattr(m, 'kind') and m.kind == 'request':
+                    for p in getattr(m, 'parts', []):
+                        part_kind = getattr(p, 'part_kind', 'text')
+                        content = getattr(p, 'content', '')
 
-                                parts.append(content)
+                        if not content and hasattr(p, 'result'):
+                            content = str(p.result)
 
-                    # 2. ОТВЕТ (Assistant / AI)
-                    elif hasattr(m, 'kind') and m.kind == 'response':
-                        role = '🧠'
-                        thinking = getattr(m, 'thinking', None)
-                        if thinking:
-                            parts.append(f"<think>\n{thinking}\n</think>")
+                        if not content:
+                            continue
 
-                        text = getattr(m, 'text', None)
-                        if text: parts.append(text)
+                        # Определяем роль
+                        role = 'user'
+                        if part_kind == 'system-prompt':
+                            role = 'system'
+                        elif part_kind == 'tool-return':
+                            role = 'tool'
+                            t_name = getattr(p, 'tool_name', 'unknown')
+                            content = f"[{t_name}]: {content}"
 
-                        # Вызовы инструментов (Assistant говорит: "Я хочу вызвать...")
-                        tool_calls = getattr(m, 'tool_calls', [])
-                        if tool_calls:
-                            role = '🧠'  # Оставляем иконку мозга, так как это намерение AI
-                            for tc in tool_calls:
-                                name = getattr(tc, 'tool_name', 'unknown')
-                                args = getattr(tc, 'args', '{}')
-                                parts.append(f"🔧 ВЫЗОВ: {name}({args})")
+                        # Используем твою функцию для добавления
+                        await memory_short_message_add(
+                            session_uuid=session_uuid,
+                            user_id=user_id,
+                            role=role,
+                            agent=agent_name,
+                            kind_type=part_kind,
+                            content=str(content).strip()
+                        )
 
-                        # ИЗВЛЕКАЕМ ТОКЕНЫ
-                        usage = getattr(m, 'usage', None)
-                        if usage:
-                            # Суммируем для заголовка отчета
-                            total_tokens += getattr(usage, 'total_tokens', 0)
+                # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
+                elif hasattr(m, 'kind') and m.kind == 'response':
+                    # Ассистент всегда имеет роль assistant
+                    role = 'assistant'
 
-                            # Можно добавить инфо о токенах прямо в replica для этого сообщения
-                            tokens_info = f"[Tokens: {usage.request_tokens} -> {usage.response_tokens}]"
-                            parts.append(tokens_info)
+                    # Размышления
+                    thinking = getattr(m, 'thinking', None)
+                    if thinking:
+                        await memory_short_message_add(
+                            session_uuid, user_id, role, agent_name, 'thinking', thinking.strip()
+                        )
 
-                    # 3. ОТВЕТ ИНСТРУМЕНТА (Результат выполнения)
-                    # Проверяем по имени класса или атрибутам
-                    elif "ToolReturn" in str(type(m)) or "ToolResult" in str(type(m)):
-                        role = '🔧'  # Тот самый значок для ответа
-                        # Извлекаем результат (обычно в поле content или result)
-                        content = getattr(m, 'content', '') or getattr(m, 'result', '')
-                        if content:
-                            parts.append(f"РЕЗУЛЬТАТ: {str(content)}")
+                    # Текст ответа
+                    text = getattr(m, 'text', None)
+                    if text:
+                        await memory_short_message_add(
+                            session_uuid, user_id, role, agent_name, 'response', text.strip()
+                        )
 
-                    elif "ResponseModel" in str(type(m)):
-                        role = "🎯"  # Иконка цели/финиша
-                        # Согласно скриншоту, текст лежит прямо в атрибуте 'text'
-                        final_text = getattr(m, 'text', '')
-                        if final_text:
-                            # Чистим от спец-пробелов для красоты
-                            final_text = final_text.replace('\u202f', ' ')
-                            parts.append(f"ИТОГОВЫЙ ОТВЕТ: {final_text}")
-
-                    # Если сообщение пустое (техническое), не добавляем его в отчет
-                    if not parts:
-                        continue
-
-                    string_parts = []
-                    for p in parts:
-                        if isinstance(p, list):
-                            string_parts.append(" ".join(map(str, p)))
-                        else:
-                            string_parts.append(str(p))
-
-                    replica = "\n\n".join(string_parts)
-                    report.append(f"{role}: {replica}\n")
-
-            filename = f"{framework_model.name}_{self.uuid}.txt"
-
-            # Собираем путь
-            path = Path(config_get('data_dir')) / config_get('report_dir') / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Добавляем заголовок в самое начало списка
-            header = f"👤-🧠 Текущая история общения: {'(total_tokens: ' + str(total_tokens) + ')' if total_tokens > 0 else ''}\n"
-            report.insert(0, header)
-            report.insert(1, "=" * 50 + "\n")
-
-            # Записываем всё в файл (используем 'w', так как имя файла уникальное по времени)
-            with open(path, 'w', encoding='utf-8') as f:
-                # Добавляем пару пустых строк перед новым отчетом для визуального разделения
-                f.write("\n\n" + "=" * 60 + "\n")
-                f.write('\n'.join(report) + "\n")
-
-            print(f"✅ Отчет сохранен: {path}")
-            state_set('last_report_path', path)
+                    # Вызовы инструментов
+                    for tc in getattr(m, 'tool_calls', []):
+                        tool_data = f"call: {tc.tool_name}({tc.args})"
+                        await memory_short_message_add(
+                            session_uuid, user_id, role, agent_name, 'tool-call', tool_data
+                        )

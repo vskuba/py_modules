@@ -16,36 +16,36 @@ async def memory_short_message_add(session_uuid, user_id, role, agent, kind_type
             # При autocommit=True в настройках пула, commit() произойдет автоматически
 
 
-async def memory_short_messages(user_id, agent, limit=50) -> list:
+async def memory_short_messages(user_id, agent, limit=10) -> list:
     pool = await mysql_pool_get()
     async with pool.acquire() as conn:
         async with conn.cursor() as cursor:
             sql = '''
-                SELECT content FROM agent_memory_short 
-                WHERE user_id = %s AND agent = %s 
+                SELECT session_uuid, role, kind_type, content FROM agent_memory_short 
+                WHERE user_id = %s AND agent = %s AND kind_type in ('user-prompt', 'response')
                 ORDER BY created_at DESC 
                 LIMIT %s
             '''
             await cursor.execute(sql, (user_id, agent, limit))
             rows = await cursor.fetchall()
 
-            # Так как в пуле стоит DictCursor, row — это словарь
-            # Переворачиваем, чтобы история шла от старых к новым
-            return [row['content'] for row in reversed(rows)]
+            return list(rows)
 
 
 async def memory_short_session_uuid_get(user_id, agent) -> str:
     pool = await mysql_pool_get()
     async with pool.acquire() as conn:
         async with conn.cursor() as cursor:
-            # Используем %s для MySQL
             sql = '''
                 SELECT session_uuid FROM agent_memory_short 
                 WHERE user_id = %s AND agent = %s 
                 ORDER BY created_at DESC 
-                LIMIT %s
+                LIMIT 1
             '''
-            await cursor.execute(sql, (user_id, agent, 1))
-            rows = await cursor.fetchall()
+            await cursor.execute(sql, (user_id, agent))
+            row = await cursor.fetchone()
 
-            return rows[0]['session_uuid']
+            if not row:
+                return str(uuid.uuid4())
+
+            return row['session_uuid']

@@ -5,8 +5,8 @@ import traceback
 from abc import abstractmethod
 
 from ai.framework.ai_framework import AbstractAiFramework
-from ai.framework.ai_framework_task_manager import AbstractAiFrameworkTaskManager
-from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
+from ai.framework.ai_framework_manager_task import AbstractAiFrameworkTaskManager
+from ai.framework.ai_framework_model_task import AbstractAiFrameworkTaskModel
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
@@ -54,7 +54,7 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
 
                 self.framework_manager.task_active_set(framework_model)
 
-                self.engine_prepare(framework_model)
+                await self.engine_prepare(framework_model)
 
                 result = await self.engine_run(framework_model)
                 response = await self.engine_result_handle(result, framework_model)

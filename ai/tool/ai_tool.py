@@ -6,7 +6,7 @@ import traceback
 from pathlib import Path
 from typing import cast, Callable
 
-from ai.tool.ai_tool_agent import agent_list, agent_invoke
+from ai.tool.ai_tool_agent import agent_desc_list, agent_invoke
 from ai.tool.ai_tool_chat import chat_me, chat_me_question
 from ai.tool.ai_tool_memory import qdrant_memory_search_text, qdrant_memory_save
 from ai.tool.ai_tool_task import task_abort
@@ -97,30 +97,30 @@ def ai_tools_permanent_get() -> list[Callable]:
     if all_tools_permanent:
         return all_tools_permanent
 
-    tools_inbuilt = [
+    if state_get('mode_telegram'):
+        tools_inbuilt = [
 
-        # ------ Bank memory
-        qdrant_memory_search_text,
+            # ------ Bank memory
+            qdrant_memory_search_text,
 
-    ]
-
-    if state_get('mode_gui'):
+        ]
+    else:
         from ai.tool.ai_tool_web import web_read_page
 
         tools_inbuilt = [
             # ------ Chat
-            chat_me,
-            chat_me_question,
+            # chat_me,
+            # chat_me_question,
 
             # ------ Bank memory
-            qdrant_memory_save,
+            # qdrant_memory_save,
             qdrant_memory_search_text,
 
             # ------ Web
             web_read_page,
 
             # ------ Agent
-            agent_list,
+            agent_desc_list,
             agent_invoke
         ]
 
@@ -128,7 +128,7 @@ def ai_tools_permanent_get() -> list[Callable]:
 
     tools_inbuilt_async = []
 
-    if state_get('mode_gui'):
+    if not state_get('mode_telegram'):
         tools_inbuilt_async = [
 
             # ------ Task
@@ -148,9 +148,9 @@ def _ai_tool_decorator(tool: Callable) -> Callable:
             arg_str += ", " + ", ".join(f"{k}={repr(v)}" for k, v in kwargs.items())
 
         try:
-            logger_info(f"🛠 Инструмент '{name}' → ({arg_str})")
+            logger_info(f"🛠 Инструмент вызов '{name}' → аргументы ({arg_str})")
             result = await tool(*args, **kwargs)
-            logger_info(f"🛠 Инструмент '{name}' резудьтат  → {repr(result)}")
+            logger_info(f"🛠 Инструмент '{name}' результат → {repr(result)}")
             return result
         except Exception as e:
             backtrace = traceback.format_exc()

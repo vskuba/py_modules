@@ -3,8 +3,8 @@ import queue
 import traceback
 
 from ai.framework.ai_framework import AbstractAiFramework
-from ai.framework.ai_framework_agent_manager import AbstractAiFrameworkAgentManager
-from ai.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
+from ai.framework.ai_framework_manager_agent import AbstractAiFrameworkAgentManager
+from ai.framework.ai_framework_model_agent import AbstractAiFrameworkAgentModel
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
@@ -37,7 +37,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                     logger_info('Возобновляем агента..')
                     catch_exception_retry_attempt += 1
 
-                self.engine_prepare(framework_model)
+                await self.engine_prepare(framework_model)
 
                 result = await self.engine_run(framework_model)
                 response = await self.engine_result_handle(result, framework_model)

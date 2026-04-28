@@ -5,7 +5,7 @@ from state.state import state_get
 qdrant_client: AsyncQdrantClient | None = None
 
 
-def _qdrant_db_get_client() -> AsyncQdrantClient | None:
+def _qdrant_db_get_client() -> AsyncQdrantClient:
     """
     Створює та повертає клієнт Qdrant (Singleton)
     """
@@ -14,13 +14,13 @@ def _qdrant_db_get_client() -> AsyncQdrantClient | None:
     if qdrant_client:
         return qdrant_client
 
-    # Визначаємо хост залежно від режиму запуску (GUI/Docker)
-    host = 'localhost' if state_get('mode_gui') else "qdrant"
-
     # Qdrant за замовчуванням використовує порт 6333 для HTTP API
     qdrant_client = AsyncQdrantClient(
-        host=host,
+        host="qdrant",
         port=6333
     )
+
+    if not qdrant_client:
+        raise Exception("Failed to create Qdrant client")
 
     return qdrant_client

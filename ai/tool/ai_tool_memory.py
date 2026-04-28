@@ -9,7 +9,6 @@ from ai.tool.ai_tool_agent import agent_invoke
 from logging_.logging_ import logger_info
 from qdrant_.qdrant_ import _qdrant_db_get_client
 
-# Глобальный энкодер (загружается один раз)
 encoder = SentenceTransformer("all-MiniLM-L6-v2", device='cpu')
 qdrant_collection_name = 'bank_memory'
 VECTOR_SIZE = 384

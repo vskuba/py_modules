@@ -5,12 +5,13 @@ import traceback
 
 from ai.framework.ai_framework import AiFrameworkModel
 from ai.framework.ai_framework_agent import AbstractAiFrameworkAgent
-from ai.framework.ai_framework_agent_model import AbstractAiFrameworkAgentModel
+from ai.framework.ai_framework_model_agent import AbstractAiFrameworkAgentModel
+from ai.framework.ai_framework_model_task import AbstractAiFrameworkTaskModel
 from ai.framework.ai_framework_task import AbstractAiFrameworkTask
-from ai.framework.ai_framework_task_model import AbstractAiFrameworkTaskModel
 from async_.async_ import async_waiting_is_active, async_waiting_clear
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
+from state.state import state_set
 
 async_task_running: dict[str, asyncio.Task] = {}
 
@@ -57,6 +58,9 @@ async def ai_thread_framework_run(ai_frameworks: list, window=None):
 
             if isinstance(framework_model, AiFrameworkModel) and framework_model.name not in async_task_running:
                 logger_info(f"🎭 Запуск агента '{framework_model.name}' в асинхронной задаче")
+
+                if not framework_model.is_sub_thread:
+                    state_set('framework_model_main_thread', framework_model)
 
                 async_task = asyncio.create_task(ai_framework.framework_run(framework_model))
                 async_task_running[framework_model.name] = async_task
