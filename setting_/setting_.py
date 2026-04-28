@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Any
 
 from mysql_.mysql_ import mysql_get_db_async
 
