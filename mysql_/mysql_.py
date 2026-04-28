@@ -6,7 +6,6 @@ import aiomysql
 
 from typing import Optional
 from aiomysql.pool import _create_pool, Pool
-from contextlib import contextmanager, asynccontextmanager
 
 pool: Optional[aiomysql.Pool] = None
 pool_lock = asyncio.Lock()
@@ -32,7 +31,6 @@ def mysql_conn_get() -> pymysql.Connection:
     )
 
 
-@contextmanager
 def mysql_get_db():
     connection = mysql_conn_get()
     try:
@@ -41,7 +39,6 @@ def mysql_get_db():
         connection.close()
 
 
-@asynccontextmanager
 async def mysql_get_db_async():
     p = await mysql_pool_get()
     async with p.acquire() as conn:

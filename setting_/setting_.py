@@ -1,10 +1,11 @@
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mysql_.mysql_ import mysql_get_db_async
 
 
 async def setting_get(key: str, default: Any | None = None, user_id: int | None = None) -> Any | None:
-    async with mysql_get_db_async() as db:
+    async with asynccontextmanager(mysql_get_db_async)() as db:
         async with db.cursor() as cursor:
             sql = "SELECT value FROM setting WHERE `key` = %s AND user_id "
             if user_id is None:
@@ -24,7 +25,7 @@ async def setting_get(key: str, default: Any | None = None, user_id: int | None 
 
 
 async def setting_set(key: str, value, user_id: int | None = None) -> bool:
-    async with mysql_get_db_async() as db:
+    async with asynccontextmanager(mysql_get_db_async)() as db:
         async with db.cursor() as cursor:
             sql = """
                 INSERT INTO setting (`key`, value, user_id) 
