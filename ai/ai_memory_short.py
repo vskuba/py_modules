@@ -48,4 +48,4 @@ async def memory_short_session_uuid_get(user_id, agent) -> str:
             await cursor.execute(sql, (user_id, agent))
             rows = await cursor.fetchall()
 
-            return rows[0]['session_uuid'] if rows[0]['session_uuid'] else str(uuid.uuid4())
+            return rows[0]['session_uuid']

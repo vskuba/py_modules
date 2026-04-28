@@ -19,7 +19,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ai.ai_memory_short import memory_short_message_add, memory_short_messages
+from ai.ai_memory_short import memory_short_message_add, memory_short_messages, memory_short_session_uuid_get
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
@@ -46,6 +46,7 @@ class AiFrameworkModel:
     is_gui_mode: bool = True
     memory_short_disabled: bool = False
     memory_short_length: int = 10
+    memory_session_uuid: str = str(uuid.uuid4())
 
 
 @dataclass
@@ -104,6 +105,12 @@ class AbstractAiFramework(ABC):
         ):
             msg_obj_list = message_adapter.validate_json(msg_json)
             all_messages.extend(msg_obj_list)
+
+        if len(all_messages) > 0:
+            framework_model.memory_session_uuid = await memory_short_session_uuid_get(
+                framework_model.user_id,
+                framework_model.name
+            )
 
         return all_messages
 
