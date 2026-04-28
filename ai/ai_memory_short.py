@@ -45,7 +45,7 @@ async def memory_short_session_uuid_get(user_id, agent) -> str:
                 ORDER BY created_at DESC 
                 LIMIT %s
             '''
-            await cursor.execute(sql, (user_id, agent))
+            await cursor.execute(sql, (user_id, agent, 1))
             rows = await cursor.fetchall()
 
             return rows[0]['session_uuid']
