@@ -128,9 +128,11 @@ class AbstractAiFramework(ABC):
 
             msg_json = message_adapter.dump_json([msg]).decode('utf-8')
             await memory_short_message_add(
+                framework_model.memory_session_uuid,
                 framework_model.user_id,
                 role,
                 framework_model.name,
+                'kind_type',
                 msg_json
             )
 
