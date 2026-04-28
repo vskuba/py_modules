@@ -1,3 +1,5 @@
+import uuid
+
 from mysql_.mysql_ import mysql_pool_get
 
 
@@ -21,7 +23,7 @@ async def memory_short_messages(user_id, agent, limit=50) -> list:
             sql = '''
                 SELECT content FROM agent_memory_short 
                 WHERE user_id = %s AND agent = %s 
-                ORDER BY id DESC 
+                ORDER BY created_at DESC 
                 LIMIT %s
             '''
             await cursor.execute(sql, (user_id, agent, limit))
@@ -30,3 +32,20 @@ async def memory_short_messages(user_id, agent, limit=50) -> list:
             # Так как в пуле стоит DictCursor, row — это словарь
             # Переворачиваем, чтобы история шла от старых к новым
             return [row['content'] for row in reversed(rows)]
+
+
+async def memory_short_session_uuid_get(user_id, agent) -> str:
+    pool = await mysql_pool_get()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cursor:
+            # Используем %s для MySQL
+            sql = '''
+                SELECT session_uuid FROM agent_memory_short 
+                WHERE user_id = %s AND agent = %s 
+                ORDER BY created_at DESC 
+                LIMIT %s
+            '''
+            await cursor.execute(sql, (user_id, agent))
+            rows = await cursor.fetchall()
+
+            return rows[0]['session_uuid'] if rows[0]['session_uuid'] else str(uuid.uuid4())
