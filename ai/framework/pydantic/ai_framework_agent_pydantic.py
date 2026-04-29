@@ -26,8 +26,8 @@ class AiFrameworkAgentPydantic(AbstractAiFrameworkAgent):
         message_history = await self.message_history_get(framework_model)
 
         logger_info(
-            f'🧠 Передаем историю агенту:\n'
-            f'{message_history if message_history else "В истории пусто или отключена"}'
+            f'🧠 Передаем историю агенту:' 
+            f'{message_history}' if message_history else "\nВ истории пусто или отключена"
         )
 
         engine = Agent(

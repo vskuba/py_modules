@@ -68,6 +68,10 @@ class AbstractAiFramework(ABC):
         if framework_model.is_sub_agent:
             return ""
 
+        # новая сессия указана
+        if framework_model.memory_session_uuid:
+            return ""
+
         # 1. Получаем историю (список словарей)
         history_rows = await memory_short_messages(
             framework_model.user_id,
@@ -88,7 +92,10 @@ class AbstractAiFramework(ABC):
             role = str(row.get('role', 'user')).upper()
             content = str(row.get('content', '')).strip()
 
-            formatted_parts.append(f"{role}: {content}")
+            formatted_parts.append(
+                f"{role}: {content}"
+                '\n' if role == ('assistant'.upper()) else ''
+            )
 
         formatted_parts.append("=== END OF HISTORY LAST MESSAGES ===\n")
 
@@ -213,7 +220,7 @@ class AbstractAiFramework(ABC):
 
         if model_name.lower().startswith('ollama'):
             provider = OpenAIProvider(
-                base_url='http://localhost:11434/v1',
+                base_url='http://host.docker.internal:11434/v1',
                 api_key='ollama',
                 http_client=http_client
             )

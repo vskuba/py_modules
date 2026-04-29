@@ -17,5 +17,5 @@ class AiFrameworkModel:
     is_gui_mode: bool = True
     memory_short_disabled: bool = False
     memory_short_length: int = 10
-    memory_session_uuid: str = str(uuid.uuid4())
+    memory_session_uuid: str | None = None
     llm: str | None = None

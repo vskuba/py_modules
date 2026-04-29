@@ -15,7 +15,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
         self.framework_manager: AbstractAiFrameworkAgentManager = framework_manager
 
     async def framework_run(self, framework_model: AbstractAiFrameworkAgentModel):
-        catch_exception: bool = False
+        _exception: Exception | None = None
         catch_exception_retry_attempt: int = 0
         while True:
             await asyncio.sleep(0.1)
@@ -29,9 +29,10 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 pass
 
             try:
-                if catch_exception and framework_model:
+                if _exception and framework_model:
                     if catch_exception_retry_attempt > 1:
                         logger_info('Возобновление агента повторно привело к ошибке..')
+                        await self._error_complete(framework_model, _exception)
                         return
 
                     logger_info('Возобновляем агента..')
@@ -50,14 +51,16 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 return
 
             except Exception as e:
+
                 backtrace = traceback.format_exc()
                 logger_info(
                     f"❌ Сбой в цикле агента: {e}."
                     f"Полный стек вызовов:\n{backtrace}"
                 )
 
+                error_text = 'Произошла ошибка: %s' % e
                 if framework_model.is_gui_mode:
-                    queue_get('chat').put({"text": 'Произошла ошибка: %s' % e, "who": 'agent'})
+                    queue_get('chat').put({"text": error_text, "who": 'agent'})
 
                 # rate limit handling
                 error_code = getattr(e, 'status_code', None)
@@ -66,10 +69,17 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                         f"❌ Код ошибки: {error_code}."
                     )
                     await self.message_history_save(framework_model)
+                    await self._error_complete(framework_model, e)
+
                     return
 
                 if framework_model.is_gui_mode:
                     queue_get('chat').put({"text": 'Работа будет продолжена', "who": 'agent'})
 
-                catch_exception = True
+                _exception = e
                 continue
+
+    async def _error_complete(self, framework_model: AbstractAiFrameworkAgentModel, e: Exception):
+        error_text = 'Произошла ошибка: %s' % e
+        if framework_model.on_complete:
+            await framework_model.on_complete(error_text)
