@@ -79,8 +79,6 @@ class AbstractAiFramework(ABC):
         if not history_rows:
             return ''
 
-        history_rows = reversed(history_rows)
-
         framework_model.memory_session_uuid = history_rows[-1].get('session_uuid')
 
         # 3. Формирование текста
@@ -145,27 +143,31 @@ class AbstractAiFramework(ABC):
                 elif hasattr(m, 'kind') and m.kind == 'response':
                     # Ассистент всегда имеет роль assistant
                     role = 'assistant'
+                    is_final = getattr(m, 'finish_reason', None) == 'stop'
 
-                    # Размышления
-                    thinking = getattr(m, 'thinking', None)
-                    if thinking:
-                        await memory_short_message_add(
-                            session_uuid, user_id, role, agent_name, 'thinking', thinking.strip()
-                        )
+                    if hasattr(m, 'parts'):
+                        for part in m.parts:
+                            p_type = str(type(part))
 
-                    # Текст ответа
-                    text = getattr(m, 'text', None)
-                    if text:
-                        await memory_short_message_add(
-                            session_uuid, user_id, role, agent_name, 'response', text.strip()
-                        )
+                            # Размышления
+                            if "ThinkingPart" in p_type:
+                                await memory_short_message_add(
+                                    session_uuid, user_id, role, agent_name, 'thinking', part.content.strip()
+                                )
 
-                    # Вызовы инструментов
-                    for tc in getattr(m, 'tool_calls', []):
-                        tool_data = f"call: {tc.tool_name}({tc.args})"
-                        await memory_short_message_add(
-                            session_uuid, user_id, role, agent_name, 'tool-call', tool_data
-                        )
+                            # Текст ответа (Финальный или промежуточный)
+                            elif "TextPart" in p_type:
+                                kind = 'response-final' if is_final else 'response'
+                                await memory_short_message_add(
+                                    session_uuid, user_id, role, agent_name, kind, part.content.strip()
+                                )
+
+                            # Вызовы инструментов
+                            elif "ToolCallPart" in p_type:
+                                tool_data = f"call: {part.tool_name}({part.args})"
+                                await memory_short_message_add(
+                                    session_uuid, user_id, role, agent_name, 'tool-call', tool_data
+                                )
 
         self.message_history = {}
 

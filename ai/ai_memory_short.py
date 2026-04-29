@@ -22,14 +22,14 @@ async def memory_short_messages(user_id, agent, limit=10) -> list:
         async with conn.cursor() as cursor:
             sql = '''
                 SELECT session_uuid, role, kind_type, content FROM agent_memory_short 
-                WHERE user_id = %s AND agent = %s AND kind_type in ('user-prompt', 'response')
-                ORDER BY created_at DESC 
+                WHERE user_id = %s AND agent = %s AND kind_type in ('user-prompt', 'response-final') 
+                ORDER BY created_at DESC, id DESC
                 LIMIT %s
             '''
             await cursor.execute(sql, (user_id, agent, limit))
             rows = await cursor.fetchall()
 
-            return list(rows)
+            return list(reversed(rows))
 
 
 async def memory_short_session_uuid_get(user_id, agent) -> str:

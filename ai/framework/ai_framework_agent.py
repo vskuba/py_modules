@@ -29,11 +29,11 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 pass
 
             try:
-                if catch_exception_retry_attempt > 3:
-                    catch_exception_retry_attempt = 0
-                    return
-
                 if catch_exception and framework_model:
+                    if catch_exception_retry_attempt > 1:
+                        logger_info('Возобновление агента повторно привело к ошибке..')
+                        return
+
                     logger_info('Возобновляем агента..')
                     catch_exception_retry_attempt += 1
 
