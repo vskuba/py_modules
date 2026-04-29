@@ -23,7 +23,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
             try:
                 queue_get('agent_abort').get_nowait()
                 logger_info(f'🛑 Команда на остановку агента "{framework_model.name}"')
-                await self.framework_report(framework_model)
+                await self.message_history_save(framework_model)
                 return
             except queue.Empty:
                 pass
@@ -46,7 +46,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                     if framework_model.on_complete:
                         await framework_model.on_complete(response.text)
 
-                await self.framework_report(framework_model)
+                await self.message_history_save(framework_model)
                 return
 
             except Exception as e:
@@ -65,7 +65,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                     logger_info(
                         f"❌ Код ошибки: {error_code}."
                     )
-                    await self.framework_report(framework_model)
+                    await self.message_history_save(framework_model)
                     return
 
                 if framework_model.is_gui_mode:

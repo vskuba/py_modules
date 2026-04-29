@@ -108,7 +108,7 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
         queue_get('agent_response').put(response_text)
 
     framework_model.on_complete = on_complete
-    framework_model.is_sub_thread = True
+    framework_model.is_sub_agent = True
 
     queue_get('agent').put(framework_model)
 

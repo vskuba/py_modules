@@ -65,6 +65,9 @@ class AbstractAiFramework(ABC):
         if framework_model.memory_short_disabled:
             return ""
 
+        if framework_model.is_sub_agent:
+            return ""
+
         # 1. Получаем историю (список словарей)
         history_rows = await memory_short_messages(
             framework_model.user_id,
@@ -90,6 +93,94 @@ class AbstractAiFramework(ABC):
         formatted_parts.append("=== КОНЕЦ ПРЕДЫДУЩЕЙ ПЕРЕПИСКИ ===\n")
 
         return "\n".join(formatted_parts)
+
+    async def message_history_save(self, framework_model: AiFrameworkModel):
+        if not self.message_history:
+            return
+
+        if framework_model.is_sub_agent:
+            return
+
+        logger_info('История сообщений: ' + str(self.message_history))
+
+        for agent_name, messages in self.message_history.items():
+            for m in messages:
+                session_uuid = framework_model.memory_session_uuid
+                user_id = framework_model.user_id
+
+                # 1. ЗАПРОСЫ (User, System, Tool Return)
+                if hasattr(m, 'kind') and m.kind == 'request':
+                    for p in getattr(m, 'parts', []):
+                        part_kind = getattr(p, 'part_kind', 'text')
+                        content = getattr(p, 'content', '')
+
+                        if not content and hasattr(p, 'result'):
+                            content = str(p.result)
+
+                        if not content:
+                            continue
+
+                        # Определяем роль
+                        role = 'user'
+                        if part_kind == 'system-prompt':
+                            role = 'system'
+                        elif part_kind == 'tool-return':
+                            role = 'tool'
+                            t_name = getattr(p, 'tool_name', 'unknown')
+                            content = f"[{t_name}]: {content}"
+
+                        # Используем твою функцию для добавления
+                        await memory_short_message_add(
+                            session_uuid=session_uuid,
+                            user_id=user_id,
+                            role=role,
+                            agent=agent_name,
+                            kind_type=part_kind,
+                            content=str(content).strip()
+                        )
+
+                # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
+                elif hasattr(m, 'kind') and m.kind == 'response':
+                    # Ассистент всегда имеет роль assistant
+                    role = 'assistant'
+
+                    # Размышления
+                    thinking = getattr(m, 'thinking', None)
+                    if thinking:
+                        await memory_short_message_add(
+                            session_uuid, user_id, role, agent_name, 'thinking', thinking.strip()
+                        )
+
+                    # Текст ответа
+                    text = getattr(m, 'text', None)
+                    if text:
+                        await memory_short_message_add(
+                            session_uuid, user_id, role, agent_name, 'response', text.strip()
+                        )
+
+                    # Вызовы инструментов
+                    for tc in getattr(m, 'tool_calls', []):
+                        tool_data = f"call: {tc.tool_name}({tc.args})"
+                        await memory_short_message_add(
+                            session_uuid, user_id, role, agent_name, 'tool-call', tool_data
+                        )
+
+    def engine_tools_local_add(self, engine, framework_model: AiFrameworkModel):
+        tools_local = ai_tools_get()
+        tools_mapping = {func.__name__: func for func in tools_local}
+        tools_local_added = []
+        for t_name in framework_model.tools:
+            if t_name in tools_mapping:
+                engine.tool_plain(tools_mapping[t_name])
+                tools_local_added.append(t_name)
+
+        ai_tools_permanent = ai_tools_permanent_get()
+        for t in ai_tools_permanent:
+            if t.__name__ not in tools_mapping:
+                engine.tool_plain(t)
+                tools_local_added.append(t.__name__)
+
+        logger_info('🛠 Local инструменты добавлены: ' + ', '.join(tools_local_added))
 
     def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
@@ -156,91 +247,3 @@ class AbstractAiFramework(ABC):
             model = OpenAIChatModel(model_name)
 
         return model
-
-    def engine_tools_local_add(self, engine, framework_model: AiFrameworkModel):
-        tools_local = ai_tools_get()
-        tools_mapping = {func.__name__: func for func in tools_local}
-        tools_local_added = []
-        for t_name in framework_model.tools:
-            if t_name in tools_mapping:
-                engine.tool_plain(tools_mapping[t_name])
-                tools_local_added.append(t_name)
-
-        ai_tools_permanent = ai_tools_permanent_get()
-        for t in ai_tools_permanent:
-            if t.__name__ not in tools_mapping:
-                engine.tool_plain(t)
-                tools_local_added.append(t.__name__)
-
-        logger_info('🛠 Local инструменты добавлены: ' + ', '.join(tools_local_added))
-
-    async def framework_report(self, framework_model: AiFrameworkModel):
-        if not self.message_history:
-            return
-
-        if framework_model.is_sub_thread:
-            return
-
-        logger_info('История сообщений: ' + str(self.message_history))
-
-        for agent_name, messages in self.message_history.items():
-            for m in messages:
-                session_uuid = framework_model.memory_session_uuid
-                user_id = framework_model.user_id
-
-                # 1. ЗАПРОСЫ (User, System, Tool Return)
-                if hasattr(m, 'kind') and m.kind == 'request':
-                    for p in getattr(m, 'parts', []):
-                        part_kind = getattr(p, 'part_kind', 'text')
-                        content = getattr(p, 'content', '')
-
-                        if not content and hasattr(p, 'result'):
-                            content = str(p.result)
-
-                        if not content:
-                            continue
-
-                        # Определяем роль
-                        role = 'user'
-                        if part_kind == 'system-prompt':
-                            role = 'system'
-                        elif part_kind == 'tool-return':
-                            role = 'tool'
-                            t_name = getattr(p, 'tool_name', 'unknown')
-                            content = f"[{t_name}]: {content}"
-
-                        # Используем твою функцию для добавления
-                        await memory_short_message_add(
-                            session_uuid=session_uuid,
-                            user_id=user_id,
-                            role=role,
-                            agent=agent_name,
-                            kind_type=part_kind,
-                            content=str(content).strip()
-                        )
-
-                # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
-                elif hasattr(m, 'kind') and m.kind == 'response':
-                    # Ассистент всегда имеет роль assistant
-                    role = 'assistant'
-
-                    # Размышления
-                    thinking = getattr(m, 'thinking', None)
-                    if thinking:
-                        await memory_short_message_add(
-                            session_uuid, user_id, role, agent_name, 'thinking', thinking.strip()
-                        )
-
-                    # Текст ответа
-                    text = getattr(m, 'text', None)
-                    if text:
-                        await memory_short_message_add(
-                            session_uuid, user_id, role, agent_name, 'response', text.strip()
-                        )
-
-                    # Вызовы инструментов
-                    for tc in getattr(m, 'tool_calls', []):
-                        tool_data = f"call: {tc.tool_name}({tc.args})"
-                        await memory_short_message_add(
-                            session_uuid, user_id, role, agent_name, 'tool-call', tool_data
-                        )

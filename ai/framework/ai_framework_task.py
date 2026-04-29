@@ -40,7 +40,7 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
             try:
                 queue_get('task_abort').get_nowait()
                 logger_info(f'🛑 Команда на остановку задачи "{framework_model.name}"')
-                await self.framework_report(framework_model)
+                await self.message_history_save(framework_model)
                 return
             except queue.Empty:
                 pass
@@ -66,12 +66,12 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
                 if self.framework_manager.is_complete(framework_model):
                     self.framework_manager.task_active_set(None)
                     queue_get('task_complete').put(True)
-                    await self.framework_report(framework_model)
+                    await self.message_history_save(framework_model)
                     return
                 else:
                     framework_model = self.framework_manager.switch_next_sub_task(framework_model)
                     queue_get('task_continue').put(framework_model)
-                    await self.framework_report(framework_model)
+                    await self.message_history_save(framework_model)
                     continue
 
             except Exception as e:
@@ -85,7 +85,7 @@ class AbstractAiFrameworkTask(AbstractAiFramework):
 
                 # rate limit handling
                 if getattr(e, 'status_code', None) in [429, 413]:
-                    await self.framework_report(framework_model)
+                    await self.message_history_save(framework_model)
                     return
 
                 queue_get('chat').put({"text": 'Работа будет продолжена', "who": 'agent'})

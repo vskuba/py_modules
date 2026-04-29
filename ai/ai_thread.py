@@ -45,7 +45,7 @@ async def ai_thread_framework_run(ai_frameworks: list, window=None):
                 if isinstance(framework_model, AbstractAiFrameworkTaskModel):
                     queue_get('chat').put({'text': f'Запускаю задачу {framework_model.title}', 'who': 'agent'})
                 if isinstance(framework_model, AbstractAiFrameworkAgentModel):
-                    if framework_model.is_sub_thread:
+                    if framework_model.is_sub_agent:
                         queue_get('chat').put({
                             'text': f'Спрашиваю у агента "{framework_model.title}": ' + framework_model.prompt,
                             'who': 'agent'}
@@ -59,7 +59,7 @@ async def ai_thread_framework_run(ai_frameworks: list, window=None):
             if isinstance(framework_model, AiFrameworkModel) and framework_model.name not in async_task_running:
                 logger_info(f"🎭 Запуск агента '{framework_model.name}' в асинхронной задаче")
 
-                if not framework_model.is_sub_thread:
+                if not framework_model.is_sub_agent:
                     state_set('framework_model_main_thread', framework_model)
 
                 async_task = asyncio.create_task(ai_framework.framework_run(framework_model))
@@ -92,11 +92,11 @@ def task_done_callback(task, framework_model, window):
         del async_task_running[name]
 
     # Логика sub_thread
-    if framework_model.is_sub_thread and async_waiting_is_active():
+    if framework_model.is_sub_agent and async_waiting_is_active():
         async_waiting_clear()
 
     # Логика уведомления окна
-    if not framework_model.is_sub_thread:
+    if not framework_model.is_sub_agent:
         if window:
             window.thread_monitor(framework_model)
 
