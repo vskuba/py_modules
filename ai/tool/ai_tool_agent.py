@@ -59,8 +59,8 @@ async def agent_desc_list() -> str:
             if not agent_yaml.get('specialization'):
                 continue
 
-            a_name = agent_yaml.get('name', name)
-            a_desc = agent_yaml.get('description', 'No description available')
+            a_name = agent_yaml.get('name', name).strip()
+            a_desc = agent_yaml.get('description', 'No description available').strip()
 
             result.append(f'Agent name: "{a_name}", description: "{a_desc}"')
 
