@@ -79,10 +79,12 @@ class AbstractAiFramework(ABC):
         if not history_rows:
             return ''
 
+        history_rows = reversed(history_rows)
+
         framework_model.memory_session_uuid = history_rows[-1].get('session_uuid')
 
         # 3. Формирование текста
-        formatted_parts = ["\n\n=== ПРЕДЫДУЩАЯ ПЕРЕПИСКА ==="]
+        formatted_parts = ["\n\n=== HISTORY LAST MESSAGES ==="]
 
         for row in history_rows:
             role = str(row.get('role', 'user')).upper()
@@ -90,7 +92,7 @@ class AbstractAiFramework(ABC):
 
             formatted_parts.append(f"{role}: {content}")
 
-        formatted_parts.append("=== КОНЕЦ ПРЕДЫДУЩЕЙ ПЕРЕПИСКИ ===\n")
+        formatted_parts.append("=== END OF HISTORY LAST MESSAGES ===\n")
 
         return "\n".join(formatted_parts)
 
@@ -164,6 +166,8 @@ class AbstractAiFramework(ABC):
                         await memory_short_message_add(
                             session_uuid, user_id, role, agent_name, 'tool-call', tool_data
                         )
+
+        self.message_history = {}
 
     def engine_tools_local_add(self, engine, framework_model: AiFrameworkModel):
         tools_local = ai_tools_get()
