@@ -4,10 +4,10 @@ import queue
 import traceback
 
 from ai.framework.ai_framework import AiFrameworkModel
-from ai.framework.ai_framework_agent import AbstractAiFrameworkAgent
-from ai.framework.ai_framework_model_agent import AbstractAiFrameworkAgentModel
-from ai.framework.ai_framework_model_task import AbstractAiFrameworkTaskModel
-from ai.framework.ai_framework_task import AbstractAiFrameworkTask
+from ai.framework.agent.ai_framework import AbstractAiFrameworkAgent
+from ai.framework.agent.ai_framework_model import AbstractAiFrameworkAgentModel
+from ai.framework.task.ai_framework_model import AbstractAiFrameworkTaskModel
+from ai.framework.task.ai_framework import AbstractAiFrameworkTask
 from async_.async_ import async_waiting_is_active, async_waiting_clear
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
