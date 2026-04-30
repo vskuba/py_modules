@@ -115,6 +115,8 @@ class AbstractAiFramework(ABC):
                 session_uuid = framework_model.memory_session_uuid
                 user_id = framework_model.user_id
 
+                tokens_count = None
+
                 # 1. ЗАПРОСЫ (User, System, Tool Return)
                 if hasattr(m, 'kind') and m.kind == 'request':
                     for p in getattr(m, 'parts', []):
@@ -152,6 +154,11 @@ class AbstractAiFramework(ABC):
                     role = 'assistant'
                     is_final = getattr(m, 'finish_reason', None) == 'stop'
 
+                    if hasattr(m, 'usage') and m.usage:
+                        input_t = getattr(m.usage, 'input_tokens', 0) or 0
+                        output_t = getattr(m.usage, 'output_tokens', 0) or 0
+                        tokens_count = input_t + output_t
+
                     if hasattr(m, 'parts'):
                         for part in m.parts:
                             p_type = str(type(part))
@@ -159,21 +166,39 @@ class AbstractAiFramework(ABC):
                             # Размышления
                             if "ThinkingPart" in p_type:
                                 await memory_short_message_add(
-                                    session_uuid, user_id, role, agent_name, 'thinking', part.content.strip()
+                                    session_uuid,
+                                    user_id,
+                                    role,
+                                    agent_name,
+                                    'thinking',
+                                    part.content.strip(),
+                                    token=tokens_count
                                 )
 
                             # Текст ответа (Финальный или промежуточный)
                             elif "TextPart" in p_type:
                                 kind = 'response-final' if is_final else 'response'
                                 await memory_short_message_add(
-                                    session_uuid, user_id, role, agent_name, kind, part.content.strip()
+                                    session_uuid,
+                                    user_id,
+                                    role,
+                                    agent_name,
+                                    kind,
+                                    part.content.strip(),
+                                    token=tokens_count
                                 )
 
                             # Вызовы инструментов
                             elif "ToolCallPart" in p_type:
                                 tool_data = f"call: {part.tool_name}({part.args})"
                                 await memory_short_message_add(
-                                    session_uuid, user_id, role, agent_name, 'tool-call', tool_data
+                                    session_uuid,
+                                    user_id,
+                                    role,
+                                    agent_name,
+                                    'tool-call',
+                                    tool_data,
+                                    token=tokens_count
                                 )
 
         self.message_history = {}

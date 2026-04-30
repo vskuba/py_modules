@@ -3,16 +3,16 @@ import uuid
 from mysql_.mysql_ import mysql_pool_get
 
 
-async def memory_short_message_add(session_uuid, user_id, role, agent, kind_type, content):
+async def memory_short_message_add(session_uuid, user_id, role, agent, kind_type, content, token=None):
     pool = await mysql_pool_get()
     async with pool.acquire() as conn:
         async with conn.cursor() as cursor:
             # Используем %s для MySQL
             sql = '''
-                INSERT INTO agent_memory_short (session_uuid, user_id, role, agent, kind_type, content)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO agent_memory_short (session_uuid, user_id, role, agent, kind_type, content, token)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             '''
-            await cursor.execute(sql, (session_uuid, user_id, role, agent, kind_type, content))
+            await cursor.execute(sql, (session_uuid, user_id, role, agent, kind_type, content, token))
             # При autocommit=True в настройках пула, commit() произойдет автоматически
 
 
