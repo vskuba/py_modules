@@ -6,7 +6,7 @@ from ai.framework.ai_framework import AbstractAiFrameworkManager
 from ai.framework.agent.ai_framework_model import AiFrameworkAgentModel
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
-from src.repository.agent_specialization_repository import AgentSpecializationRepository
+from src.mysql_.repository.agent_specialization_repository import AgentSpecializationRepository
 
 
 class AiFrameworkAgentManager(AbstractAiFrameworkManager):

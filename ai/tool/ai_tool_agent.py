@@ -8,7 +8,7 @@ from async_.async_ import async_waiting_start, async_waiting_clear
 from config.config import config_get
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
-from src.repository.agent_repository import AgentRepository
+from src.mysql_.repository.agent_repository import AgentRepository
 from state.state import state_get
 
 _agent_name_cache = None
