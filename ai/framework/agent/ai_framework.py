@@ -2,19 +2,91 @@ import asyncio
 import queue
 import traceback
 
-from ai.framework.ai_framework import AbstractAiFramework
-from ai.framework.agent.ai_framework_manager import AbstractAiFrameworkAgentManager
-from ai.framework.agent.ai_framework_model import AbstractAiFrameworkAgentModel
+from pydantic_ai import Agent, AgentRunResult, ModelSettings
+
+from ai.ai_mcp import AiMcpManager
+from ai.framework.ai_framework import AbstractAiFramework, AiFrameworkResult
+from ai.framework.agent.ai_framework_manager import AiFrameworkAgentManager
+from ai.framework.agent.ai_framework_model import AiFrameworkAgentModel
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
 
-class AbstractAiFrameworkAgent(AbstractAiFramework):
-    def __init__(self, framework_manager: AbstractAiFrameworkAgentManager):
+class AiFrameworkAgent(AbstractAiFramework):
+    def __init__(self, framework_manager: AiFrameworkAgentManager):
         super().__init__(framework_manager)
-        self.framework_manager: AbstractAiFrameworkAgentManager = framework_manager
+        self.framework_manager: AiFrameworkAgentManager = framework_manager
 
-    async def framework_run(self, framework_model: AbstractAiFrameworkAgentModel):
+    async def engine_prepare(self, framework_model: AiFrameworkAgentModel) -> Agent:
+        """
+        Создает типизированного агента Pydantic-AI.
+        Результат работы агента всегда будет объектом ResponseModel.
+        """
+        model = self.llm_model_get(framework_model)
+
+        message_history = await self.message_history_get(framework_model)
+
+        logger_info(
+            f'🧠 Передаем историю агенту:' 
+            f'{message_history}' if message_history else "\nВ истории пусто или отключена"
+        )
+
+        engine = Agent(
+            model,
+            system_prompt=framework_model.system_prompt.strip() + message_history,
+            output_type=framework_model.response_model,
+            retries=10,
+            output_retries=10
+        )
+
+        self.engine_storage[framework_model.name] = engine
+        self.engine_tools_local_add(engine, framework_model)
+
+        return engine
+
+    async def engine_run(self, framework_model: AiFrameworkAgentModel):
+        engine = self.engine_storage[framework_model.name]
+        ai_mcp_manager = AiMcpManager()
+
+        try:
+            if framework_model.mcp_servers:
+                await ai_mcp_manager.mcp_server_add_tools(engine, framework_model)
+
+            logger_info(f'🚀 Запускаем модель агента... {framework_model}')
+
+            return await engine.run(
+                user_prompt=framework_model.prompt,
+                model_settings=ModelSettings(
+                    parallel_tool_calls=True,
+                    temperature=0.0,
+                )
+            )
+        except Exception as e:
+            backtrace = traceback.format_exc()
+            logger_info(
+                f"❌ Ошибка агента {framework_model.name}: {e}."
+                f"Полный стек вызовов:\n{backtrace}"
+            )
+            raise e
+
+        finally:
+            if framework_model.mcp_servers:
+                logger_info(f'Закрываем MCP сессии для задачи {framework_model.name}...')
+                await ai_mcp_manager.mcp_server_close_all()
+
+    async def engine_result_handle(
+            self, result: AgentRunResult,
+            framework_model: AiFrameworkAgentModel
+    ) -> AiFrameworkResult | None:
+        await super().engine_result_handle(result, framework_model)
+
+        # если ответ просто текст, а не модель
+        if not result.output or isinstance(result.output, str):
+            return AiFrameworkResult(str(result.output))
+
+        return AiFrameworkResult(result.output.text)
+
+    async def framework_run(self, framework_model: AiFrameworkAgentModel):
         _exception: Exception | None = None
         catch_exception_retry_attempt: int = 0
         while True:
@@ -79,7 +151,7 @@ class AbstractAiFrameworkAgent(AbstractAiFramework):
                 _exception = e
                 continue
 
-    async def _error_complete(self, framework_model: AbstractAiFrameworkAgentModel, e: Exception):
+    async def _error_complete(self, framework_model: AiFrameworkAgentModel, e: Exception):
         error_text = 'Произошла ошибка: %s' % e
         if framework_model.on_complete:
             await framework_model.on_complete(error_text)

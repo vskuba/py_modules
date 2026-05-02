@@ -30,7 +30,7 @@ class AiSubTask:
     tools: list[Callable] = field(default_factory=list)
 
 
-class AbstractAiFrameworkTaskModel(AiFrameworkModel):
+class AiFrameworkTaskModel(AiFrameworkModel):
     def __init__(
             self,
             title: str,

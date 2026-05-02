@@ -7,13 +7,15 @@ import aiomysql
 from typing import Optional
 from aiomysql.pool import _create_pool, Pool
 
+from config.config import config_get
+
 pool: Optional[aiomysql.Pool] = None
 pool_lock = asyncio.Lock()
 
-host = 'mysql'
-user = 'developer'
-password = 'password'
-db = 'project'
+host = config_get('MYSQL_HOST', 'mysql')
+user = config_get('MYSQL_USER', 'developer')
+password = config_get('MYSQL_PASSWORD', 'password')
+db = config_get('MYSQL_DATABASE', 'project')
 
 
 def mysql_get_url() -> str:

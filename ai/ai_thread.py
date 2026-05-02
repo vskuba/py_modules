@@ -3,11 +3,11 @@ import copy
 import queue
 import traceback
 
+from ai.framework.agent.ai_framework import AiFrameworkAgent
+from ai.framework.agent.ai_framework_model import AiFrameworkAgentModel
 from ai.framework.ai_framework import AiFrameworkModel
-from ai.framework.agent.ai_framework import AbstractAiFrameworkAgent
-from ai.framework.agent.ai_framework_model import AbstractAiFrameworkAgentModel
-from ai.framework.task.ai_framework_model import AbstractAiFrameworkTaskModel
-from ai.framework.task.ai_framework import AbstractAiFrameworkTask
+from ai.framework.task.ai_framework import AiFrameworkTask
+from ai.framework.task.ai_framework_model import AiFrameworkTaskModel
 from async_.async_ import async_waiting_is_active, async_waiting_clear
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
@@ -36,15 +36,15 @@ async def ai_thread_framework_run(ai_frameworks: list, window=None):
                 continue
 
             ai_framework = None
-            if isinstance(framework_model, AbstractAiFrameworkTaskModel):
-                ai_framework = next((x for x in ai_frameworks if isinstance(x, AbstractAiFrameworkTask)), None)
-            if isinstance(framework_model, AbstractAiFrameworkAgentModel):
-                ai_framework = next((x for x in ai_frameworks if isinstance(x, AbstractAiFrameworkAgent)), None)
+            if isinstance(framework_model, AiFrameworkTaskModel):
+                ai_framework = next((x for x in ai_frameworks if isinstance(x, AiFrameworkTask)), None)
+            if isinstance(framework_model, AiFrameworkAgentModel):
+                ai_framework = next((x for x in ai_frameworks if isinstance(x, AiFrameworkAgent)), None)
 
             if window:
-                if isinstance(framework_model, AbstractAiFrameworkTaskModel):
+                if isinstance(framework_model, AiFrameworkTaskModel):
                     queue_get('chat').put({'text': f'Запускаю задачу {framework_model.title}', 'who': 'agent'})
-                if isinstance(framework_model, AbstractAiFrameworkAgentModel):
+                if isinstance(framework_model, AiFrameworkAgentModel):
                     if framework_model.is_sub_agent:
                         queue_get('chat').put({
                             'text': f'Спрашиваю у агента "{framework_model.title}": ' + framework_model.prompt,

@@ -18,7 +18,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ai.ai_memory_short import memory_short_message_add, memory_short_messages, memory_short_session_uuid_get
+from ai.ai_session import session_message_add, session_messages
 from ai.framework.ai_framework_manager import AbstractAiFrameworkManager
 from ai.framework.ai_framework_model import AiFrameworkModel
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
@@ -62,20 +62,20 @@ class AbstractAiFramework(ABC):
         pass
 
     async def message_history_get(self, framework_model: AiFrameworkModel) -> str:
-        if framework_model.memory_short_disabled:
+        if framework_model.session_disabled:
             return ""
 
         if framework_model.is_sub_agent:
             return ""
 
         # новая сессия указана
-        if framework_model.memory_session_uuid:
+        if framework_model.session_uuid:
             return ""
 
         # 1. Получаем историю (список словарей)
-        history_rows = await memory_short_messages(
+        history_rows = await session_messages(
             framework_model.user_id,
-            framework_model.name,
+            framework_model.entity.get('id'),
             framework_model.memory_short_length
         )
 
@@ -83,7 +83,7 @@ class AbstractAiFramework(ABC):
         if not history_rows:
             return ''
 
-        framework_model.memory_session_uuid = history_rows[-1].get('session_uuid')
+        framework_model.session_uuid = history_rows[-1].get('session_uuid')
 
         # 3. Формирование текста
         formatted_parts = ["\n\n=== HISTORY LAST MESSAGES ==="]
@@ -112,7 +112,8 @@ class AbstractAiFramework(ABC):
 
         for agent_name, messages in self.message_history.items():
             for m in messages:
-                session_uuid = framework_model.memory_session_uuid
+                session_uuid = framework_model.session_uuid
+                llm_id = framework_model.entity.get('llm_id')
                 user_id = framework_model.user_id
 
                 tokens_count = None
@@ -139,11 +140,12 @@ class AbstractAiFramework(ABC):
                             content = f"[{t_name}]: {content}"
 
                         # Используем твою функцию для добавления
-                        await memory_short_message_add(
+                        await session_message_add(
                             session_uuid=session_uuid,
+                            llm_id=llm_id,
                             user_id=user_id,
                             role=role,
-                            agent=agent_name,
+                            agent_id=framework_model.entity.get('id'),
                             kind_type=part_kind,
                             content=str(content).strip()
                         )
@@ -165,39 +167,42 @@ class AbstractAiFramework(ABC):
 
                             # Размышления
                             if "ThinkingPart" in p_type:
-                                await memory_short_message_add(
-                                    session_uuid,
-                                    user_id,
-                                    role,
-                                    agent_name,
-                                    'thinking',
-                                    part.content.strip(),
+                                await session_message_add(
+                                    session_uuid=session_uuid,
+                                    llm_id=llm_id,
+                                    user_id=user_id,
+                                    role=role,
+                                    agent_id=framework_model.entity.get('id'),
+                                    kind_type='thinking',
+                                    content=part.content.strip(),
                                     token=tokens_count
                                 )
 
                             # Текст ответа (Финальный или промежуточный)
                             elif "TextPart" in p_type:
                                 kind = 'response-final' if is_final else 'response'
-                                await memory_short_message_add(
-                                    session_uuid,
-                                    user_id,
-                                    role,
-                                    agent_name,
-                                    kind,
-                                    part.content.strip(),
+                                await session_message_add(
+                                    session_uuid=session_uuid,
+                                    llm_id=llm_id,
+                                    user_id=user_id,
+                                    role=role,
+                                    agent_id=framework_model.entity.get('id'),
+                                    kind_type=kind,
+                                    content=part.content.strip(),
                                     token=tokens_count
                                 )
 
                             # Вызовы инструментов
                             elif "ToolCallPart" in p_type:
                                 tool_data = f"call: {part.tool_name}({part.args})"
-                                await memory_short_message_add(
-                                    session_uuid,
-                                    user_id,
-                                    role,
-                                    agent_name,
-                                    'tool-call',
-                                    tool_data,
+                                await session_message_add(
+                                    session_uuid=session_uuid,
+                                    llm_id=llm_id,
+                                    user_id=user_id,
+                                    role=role,
+                                    agent_id=framework_model.entity.get('id'),
+                                    kind_type='tool-call',
+                                    content=part.content.strip(),
                                     token=tokens_count
                                 )
 

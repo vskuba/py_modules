@@ -2,12 +2,13 @@ import asyncio
 import queue
 from pathlib import Path
 
+from ai.framework.agent.ai_framework_manager import AiFrameworkAgentManager
 from ai.framework.ai_framework_model import AiFrameworkModel
-from ai.framework.agent.ai_framework_manager_pydantic import AiFrameworkAgentManagerPydantic
 from async_.async_ import async_waiting_start, async_waiting_clear
 from config.config import config_get
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
+from src.repository.agent_repository import AgentRepository
 from state.state import state_get
 
 _agent_name_cache = None
@@ -43,29 +44,14 @@ async def agent_desc_list() -> str:
 
     result = ['Available agents:']
 
-    agents_dir = Path(config_get('data_dir')) / config_get('AGENT_DIR')
+    repo = AgentRepository()
+    agents = await repo.find_by({})
 
-    if not agents_dir.exists():
-        return f"Agents directory '{agents_dir}' not found."
-
-    agent_manager = AiFrameworkAgentManagerPydantic()
-
-    names = [f.stem for f in agents_dir.glob("*.yml")]
-
-    for name in names:
-        try:
-            agent_yaml = agent_manager.load_yaml(name)
-
-            if not agent_yaml.get('specialization'):
-                continue
-
-            a_name = agent_yaml.get('name', name).strip()
-            a_desc = agent_yaml.get('description', 'No description available').strip()
-
-            result.append(f'Agent name: "{a_name}", description: "{a_desc}"')
-
-        except Exception as e:
-            continue
+    for agent in agents:
+        # ... ваша логика обработки ...
+        a_name = agent.get('name').strip()
+        a_desc = agent.get('description', '').strip()
+        result.append(f'Agent name: "{a_name}", description: "{a_desc}"')
 
     _agent_desc_cache = '\n'.join(result)
     return _agent_desc_cache
@@ -83,7 +69,7 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
     Returns:
         The text response from the invoked agent after the task is completed.
     """
-    agent_manager = AiFrameworkAgentManagerPydantic()
+    agent_manager = AiFrameworkAgentManager()
     agent_names_list = await agent_name_list()
 
     if agent_name not in agent_names_list:
@@ -92,7 +78,13 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
                 f' Support follow agent_name: [' + ', '.join(agent_names_list) + ']'
                 )
 
-    framework_model = agent_manager.load(agent_name)
+    repo = AgentRepository()
+    entity = await repo.find_one_by({"name": agent_name})
+
+    if not entity:
+        return f"Agent {agent_name} data not found in database."
+
+    framework_model = agent_manager.create_framework_model(entity)
     framework_model.prompt = prompt
 
     framework_model_main_thread = state_get('framework_model_main_thread')

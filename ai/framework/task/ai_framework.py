@@ -1,38 +1,144 @@
 import asyncio
+import os
 import queue
 import traceback
+from pathlib import Path
 
-from abc import abstractmethod
+from pydantic import TypeAdapter
+from pydantic_ai import Agent, AgentRunResult, ModelMessage, ModelSettings
 
-from ai.framework.ai_framework import AbstractAiFramework
-from ai.framework.task.ai_framework_manager import AbstractAiFrameworkTaskManager
-from ai.framework.task.ai_framework_model import AbstractAiFrameworkTaskModel
+from ai.ai_mcp import AiMcpManager
+from ai.framework.ai_framework import AbstractAiFramework, AiFrameworkResult
+from ai.framework.task.ai_framework_manager import AiFrameworkTaskManager
+from ai.framework.task.ai_framework_model import AiFrameworkTaskModel
+from config.config import config_get
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
 
-class AbstractAiFrameworkTask(AbstractAiFramework):
-    def __init__(self, framework_manager: AbstractAiFrameworkTaskManager):
+class AiFrameworkTask(AbstractAiFramework):
+    def __init__(self, framework_manager: AiFrameworkTaskManager):
         super().__init__(framework_manager)
-        self.framework_manager: AbstractAiFrameworkTaskManager = framework_manager
+        self.framework_manager: AiFrameworkTaskManager = framework_manager
 
-    @abstractmethod
-    def task_history_filename_get(self, task: AbstractAiFrameworkTaskModel) -> str:
-        pass
+    async def engine_prepare(self, framework_model: AiFrameworkTaskModel) -> Agent:
+        """
+        Создает типизированного агента Pydantic-AI.
+        Результат работы агента всегда будет объектом ResponseModel.
+        """
+        index = framework_model.name + str(framework_model.sub_task_current_index)
+        if index in self.engine_storage:
+            return self.engine_storage[index]
 
-    @abstractmethod
+        model = self.llm_model_get(framework_model)
+
+        engine = Agent(
+            model,
+            system_prompt=framework_model.system_prompt.strip(),
+            output_type=framework_model.response_model,
+            retries=10,
+            output_retries=10
+        )
+
+        self.engine_storage[framework_model.name] = engine
+
+        # if not self.message_history:
+        #     self.message_history[framework_model.name] = self.task_history_load(framework_model)
+
+        self.engine_tools_local_add(engine, framework_model)
+
+        return engine
+
+    async def engine_run(self, framework_model: AiFrameworkTaskModel):
+        # message_history = self.message_history_get(framework_model)
+
+        logger_info(
+            f'🧱 Подзадача {framework_model.sub_task_current_index + 1}/{len(framework_model.yaml.sub_tasks)}, '
+            f'prompt: {framework_model.prompt}'
+        )
+        # logger_info(
+        #     f'🧠 Передаем историю агенту:\n'
+        #     f'{message_history if message_history else "пока ничего нет"}'
+        # )
+
+        engine = self.engine_storage[framework_model.name]
+        ai_mcp_manager = AiMcpManager()
+
+        try:
+            if framework_model.mcp_servers:
+                await ai_mcp_manager.mcp_server_add_tools(engine, framework_model)
+
+            return await engine.run(
+                user_prompt=framework_model.prompt,
+                # message_history=self.history,
+                model_settings=ModelSettings(
+                    parallel_tool_calls=True,
+                    temperature=0.0,
+                )
+            )
+        except Exception as e:
+            backtrace = traceback.format_exc()
+            logger_info(
+                f"❌ Ошибка при выполнении задачи {framework_model.name}: {e}."
+                f"Полный стек вызовов:\n{backtrace}"
+            )
+            raise e
+
+        finally:
+            if framework_model.mcp_servers:
+                logger_info(f'Закрываем MCP сессии для задачи {framework_model.name}...')
+                await ai_mcp_manager.mcp_server_close_all()
+
+    async def engine_result_handle(
+            self,
+            result: AgentRunResult,
+            framework_model: AiFrameworkTaskModel
+    ) -> AiFrameworkResult | None:
+        await super().engine_result_handle(result, framework_model)
+
+        response_model_dict = result.output.model_dump()
+        del response_model_dict['text']
+
+        framework_model.input_values = framework_model.input_values | response_model_dict
+
+        logger_info(f'🧠 Получили новые сообщения истории в задаче "{framework_model.title}"'
+                    f' ({framework_model.sub_task_current_index + 1}/{len(framework_model.yaml.sub_tasks)})\n'
+                    f' {self.message_history}')
+
+        if framework_model.history_save:
+            self.task_history_save(result, framework_model)
+
+        return AiFrameworkResult(result.output.text)
+
+    def task_history_save(self, result, task: AiFrameworkTaskModel):
+        messages = result.all_messages()
+
+        filename = self.task_history_filename_get(task)
+        file_path = Path(filename)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(filename, 'wb') as f:
+            f.write(TypeAdapter(list[ModelMessage]).dump_json(messages))
+
+        logger_info('🧠 Сохранили историю в файл')
+
+    def task_history_load(self, task: AiFrameworkTaskModel) -> list[ModelMessage]:
+        filename = self.task_history_filename_get(task)
+        if not os.path.exists(filename):
+            return []
+
+        with open(filename, 'rb') as f:
+            data = f.read()
+
+            return TypeAdapter(list[ModelMessage]).validate_json(data)
+
     def task_history_dir_get(self) -> str:
-        pass
+        return config_get('data_dir') + '/' + config_get('history_dir')
 
-    @abstractmethod
-    def task_history_save(self, result, task: AbstractAiFrameworkTaskModel):
-        pass
+    def task_history_filename_get(self, task: AiFrameworkTaskModel) -> str:
+        return '%s/%s_history.json' % (self.task_history_dir_get(), task.name)
 
-    @abstractmethod
-    def task_history_load(self, task: AbstractAiFrameworkTaskModel) -> list:
-        pass
-
-    async def framework_run(self, framework_model: AbstractAiFrameworkTaskModel):
+    async def framework_run(self, framework_model: AiFrameworkTaskModel):
         catch_exception: bool = False
         while True:
             await asyncio.sleep(0.1)
