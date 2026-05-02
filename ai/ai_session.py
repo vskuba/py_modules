@@ -10,7 +10,7 @@ async def session_message_add(session_uuid, llm_id, user_id, role, agent_id, kin
             # Используем %s для MySQL
             sql = '''
                 INSERT INTO agent_session (session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             '''
             await cursor.execute(sql, (session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token))
             # При autocommit=True в настройках пула, commit() произойдет автоматически

@@ -20,4 +20,5 @@ class AiFrameworkModel:
     session_uuid: str | None = None
     llm: str | None = None
     response_model: str | BaseModel = str
-    entity: dict = None
+    entity: dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)

@@ -12,6 +12,13 @@ class AbstractRepository(ABC):
     def table_name_get(self) -> str:
         pass
 
+    async def find(self, id: int):
+        sql = f"SELECT * FROM `{self.table_name}` WHERE id = %s"
+        async with asynccontextmanager(mysql_get_db_async)() as db:
+            async with db.cursor() as cursor:
+                await cursor.execute(sql, id)
+                return await cursor.fetchone()
+
     async def find_one_by(self, criteria: dict, order_by: str = None):
         clause = " AND ".join([f"`{k}` = %s" for k in criteria.keys()])
         values = tuple(criteria.values())
