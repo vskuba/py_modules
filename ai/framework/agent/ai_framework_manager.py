@@ -2,8 +2,8 @@ import traceback
 
 from functools import partial
 
-from ai.framework.ai_framework import AbstractAiFrameworkManager
 from ai.framework.agent.ai_framework_model import AiFrameworkAgentModel
+from ai.framework.ai_framework_manager import AbstractAiFrameworkManager
 from logging_.logging_ import logger_info
 from mysql_.mysql_table import mysql_table_metadata_get
 from queue_.queue_ import queue_get

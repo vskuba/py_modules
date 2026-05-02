@@ -11,7 +11,7 @@ from typing import Any, Tuple, List
 
 from pydantic import BaseModel, Field, create_model
 
-from ai.framework.ai_framework import AbstractAiFrameworkManager
+from ai.framework.ai_framework_manager import AbstractAiFrameworkManager
 from ai.framework.task.ai_framework_model import AiTaskYaml, AiFrameworkTaskModel
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
