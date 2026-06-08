@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from contextlib import asynccontextmanager
 
 from mysql_.mysql_ import mysql_get_db, mysql_get_db_async
 
@@ -14,10 +13,9 @@ class AbstractRepository(ABC):
 
     async def find(self, id: int):
         sql = f"SELECT * FROM `{self.table_name}` WHERE id = %s"
-        async with asynccontextmanager(mysql_get_db_async)() as db:
-            async with db.cursor() as cursor:
-                await cursor.execute(sql, id)
-                return await cursor.fetchone()
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, id)
+            return await db.fetchone()
 
     async def find_one_by(self, criteria: dict, order_by: str = None):
         clause = " AND ".join([f"`{k}` = %s" for k in criteria.keys()])
@@ -29,10 +27,9 @@ class AbstractRepository(ABC):
 
         sql = f"SELECT * FROM `{self.table_name}` WHERE {clause}{order_by_clause} LIMIT 1"
 
-        async with asynccontextmanager(mysql_get_db_async)() as db:
-            async with db.cursor() as cursor:
-                await cursor.execute(sql, values)
-                return await cursor.fetchone()
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, values)
+            return await db.fetchone()
 
     def find_one_by_non_async(self, criteria: dict, order_by: str = None):
         clause = " AND ".join([f"`{k}` = %s" for k in criteria.keys()])
@@ -62,11 +59,10 @@ class AbstractRepository(ABC):
             values = tuple(criteria.values())
             sql = f"SELECT * FROM `{self.table_name}` WHERE {clause}{order_by_clause}"
 
-        async with asynccontextmanager(mysql_get_db_async)() as db:
-            async with db.cursor() as cursor:
-                await cursor.execute(sql, values)
-                result = await cursor.fetchall()
-                return result
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, values)
+            result = await db.fetchall()
+            return result
 
     def find_by_non_async(self, criteria: dict, order_by: str = None):
         order_by_clause = ''
@@ -107,10 +103,9 @@ class AbstractRepository(ABC):
         # 4. Получаем кортеж значений
         values = tuple(data.values())
 
-        async with asynccontextmanager(mysql_get_db_async)() as db:
-            async with db.cursor() as cursor:
-                await cursor.execute(sql, values)
-                return cursor.lastrowid
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, values)
+            return db.lastrowid
 
     async def add_many(self, data: list[dict]) -> int:
         """
@@ -133,7 +128,51 @@ class AbstractRepository(ABC):
         # 3. Собираем SQL
         sql = f"INSERT INTO `{self.table_name}` ({columns}) VALUES ({placeholders})"
 
-        async with asynccontextmanager(mysql_get_db_async)() as db:
-            async with db.cursor() as cursor:
-                await cursor.executemany(sql, values)
-                return cursor.rowcount
+        async with mysql_get_db_async() as db:
+            await db.executemany(sql, values)
+            return db.rowcount
+
+    async def delete(self, id: int) -> bool:
+        """
+        Удаляет запись по ID.
+        """
+        sql = f"DELETE FROM `{self.table_name}` WHERE id = %s"
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, id)
+            return db.rowcount > 0
+
+    async def delete_by(self, criteria: dict):
+        """
+        Удаляет записи по заданным критериям.
+        :param criteria: Словарь {'столбец': 'значение'}
+        :return: Количество удаленных строк
+        """
+        if not criteria:
+            raise ValueError("Критерии для удаления не могут быть пустыми")
+
+        clause = " AND ".join([f"`{k}` = %s" for k in criteria.keys()])
+        values = tuple(criteria.values())
+        sql = f"DELETE FROM `{self.table_name}` WHERE {clause}"
+
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, values)
+            return db.rowcount
+
+    async def update(self, id: int, data: dict) -> bool:
+        """
+        Обновляет запись по ID.
+        :param id: ID записи
+        :param data: Словарь с обновляемыми данными
+        :return: True если запись обновлена
+        """
+        if not data:
+            return False
+
+        # Формируем строку SET: `col1` = %s, `col2` = %s
+        set_clause = ", ".join([f"`{k}` = %s" for k in data.keys()])
+        values = tuple(data.values()) + (id,)
+        sql = f"UPDATE `{self.table_name}` SET {set_clause} WHERE id = %s"
+
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, values)
+            return db.rowcount > 0
