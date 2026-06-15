@@ -176,3 +176,12 @@ class AbstractRepository(ABC):
         async with mysql_get_db_async() as db:
             await db.execute(sql, values)
             return db.rowcount > 0
+
+    async def empty(self):
+        """
+        Полностью очищает таблицу без проверки критериев.
+        """
+        sql = f"DELETE FROM `{self.table_name}`"
+        async with mysql_get_db_async() as db:
+            await db.execute(sql)
+            return db.rowcount
