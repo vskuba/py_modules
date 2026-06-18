@@ -19,7 +19,6 @@ from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from ai.ai_session import session_message_add, session_messages
-from ai.framework.ai_framework_manager import AbstractAiFrameworkManager
 from ai.framework.ai_framework_model import AiFrameworkModel
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
@@ -34,9 +33,8 @@ class AiFrameworkResult:
 
 
 class AbstractAiFramework(ABC):
-    def __init__(self, framework_manager):
+    def __init__(self):
         self.uuid = str(uuid.uuid4()).split('-')[0]
-        self.framework_manager: AbstractAiFrameworkManager = framework_manager
         self.engine_storage: dict[str, Any] = {}
         self.message_history: dict[str, list[Any]] = {}
 
