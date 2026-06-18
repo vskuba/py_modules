@@ -26,7 +26,7 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
                 continue
 
             ai_framework: AbstractAiFramework = next(
-                (x for x in ai_frameworks if x.__class__.__name__ is framework_model.framework_class))
+                (x for x in ai_frameworks if x.__class__.__name__ == framework_model.framework_class))
 
             if not ai_framework:
                 raise ValueError(f'Не могу определить ai_framework')
