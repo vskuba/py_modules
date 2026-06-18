@@ -47,7 +47,7 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
     Returns:
         The text response from the invoked agent after the task is completed.
     """
-    from ai.framework.agent.ai_framework_manager import AiFrameworkAgentManager
+    from src.ai.framework.agent import AiFrameworkAgentManager
 
     agent_list = await _agent_list()
 
@@ -60,8 +60,8 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
     entity = agent_list[agent_name]
 
     agent_manager = AiFrameworkAgentManager()
-    framework_model = await agent_manager.create_framework_model(entity)
-    framework_model.prompt = prompt
+    framework_model = await agent_manager.framework_model_create({"entity_agent": entity})
+    framework_model.prompt_user = prompt
 
     framework_model_main_thread = state_get('framework_model_main_thread')
     if isinstance(framework_model_main_thread, AiFrameworkModel):
@@ -78,7 +78,7 @@ async def agent_invoke(agent_name: str, prompt: str) -> str:
     framework_model.on_complete = on_complete
     framework_model.is_sub_agent = True
 
-    queue_get('agent').put(framework_model)
+    queue_get('ai_framework_model').put(framework_model)
 
     await async_waiting_start()
 

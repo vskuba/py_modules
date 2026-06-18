@@ -24,7 +24,7 @@ class AiFrameworkTaskManager(AbstractAiFrameworkManager):
     def __init__(self):
         self.active_task: AiFrameworkTaskModel | None = None
 
-    def create_framework_model(self, agent_entity: dict) -> AiFrameworkTaskModel:
+    def framework_model_create(self, agent_entity: dict) -> AiFrameworkTaskModel:
         pass
 
     def dir(self) -> str:
@@ -99,8 +99,8 @@ class AiFrameworkTaskManager(AbstractAiFrameworkManager):
             )
 
             framework_model.name = task_yaml.name
-            framework_model.prompt = prompt
-            framework_model.system_prompt = prompt_system
+            framework_model.prompt_user = prompt
+            framework_model.prompt_system = prompt_system
             framework_model.tools = sub_task_current.tools if sub_task_current.tools else []
             framework_model.mcp_servers = task_yaml.mcp_servers
             framework_model.input_values_set(input_values)

@@ -34,7 +34,7 @@ class AiFrameworkTask(AbstractAiFramework):
 
         engine = Agent(
             model,
-            system_prompt=framework_model.system_prompt.strip(),
+            system_prompt=framework_model.prompt_system.strip(),
             output_type=framework_model.response_model,
             retries=10,
             output_retries=10
@@ -54,7 +54,7 @@ class AiFrameworkTask(AbstractAiFramework):
 
         logger_info(
             f'🧱 Подзадача {framework_model.sub_task_current_index + 1}/{len(framework_model.yaml.sub_tasks)}, '
-            f'prompt: {framework_model.prompt}'
+            f'prompt: {framework_model.prompt_user}'
         )
         # logger_info(
         #     f'🧠 Передаем историю агенту:\n'
@@ -69,7 +69,7 @@ class AiFrameworkTask(AbstractAiFramework):
                 await ai_mcp_manager.mcp_server_add_tools(engine, framework_model)
 
             return await engine.run(
-                user_prompt=framework_model.prompt,
+                user_prompt=framework_model.prompt_user,
                 # message_history=self.history,
                 model_settings=ModelSettings(
                     parallel_tool_calls=True,

@@ -6,9 +6,10 @@ from pydantic import BaseModel
 
 @dataclass
 class AiFrameworkModel:
+    framework_class = str
     name: str
-    prompt: str
-    system_prompt: str
+    prompt_user: str
+    prompt_system: str
     user_id: int
     tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
