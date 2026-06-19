@@ -63,9 +63,6 @@ class AbstractAiFramework(ABC):
         if framework_model.session_disabled:
             return ""
 
-        if framework_model.is_sub_agent:
-            return ""
-
         # новая сессия указана
         if framework_model.session_uuid:
             return ""
@@ -73,7 +70,7 @@ class AbstractAiFramework(ABC):
         # 1. Получаем историю (список словарей)
         history_rows = await session_messages(
             framework_model.user_id,
-            framework_model.entity.get('id'),
+            framework_model.entity_agent.get('id'),
             framework_model.memory_short_length
         )
 
@@ -100,19 +97,20 @@ class AbstractAiFramework(ABC):
         return "\n".join(formatted_parts)
 
     async def message_history_save(self, framework_model: AiFrameworkModel):
-        if not self.message_history:
+        if framework_model.session_disabled:
             return
 
-        if framework_model.is_sub_agent:
+        if not self.message_history:
             return
 
         logger_info('История сообщений: ' + str(self.message_history))
 
+        session_uuid = framework_model.session_uuid
+        llm_id = framework_model.entity_agent.get('llm_id')
+        user_id = framework_model.user_id
+
         for agent_name, messages in self.message_history.items():
             for m in messages:
-                session_uuid = framework_model.session_uuid
-                llm_id = framework_model.entity.get('llm_id')
-                user_id = framework_model.user_id
 
                 tokens_count = None
 
@@ -128,14 +126,22 @@ class AbstractAiFramework(ABC):
                         if not content:
                             continue
 
+                        # Мы сохраняем только пользовательские запросы, остальные в workflow
+                        if part_kind != 'user-prompt':
+                            continue
+
                         # Определяем роль
-                        role = 'user'
-                        if part_kind == 'system-prompt':
-                            role = 'system'
-                        elif part_kind == 'tool-return':
-                            role = 'tool'
-                            t_name = getattr(p, 'tool_name', 'unknown')
-                            content = f"[{t_name}]: {content}"
+                        # role = 'user'
+                        # if part_kind == 'system-prompt':
+                        #     role = 'system'
+                        # elif part_kind == 'tool-return':
+                        #     role = 'tool'
+                        #     t_name = getattr(p, 'tool_name', 'unknown')
+                        #     content = f"[{t_name}]: {content}"
+                        # elif part_kind == 'user-prompt':
+
+                        role = 'workflow'
+                        part_kind = 'final-user-prompt'
 
                         # Используем твою функцию для добавления
                         await session_message_add(
@@ -143,7 +149,7 @@ class AbstractAiFramework(ABC):
                             llm_id=llm_id,
                             user_id=user_id,
                             role=role,
-                            agent_id=framework_model.entity.get('id'),
+                            agent_id=framework_model.entity_agent.get('id'),
                             kind_type=part_kind,
                             content=str(content).strip()
                         )
@@ -170,7 +176,7 @@ class AbstractAiFramework(ABC):
                                     llm_id=llm_id,
                                     user_id=user_id,
                                     role=role,
-                                    agent_id=framework_model.entity.get('id'),
+                                    agent_id=framework_model.entity_agent.get('id'),
                                     kind_type='thinking',
                                     content=part.content.strip(),
                                     token=tokens_count
@@ -184,7 +190,7 @@ class AbstractAiFramework(ABC):
                                     llm_id=llm_id,
                                     user_id=user_id,
                                     role=role,
-                                    agent_id=framework_model.entity.get('id'),
+                                    agent_id=framework_model.entity_agent.get('id'),
                                     kind_type=kind,
                                     content=part.content.strip(),
                                     token=tokens_count
@@ -192,13 +198,12 @@ class AbstractAiFramework(ABC):
 
                             # Вызовы инструментов
                             elif "ToolCallPart" in p_type:
-                                tool_data = f"call: {part.tool_name}({part.args})"
                                 await session_message_add(
                                     session_uuid=session_uuid,
                                     llm_id=llm_id,
                                     user_id=user_id,
                                     role=role,
-                                    agent_id=framework_model.entity.get('id'),
+                                    agent_id=framework_model.entity_agent.get('id'),
                                     kind_type='tool-call',
                                     content=part.content.strip(),
                                     token=tokens_count
@@ -225,8 +230,8 @@ class AbstractAiFramework(ABC):
 
     def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
-        if framework_model.llm:
-            model_name = framework_model.llm
+        if framework_model.entity_llm:
+            model_name = framework_model.entity_llm.get('name')
 
         model = None
 

@@ -13,7 +13,3 @@ class AbstractAiFrameworkManager(ABC):
     @abstractmethod
     async def prompt_system_create(self, metadata: dict) -> str:
         pass
-
-    @abstractmethod
-    async def prompt_user_create(self, metadata: dict) -> str:
-        pass

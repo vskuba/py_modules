@@ -64,8 +64,4 @@ def async_task_done_callback(task, framework_model):
     if name in async_task_running:
         del async_task_running[name]
 
-    # Логика sub_thread
-    if framework_model.is_sub_agent and async_waiting_is_active():
-        async_waiting_clear()
-
     logger_info(f"✅ Async задача '{name}' завершена")
