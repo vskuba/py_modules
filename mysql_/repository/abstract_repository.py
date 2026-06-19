@@ -82,6 +82,26 @@ class AbstractRepository(ABC):
                 cursor.execute(sql, values)
                 return cursor.fetchall()
 
+    async def count_by(self, criteria: dict) -> int:
+        if not criteria:
+            sql = f"SELECT COUNT(*) as cnt FROM `{self.table_name}`"
+            values = ()
+        else:
+            clause = " AND ".join([f"`{k}` = %s" for k in criteria.keys()])
+            values = tuple(criteria.values())
+            sql = f"SELECT COUNT(*) as cnt FROM `{self.table_name}` WHERE {clause}"
+
+        async with mysql_get_db_async() as db:
+            await db.execute(sql, values)
+            result = await db.fetchone()
+
+            # Корректно извлекаем число в зависимости от формата ответа (dict или tuple)
+            if not result:
+                return 0
+            if isinstance(result, dict):
+                return result.get('cnt', 0)
+            return result[0]
+
     async def add(self, data: dict) -> int:
         """
         Создает новую запись в таблице.
