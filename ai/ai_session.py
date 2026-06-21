@@ -3,7 +3,7 @@ import uuid
 from mysql_.mysql_ import mysql_get_db_async
 
 
-async def session_message_add(session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token=None):
+async def ai_session_message_add(session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token=None):
     async with mysql_get_db_async() as db:
         # Используем %s для MySQL
         sql = '''
@@ -14,7 +14,7 @@ async def session_message_add(session_uuid, llm_id, user_id, role, agent_id, kin
         # При autocommit=True в настройках пула, commit() произойдет автоматически
 
 
-async def session_messages(user_id, agent_id, limit=10) -> list:
+async def ai_session_messages(user_id, agent_id, limit=10) -> list:
     async with mysql_get_db_async() as db:
         sql = '''
             SELECT session_uuid, role, kind_type, content FROM agent_session 
@@ -28,7 +28,7 @@ async def session_messages(user_id, agent_id, limit=10) -> list:
         return list(reversed(rows))
 
 
-async def session_uuid_get(user_id, agent_id) -> str:
+async def ai_session_uuid_get(user_id, agent_id) -> str:
     async with mysql_get_db_async() as db:
         sql = '''
             SELECT session_uuid FROM agent_session 
@@ -45,7 +45,7 @@ async def session_uuid_get(user_id, agent_id) -> str:
         return row['session_uuid']
 
 
-async def session_metadata_get(session_uuid) -> dict:
+async def ai_session_metadata_get(session_uuid) -> dict:
     async with mysql_get_db_async() as db:
         sql = '''
             SELECT metadata FROM session WHERE uuid = %s
@@ -59,7 +59,7 @@ async def session_metadata_get(session_uuid) -> dict:
         return row['metadata'] or {}
 
 
-async def session_metadata_set(session_uuid, metadata: dict):
+async def ai_session_metadata_set(session_uuid, metadata: dict):
     async with mysql_get_db_async() as db:
         sql = '''
             UPDATE session SET metadata = %s WHERE uuid = %s

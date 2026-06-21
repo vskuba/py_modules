@@ -18,7 +18,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ai.ai_session import session_message_add, session_messages
+from ai.ai_session import ai_session_message_add, ai_session_messages
 from ai.framework.ai_framework_model import AiFrameworkModel
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
@@ -68,7 +68,7 @@ class AbstractAiFramework(ABC):
             return ""
 
         # 1. Получаем историю (список словарей)
-        history_rows = await session_messages(
+        history_rows = await ai_session_messages(
             framework_model.user_id,
             framework_model.entity_agent.get('id'),
             framework_model.memory_short_length
@@ -144,7 +144,7 @@ class AbstractAiFramework(ABC):
                         part_kind = 'final-user-prompt'
 
                         # Используем твою функцию для добавления
-                        await session_message_add(
+                        await ai_session_message_add(
                             session_uuid=session_uuid,
                             llm_id=llm_id,
                             user_id=user_id,
@@ -171,7 +171,7 @@ class AbstractAiFramework(ABC):
 
                             # Размышления
                             if "ThinkingPart" in p_type:
-                                await session_message_add(
+                                await ai_session_message_add(
                                     session_uuid=session_uuid,
                                     llm_id=llm_id,
                                     user_id=user_id,
@@ -185,7 +185,7 @@ class AbstractAiFramework(ABC):
                             # Текст ответа (Финальный или промежуточный)
                             elif "TextPart" in p_type:
                                 kind = 'response-final' if is_final else 'response'
-                                await session_message_add(
+                                await ai_session_message_add(
                                     session_uuid=session_uuid,
                                     llm_id=llm_id,
                                     user_id=user_id,
@@ -198,7 +198,7 @@ class AbstractAiFramework(ABC):
 
                             # Вызовы инструментов
                             elif "ToolCallPart" in p_type:
-                                await session_message_add(
+                                await ai_session_message_add(
                                     session_uuid=session_uuid,
                                     llm_id=llm_id,
                                     user_id=user_id,

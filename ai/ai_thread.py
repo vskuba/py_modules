@@ -4,7 +4,6 @@ import queue
 import traceback
 
 from ai.framework.ai_framework import AiFrameworkModel, AbstractAiFramework
-from async_.async_ import async_waiting_is_active, async_waiting_clear
 from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
@@ -40,7 +39,7 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
                 framework_model_copy = copy.deepcopy(framework_model)
 
                 async_task.add_done_callback(
-                    lambda t, m=framework_model_copy: async_task_done_callback(t, m)
+                    lambda t, m=framework_model_copy: _async_task_done_callback(t, m)
                 )
 
         except Exception as e:
@@ -51,7 +50,7 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
             )
 
 
-def async_task_done_callback(task, framework_model):
+def _async_task_done_callback(task, framework_model):
     name = framework_model.name
 
     try:
