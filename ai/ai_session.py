@@ -62,8 +62,19 @@ async def ai_session_metadata_get(session_uuid) -> dict:
 
 async def ai_session_metadata_set(session_uuid, metadata: dict):
     async with mysql_get_db_async() as db:
-        metadata_json = json.dumps(metadata, ensure_ascii=False)
         sql = '''
-            UPDATE session SET metadata = %s WHERE uuid = %s
+            SELECT id FROM session WHERE uuid = %s
         '''
+        await db.execute(sql, session_uuid)
+        entity_session = await db.fetchone()
+
+        metadata_json = json.dumps(metadata, ensure_ascii=False)
+        if not entity_session:
+            sql = '''
+                INSERT INTO session (metadata, uuid) VALUES (%s, %s)
+            '''
+        else:
+            sql = '''
+                UPDATE session SET metadata = %s WHERE uuid = %s
+            '''
         await db.execute(sql, (metadata_json, session_uuid))
