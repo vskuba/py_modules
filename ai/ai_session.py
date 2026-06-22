@@ -57,7 +57,19 @@ async def ai_session_metadata_get(session_uuid) -> dict:
         if not row:
             return {}
 
-        return row['metadata'] or {}
+        raw_metadata = row['metadata']
+
+        if isinstance(raw_metadata, dict):
+            return raw_metadata
+
+        if isinstance(raw_metadata, str):
+            try:
+                return json.loads(raw_metadata)
+            except json.JSONDecodeError as e:
+                print(f"Ошибка парсинга JSON для сессии {session_uuid}: {e}")
+                return {}
+
+        return {}
 
 
 async def ai_session_metadata_set(session_uuid, metadata: dict):
