@@ -1,3 +1,4 @@
+import json
 import uuid
 
 from mysql_.mysql_ import mysql_get_db_async
@@ -61,7 +62,8 @@ async def ai_session_metadata_get(session_uuid) -> dict:
 
 async def ai_session_metadata_set(session_uuid, metadata: dict):
     async with mysql_get_db_async() as db:
+        metadata_json = json.dumps(metadata, ensure_ascii=False)
         sql = '''
             UPDATE session SET metadata = %s WHERE uuid = %s
         '''
-        await db.execute(sql, (metadata, session_uuid))
+        await db.execute(sql, (metadata_json, session_uuid))
