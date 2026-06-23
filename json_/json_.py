@@ -38,7 +38,7 @@ def json_from_string(string: str, raise_on_error: bool = False) -> dict:
     except Exception as e:
         backtrace = traceback.format_exc()
         logger_info(
-            f"❌ Не удалось распарсить workflow step metadata: {e}. Metadata: {string}\n"
+            f"❌ Не удалось распарсить json: {e}, string: {string}\n"
             f"Полный стек вызовов:\n{backtrace}"
         )
 
