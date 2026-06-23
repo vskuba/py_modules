@@ -18,7 +18,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ai.ai_session import ai_session_message_add, ai_session_messages
+from ai.ai_session import ai_session_message_add
 from ai.framework.ai_framework_model import AiFrameworkModel
 from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
@@ -48,7 +48,6 @@ class AbstractAiFramework(ABC):
 
     @abstractmethod
     async def engine_result_handle(self, result, framework_model: AiFrameworkModel) -> AiFrameworkResult | None:
-        # save massages for memory short
         model_name = framework_model.name
         if model_name not in self.message_history:
             self.message_history[model_name] = []
@@ -58,43 +57,6 @@ class AbstractAiFramework(ABC):
     @abstractmethod
     async def framework_run(self, framework_model: AiFrameworkModel):
         pass
-
-    async def message_history_get(self, framework_model: AiFrameworkModel) -> str:
-        if framework_model.session_disabled:
-            return ""
-
-        # новая сессия указана
-        if framework_model.session_uuid:
-            return ""
-
-        # 1. Получаем историю (список словарей)
-        history_rows = await ai_session_messages(
-            framework_model.user_id,
-            framework_model.entity_agent.get('id'),
-            framework_model.memory_short_length
-        )
-
-        # 2. Обработка UUID сессии
-        if not history_rows:
-            return ''
-
-        framework_model.session_uuid = history_rows[-1].get('session_uuid')
-
-        # 3. Формирование текста
-        formatted_parts = ["\n\n=== HISTORY LAST MESSAGES ==="]
-
-        for row in history_rows:
-            role = str(row.get('role', 'user')).upper()
-            content = str(row.get('content', '')).strip()
-
-            formatted_parts.append(
-                f"{role}: {content}"
-                '\n' if role == ('assistant'.upper()) else ''
-            )
-
-        formatted_parts.append("=== END OF HISTORY LAST MESSAGES ===\n")
-
-        return "\n".join(formatted_parts)
 
     async def message_history_save(self, framework_model: AiFrameworkModel):
         if framework_model.session_disabled:
