@@ -4,14 +4,14 @@ import uuid
 from mysql_.mysql_ import mysql_get_db_async
 
 
-async def ai_session_message_add(session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token=None):
+async def ai_session_message_add(session_uuid, request_uuid, llm_id, user_id, role, agent_id, kind_type, content, token=None):
     async with mysql_get_db_async() as db:
         # Используем %s для MySQL
         sql = '''
-            INSERT INTO agent_session (session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO agent_session (session_uuid, request_uuid, llm_id, user_id, role, agent_id, kind_type, content, token)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         '''
-        await db.execute(sql, (session_uuid, llm_id, user_id, role, agent_id, kind_type, content, token))
+        await db.execute(sql, (session_uuid, request_uuid, llm_id, user_id, role, agent_id, kind_type, content, token))
         # При autocommit=True в настройках пула, commit() произойдет автоматически
 
 

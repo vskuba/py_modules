@@ -62,114 +62,115 @@ class AbstractAiFramework(ABC):
         if framework_model.session_disabled:
             return
 
-        if not self.message_history:
+        model_name = framework_model.name
+        if model_name not in self.message_history:
             return
 
-        logger_info('История сообщений: ' + str(self.message_history))
+        logger_info('История сообщений: ' + str(self.message_history[model_name]))
 
-        session_uuid = framework_model.session_uuid
         llm_id = framework_model.entity_agent.get('llm_id')
-        user_id = framework_model.user_id
 
-        for agent_name, messages in self.message_history.items():
-            for m in messages:
+        for m in self.message_history[model_name]:
+            tokens_count = None
 
-                tokens_count = None
+            # 1. ЗАПРОСЫ (User, System, Tool Return)
+            if hasattr(m, 'kind') and m.kind == 'request':
+                for p in getattr(m, 'parts', []):
+                    part_kind = getattr(p, 'part_kind', 'text')
+                    content = getattr(p, 'content', '')
 
-                # 1. ЗАПРОСЫ (User, System, Tool Return)
-                if hasattr(m, 'kind') and m.kind == 'request':
-                    for p in getattr(m, 'parts', []):
-                        part_kind = getattr(p, 'part_kind', 'text')
-                        content = getattr(p, 'content', '')
+                    if not content and hasattr(p, 'result'):
+                        content = str(p.result)
 
-                        if not content and hasattr(p, 'result'):
-                            content = str(p.result)
+                    if not content:
+                        continue
 
-                        if not content:
-                            continue
+                    # Мы сохраняем только пользовательские запросы, остальные в workflow
+                    if part_kind != 'user-prompt':
+                        continue
 
-                        # Мы сохраняем только пользовательские запросы, остальные в workflow
-                        if part_kind != 'user-prompt':
-                            continue
+                    # Определяем роль
+                    # role = 'user'
+                    # if part_kind == 'system-prompt':
+                    #     role = 'system'
+                    # elif part_kind == 'tool-return':
+                    #     role = 'tool'
+                    #     t_name = getattr(p, 'tool_name', 'unknown')
+                    #     content = f"[{t_name}]: {content}"
+                    # elif part_kind == 'user-prompt':
 
-                        # Определяем роль
-                        # role = 'user'
-                        # if part_kind == 'system-prompt':
-                        #     role = 'system'
-                        # elif part_kind == 'tool-return':
-                        #     role = 'tool'
-                        #     t_name = getattr(p, 'tool_name', 'unknown')
-                        #     content = f"[{t_name}]: {content}"
-                        # elif part_kind == 'user-prompt':
+                    role = 'workflow'
+                    part_kind = 'final-user-prompt'
 
-                        role = 'workflow'
-                        part_kind = 'final-user-prompt'
+                    # Используем твою функцию для добавления
+                    await ai_session_message_add(
+                        session_uuid=framework_model.session_uuid,
+                        request_uuid=framework_model.request_uuid,
+                        llm_id=llm_id,
+                        user_id=framework_model.user_id,
+                        role=role,
+                        agent_id=framework_model.entity_agent.get('id'),
+                        kind_type=part_kind,
+                        content=str(content).strip()
+                    )
 
-                        # Используем твою функцию для добавления
-                        await ai_session_message_add(
-                            session_uuid=session_uuid,
-                            llm_id=llm_id,
-                            user_id=user_id,
-                            role=role,
-                            agent_id=framework_model.entity_agent.get('id'),
-                            kind_type=part_kind,
-                            content=str(content).strip()
-                        )
+            # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
+            elif hasattr(m, 'kind') and m.kind == 'response':
+                # Ассистент всегда имеет роль assistant
+                role = 'llm'
+                is_final = getattr(m, 'finish_reason', None) == 'stop'
 
-                # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
-                elif hasattr(m, 'kind') and m.kind == 'response':
-                    # Ассистент всегда имеет роль assistant
-                    role = 'assistant'
-                    is_final = getattr(m, 'finish_reason', None) == 'stop'
+                if hasattr(m, 'usage') and m.usage:
+                    input_t = getattr(m.usage, 'input_tokens', 0) or 0
+                    output_t = getattr(m.usage, 'output_tokens', 0) or 0
+                    tokens_count = input_t + output_t
 
-                    if hasattr(m, 'usage') and m.usage:
-                        input_t = getattr(m.usage, 'input_tokens', 0) or 0
-                        output_t = getattr(m.usage, 'output_tokens', 0) or 0
-                        tokens_count = input_t + output_t
+                if hasattr(m, 'parts'):
+                    for part in m.parts:
+                        p_type = str(type(part))
 
-                    if hasattr(m, 'parts'):
-                        for part in m.parts:
-                            p_type = str(type(part))
+                        # Размышления
+                        if "ThinkingPart" in p_type:
+                            await ai_session_message_add(
+                                session_uuid=framework_model.session_uuid,
+                                request_uuid=framework_model.request_uuid,
+                                llm_id=llm_id,
+                                user_id=framework_model.user_id,
+                                role=role,
+                                agent_id=framework_model.entity_agent.get('id'),
+                                kind_type='thinking',
+                                content=part.content.strip(),
+                                token=tokens_count
+                            )
 
-                            # Размышления
-                            if "ThinkingPart" in p_type:
-                                await ai_session_message_add(
-                                    session_uuid=session_uuid,
-                                    llm_id=llm_id,
-                                    user_id=user_id,
-                                    role=role,
-                                    agent_id=framework_model.entity_agent.get('id'),
-                                    kind_type='thinking',
-                                    content=part.content.strip(),
-                                    token=tokens_count
-                                )
+                        # Текст ответа (Финальный или промежуточный)
+                        elif "TextPart" in p_type:
+                            kind = 'response-final' if is_final else 'response'
+                            await ai_session_message_add(
+                                session_uuid=framework_model.session_uuid,
+                                request_uuid=framework_model.request_uuid,
+                                llm_id=llm_id,
+                                user_id=framework_model.user_id,
+                                role=role,
+                                agent_id=framework_model.entity_agent.get('id'),
+                                kind_type=kind,
+                                content=part.content.strip(),
+                                token=tokens_count
+                            )
 
-                            # Текст ответа (Финальный или промежуточный)
-                            elif "TextPart" in p_type:
-                                kind = 'response-final' if is_final else 'response'
-                                await ai_session_message_add(
-                                    session_uuid=session_uuid,
-                                    llm_id=llm_id,
-                                    user_id=user_id,
-                                    role=role,
-                                    agent_id=framework_model.entity_agent.get('id'),
-                                    kind_type=kind,
-                                    content=part.content.strip(),
-                                    token=tokens_count
-                                )
-
-                            # Вызовы инструментов
-                            elif "ToolCallPart" in p_type:
-                                await ai_session_message_add(
-                                    session_uuid=session_uuid,
-                                    llm_id=llm_id,
-                                    user_id=user_id,
-                                    role=role,
-                                    agent_id=framework_model.entity_agent.get('id'),
-                                    kind_type='tool-call',
-                                    content=part.content.strip(),
-                                    token=tokens_count
-                                )
+                        # Вызовы инструментов
+                        elif "ToolCallPart" in p_type:
+                            await ai_session_message_add(
+                                session_uuid=framework_model.session_uuid,
+                                request_uuid=framework_model.request_uuid,
+                                llm_id=llm_id,
+                                user_id=framework_model.user_id,
+                                role=role,
+                                agent_id=framework_model.entity_agent.get('id'),
+                                kind_type='tool-call',
+                                content=part.content.strip(),
+                                token=tokens_count
+                            )
 
         self.message_history = {}
 

@@ -105,7 +105,8 @@ async def qdrant_search(
         metadata_filter: dict[str, Any],
         limit: int = 5
 ) -> list[models.ScoredPoint]:
-    logger_info(f"Qdrant search: collection_name={collection_name}, query_text={query_text}, metadata_filter={metadata_filter}, limit={limit}")
+    logger_info(
+        f"Qdrant search: collection_name={collection_name}, query_text={query_text}, metadata_filter={metadata_filter}, limit={limit}")
 
     client = _qdrant_db_get_client()
 
@@ -196,3 +197,65 @@ async def qdrant_search(
     )
 
     return response.points
+
+
+async def qdrant_remove_by(collection_name: str, metadata_filter: dict[str, Any]) -> Any:
+    """
+    Динамическое удаление точек из Qdrant по заданным фильтрам метаданных.
+    Все переданные фильтры объединяются через логическое 'И' (must).
+    """
+    client = _qdrant_db_get_client()
+
+    if not await client.collection_exists(collection_name):
+        return None
+
+    # 1. Получаем актуальную карту метаданных для этой коллекции
+    from src.ai.ai_fact_collection import ai_collection_metadata_get
+    collection_metadata = await ai_collection_metadata_get(collection_name)
+
+    must_conditions = []
+
+    # 2. Строим жесткие фильтры для удаления
+    for field_name, value in metadata_filter.items():
+        if value is None:
+            continue
+
+        # Проверяем, существует ли поле в метаданных, во избежание ошибок Qdrant
+        if field_name not in collection_metadata:
+            continue
+
+        # Обработка списков (удаление по совпадению элемента в массиве tags)
+        if isinstance(value, list):
+            for item in value:
+                must_conditions.append(
+                    models.FieldCondition(
+                        key=field_name,
+                        match=models.MatchValue(value=item)
+                    )
+                )
+        # Обработка одиночных значений (girl_id, category и др.)
+        else:
+            must_conditions.append(
+                models.FieldCondition(
+                    key=field_name,
+                    match=models.MatchValue(value=value)
+                )
+            )
+
+    # Если фильтры не сформировались, прерываем выполнение,
+    # чтобы случайно не очистить всю коллекцию целиком
+    if not must_conditions:
+        logger_info(f"Предотвращена полная очистка коллекции '{collection_name}': пустой фильтр удаления.")
+        return None
+
+    query_filter = models.Filter(must=must_conditions)
+
+    # 3. Выполняем удаление
+    logger_info(f"Qdrant remove: collection_name={collection_name}, filter={metadata_filter}")
+
+    response = await client.delete(
+        collection_name=collection_name,
+        points_selector=models.FilterSelector(filter=query_filter)
+    )
+
+    return response
