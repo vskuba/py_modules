@@ -1,4 +1,5 @@
 import os
+import traceback
 
 from logging_.logging_ import logger_info
 
@@ -52,22 +53,25 @@ def _init_encoders():
 async def qdrant_save(collection_name: str, metadata: dict, data: list[dict]) -> int:
     """
     Динамическое сохранение данных в Qdrant на основе схемы метаданных со строгой валидацией.
+    Использует детерминированные ID на основе MySQL для предотвращения дублирования.
     """
-    client = _qdrant_db_get_client()
+    client: AsyncQdrantClient = _qdrant_db_get_client()
 
-    # Сохраняем вызовы для совместимости высокоуровневого метода client.add
+    # Настройка моделей эмбеддингов для высокоуровневого API
     client.set_model(EMBEDDING_MODEL)
     client.set_sparse_model(SPARSE_MODEL)
 
-    docs, payloads = [], []
+    docs, payloads, point_ids = [], [], []
 
     for index, r in enumerate(data):
         payload = {}
 
-        if 'content' not in r:
+        required_field_document = 'document'
+
+        if required_field_document not in r:
             raise KeyError(
                 f"Ошибка валидации в коллекции '{collection_name}': "
-                f"В объекте под индексом {index} отсутствует обязательное текстовое поле 'content'."
+                f"В объекте под индексом {index} отсутствует обязательное текстовое поле '{required_field_document}'."
             )
 
         for field_name in metadata.keys():
@@ -82,18 +86,38 @@ async def qdrant_save(collection_name: str, metadata: dict, data: list[dict]) ->
 
             if field_name == 'tags' and isinstance(value, str):
                 payload[field_name] = [t.strip() for t in value.split(',') if t.strip()]
+            elif field_name == 'tags' and isinstance(value, list):
+                payload[field_name] = value
+            elif field_name == required_field_document:
+                continue
             else:
                 payload[field_name] = value
 
-        docs.append(r['content'])
+        docs.append(r[required_field_document])
         payloads.append(payload)
 
-    await client.add(
-        collection_name=collection_name,
-        documents=docs,
-        metadata=payloads,
-        ids=[str(uuid.uuid4()) for _ in docs]
-    )
+        mysql_id = r.get('id')
+        if mysql_id:
+            point_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"fact_id_{mysql_id}"))
+            point_ids.append(point_uuid)
+        else:
+            # Фолбек, если id почему-то не пришел
+            point_ids.append(str(uuid.uuid4()))
+
+    try:
+        await client.add(
+            collection_name=collection_name,
+            documents=docs,
+            metadata=payloads,
+            ids=point_ids
+        )
+    except Exception as e:
+        backtrace = traceback.format_exc()
+        logger_info(
+            f"❌ Сбой при отправке в Qdrant: {e}."
+            f"Полный стек вызовов:\n{backtrace}"
+        )
+        raise RuntimeError(f"Qdrant заблокировал пакетную вставку: {str(e)}")
 
     return len(data)
 
@@ -106,9 +130,14 @@ async def qdrant_search(
         limit: int = 5
 ) -> list[models.ScoredPoint]:
     logger_info(
-        f"Qdrant search: collection_name='{collection_name}', query_text='{query_text}', metadata_filter='{metadata_filter}', limit='{limit}'")
+        f"Qdrant search: "
+        f"collection_name='{collection_name}', "
+        f"query_text='{query_text}', "
+        f"metadata_filter='{metadata_filter}', "
+        f"limit='{limit}'"
+    )
 
-    client = _qdrant_db_get_client()
+    client: AsyncQdrantClient = _qdrant_db_get_client()
 
     if not await client.collection_exists(collection_name):
         return []
@@ -204,7 +233,7 @@ async def qdrant_remove_by(collection_name: str, metadata:dict, metadata_filter:
     Динамическое удаление точек из Qdrant по заданным фильтрам метаданных.
     Все переданные фильтры объединяются через логическое 'И' (must).
     """
-    client = _qdrant_db_get_client()
+    client: AsyncQdrantClient = _qdrant_db_get_client()
 
     if not await client.collection_exists(collection_name):
         return None
