@@ -19,6 +19,7 @@ class AiFrameworkModel:
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None
     is_gui_mode: bool = True
+    is_transition: bool = False
     session_disabled: bool = False
     memory_short_length: int = 10
     entity_agent: dict = field(default_factory=dict)

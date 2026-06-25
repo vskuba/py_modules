@@ -106,7 +106,7 @@ async def qdrant_search(
         limit: int = 5
 ) -> list[models.ScoredPoint]:
     logger_info(
-        f"Qdrant search: collection_name={collection_name}, query_text={query_text}, metadata_filter={metadata_filter}, limit={limit}")
+        f"Qdrant search: collection_name='{collection_name}', query_text='{query_text}', metadata_filter='{metadata_filter}', limit='{limit}'")
 
     client = _qdrant_db_get_client()
 
@@ -199,7 +199,7 @@ async def qdrant_search(
     return response.points
 
 
-async def qdrant_remove_by(collection_name: str, metadata_filter: dict[str, Any]) -> Any:
+async def qdrant_remove_by(collection_name: str, metadata:dict, metadata_filter: dict[str, Any]) -> Any:
     """
     Динамическое удаление точек из Qdrant по заданным фильтрам метаданных.
     Все переданные фильтры объединяются через логическое 'И' (must).
@@ -209,9 +209,7 @@ async def qdrant_remove_by(collection_name: str, metadata_filter: dict[str, Any]
     if not await client.collection_exists(collection_name):
         return None
 
-    # 1. Получаем актуальную карту метаданных для этой коллекции
-    from src.ai.ai_fact_collection import ai_collection_metadata_get
-    collection_metadata = await ai_collection_metadata_get(collection_name)
+    collection_metadata = metadata
 
     must_conditions = []
 

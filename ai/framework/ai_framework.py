@@ -145,7 +145,7 @@ class AbstractAiFramework(ABC):
 
                         # Текст ответа (Финальный или промежуточный)
                         elif "TextPart" in p_type:
-                            kind = 'response-final' if is_final else 'response'
+                            kind = 'response-final' if is_final and not framework_model.is_transition else 'response'
                             await ai_session_message_add(
                                 session_uuid=framework_model.session_uuid,
                                 request_uuid=framework_model.request_uuid,
