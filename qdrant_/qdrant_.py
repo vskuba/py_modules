@@ -163,7 +163,11 @@ async def qdrant_search(
         table_origin = field_info.get('table_name', '')
 
         # Определяем, является ли поле системным идентификатором для 'must'
-        is_must_field = table_origin == 'fact' and (field_name.endswith('_id') or field_name == 'id')
+        is_must_field = table_origin == 'fact' and (
+                field_name.endswith('_id')
+                or field_name == 'id'
+                or field_name == 'document_id'
+        )
 
         if isinstance(value, list):
             condition = models.FieldCondition(
