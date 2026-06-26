@@ -55,6 +55,13 @@ async def qdrant_save(collection_name: str, metadata: dict, data: list[dict]) ->
     Динамическое сохранение данных в Qdrant на основе схемы метаданных со строгой валидацией.
     Использует детерминированные ID на основе MySQL для предотвращения дублирования.
     """
+    logger_info(
+        f"📄 Qdrant save: "
+        f"collection_name='{collection_name}', "
+        f"metadata='{metadata}', "
+        f"data='{data}'"
+    )
+
     client: AsyncQdrantClient = _qdrant_db_get_client()
 
     # Настройка моделей эмбеддингов для высокоуровневого API
@@ -130,7 +137,7 @@ async def qdrant_search(
         limit: int = 5
 ) -> list[models.ScoredPoint]:
     logger_info(
-        f"Qdrant search: "
+        f"🔍 Qdrant search: "
         f"collection_name='{collection_name}', "
         f"query_text='{query_text}', "
         f"metadata_filter='{metadata_filter}', "
