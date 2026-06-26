@@ -162,16 +162,26 @@ async def qdrant_search(
         field_info = collection_metadata[field_name]
         table_origin = field_info.get('table_name', '')
 
+        # Определяем, является ли поле системным идентификатором для 'must'
+        is_must_field = table_origin == 'fact' and (field_name.endswith('_id') or field_name == 'id')
+
         if isinstance(value, list):
-            for item in value:
-                condition = models.FieldCondition(key=field_name, match=models.MatchValue(value=item))
-                if table_origin == 'fact' and (field_name.endswith('_id') or field_name == 'id'):
-                    must_conditions.append(condition)
-                else:
-                    should_conditions.append(condition)
+            condition = models.FieldCondition(
+                key=field_name,
+                match=models.MatchAny(any=value)
+            )
+            if is_must_field:
+                must_conditions.append(condition)
+            else:
+                should_conditions.append(condition)
+
+            # Если значение — одиночное (строка, число, bool)
         else:
-            condition = models.FieldCondition(key=field_name, match=models.MatchValue(value=value))
-            if table_origin == 'fact' and (field_name.endswith('_id') or field_name == 'id'):
+            condition = models.FieldCondition(
+                key=field_name,
+                match=models.MatchValue(value=value)
+            )
+            if is_must_field:
                 must_conditions.append(condition)
             else:
                 should_conditions.append(condition)
