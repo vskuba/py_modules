@@ -66,12 +66,12 @@ async def qdrant_save(collection_name: str, metadata: dict, data: list[dict]) ->
     for index, r in enumerate(data):
         payload = {}
 
-        required_field_document = 'document'
+        field_document = 'document'
 
-        if required_field_document not in r:
+        if field_document not in r:
             raise KeyError(
                 f"Ошибка валидации в коллекции '{collection_name}': "
-                f"В объекте под индексом {index} отсутствует обязательное текстовое поле '{required_field_document}'."
+                f"В объекте под индексом {index} отсутствует обязательное текстовое поле '{field_document}'."
             )
 
         for field_name in metadata.keys():
@@ -88,12 +88,12 @@ async def qdrant_save(collection_name: str, metadata: dict, data: list[dict]) ->
                 payload[field_name] = [t.strip() for t in value.split(',') if t.strip()]
             elif field_name == 'tags' and isinstance(value, list):
                 payload[field_name] = value
-            elif field_name == required_field_document:
+            elif field_name == field_document:
                 continue
             else:
                 payload[field_name] = value
 
-        docs.append(r[required_field_document])
+        docs.append(r[field_document])
         payloads.append(payload)
 
         mysql_id = r.get('id')
