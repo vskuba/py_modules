@@ -109,7 +109,15 @@ async def qdrant_save(collection_name: str, metadata: dict, data: list[dict]) ->
             point_ids.append(point_uuid)
         else:
             # Фолбек, если id почему-то не пришел
-            point_ids.append(str(uuid.uuid4()))
+            document_text = r[field_document]
+            point_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"fact_doc_hash_{document_text}"))
+            point_ids.append(point_uuid)
+
+            # Логируем предупреждение, чтобы вы знали, что данные пришли без MySQL ID
+            logger_info(
+                f"⚠️ Внимание: В коллекции '{collection_name}' у объекта под индексом {index} "
+                f"отсутствует 'id'. Сгенерирован детерминированный UUID на основе текста документа."
+            )
 
     try:
         await client.add(
