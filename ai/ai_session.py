@@ -4,40 +4,40 @@ import uuid
 from mysql_.mysql_ import mysql_get_db_async
 
 
-async def ai_session_message_add(session_uuid, request_uuid, llm_id, user_id, role, agent_id, kind_type, content, token=None):
+async def ai_session_message_add(session_uuid, request_uuid, llm_id, user_id, companion_id, role, agent_id, kind_type, content, token=None):
     async with mysql_get_db_async() as db:
         # Используем %s для MySQL
         sql = '''
-            INSERT INTO agent_session (session_uuid, request_uuid, llm_id, user_id, role, agent_id, kind_type, content, token)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO agent_session (session_uuid, request_uuid, llm_id, user_id, companion_id, role, agent_id, kind_type, content, token)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         '''
-        await db.execute(sql, (session_uuid, request_uuid, llm_id, user_id, role, agent_id, kind_type, content, token))
+        await db.execute(sql, (session_uuid, request_uuid, llm_id, user_id, companion_id, role, agent_id, kind_type, content, token))
         # При autocommit=True в настройках пула, commit() произойдет автоматически
 
 
-async def ai_session_messages(user_id, agent_id, limit=10) -> list:
+async def ai_session_messages(companion_id, agent_id, limit=10) -> list:
     async with mysql_get_db_async() as db:
         sql = '''
             SELECT session_uuid, role, kind_type, content FROM agent_session 
-            WHERE user_id = %s AND agent_id = %s AND kind_type in ('user-prompt', 'response-final') 
+            WHERE companion_id = %s AND agent_id = %s AND kind_type in ('user-prompt', 'response-final') 
             ORDER BY created_at DESC, id DESC
             LIMIT %s
         '''
-        await db.execute(sql, (user_id, agent_id, limit))
+        await db.execute(sql, (companion_id, agent_id, limit))
         rows = await db.fetchall()
 
         return list(reversed(rows))
 
 
-async def ai_session_uuid_get(user_id, agent_id) -> str:
+async def ai_session_uuid_get(companion_id, agent_id) -> str:
     async with mysql_get_db_async() as db:
         sql = '''
             SELECT session_uuid FROM agent_session 
-            WHERE user_id = %s AND agent_id = %s 
+            WHERE companion_id = %s AND agent_id = %s 
             ORDER BY created_at DESC 
             LIMIT 1
         '''
-        await db.execute(sql, (user_id, agent_id))
+        await db.execute(sql, (companion_id, agent_id))
         row = await db.fetchone()
 
         if not row:

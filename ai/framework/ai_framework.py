@@ -111,7 +111,8 @@ class AbstractAiFramework(ABC):
                         role=role,
                         agent_id=framework_model.entity_agent.get('id'),
                         kind_type=part_kind,
-                        content=str(content).strip()
+                        content=str(content).strip(),
+                        companion_id=framework_model.companion_id
                     )
 
             # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
@@ -140,7 +141,8 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='thinking',
                                 content=part.content.strip(),
-                                token=tokens_count
+                                token=tokens_count,
+                                companion_id=framework_model.companion_id
                             )
 
                         # Текст ответа (Финальный или промежуточный)
@@ -155,7 +157,8 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type=kind,
                                 content=part.content.strip(),
-                                token=tokens_count
+                                token=tokens_count,
+                                companion_id=framework_model.companion_id
                             )
 
                         # Вызовы инструментов
@@ -169,7 +172,8 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='tool-call',
                                 content=part.content.strip(),
-                                token=tokens_count
+                                token=tokens_count,
+                                companion_id=framework_model.companion_id
                             )
 
         self.message_history = {}

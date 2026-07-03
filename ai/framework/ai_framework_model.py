@@ -15,6 +15,7 @@ class AiFrameworkModel:
     user_id: int
     request_uuid: str
     session_uuid: str
+    companion_id: int = 0
     tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None
