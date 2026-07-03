@@ -240,14 +240,18 @@ async def qdrant_search(
                 query=dense_vector,
                 using=dense_vector_name,  # Теперь здесь будет точное имя, например "fast-dense-..."
                 limit=limit * 2,
-                filter=query_filter
+                filter=query_filter,
+                # Отсекаем всё, что имеет сходство ниже 45-50% (для косинусного расстояния)
+                score_threshold=0.45
             ),
             # Второй префетч: Поиск по разреженным векторам (BM25)
             models.Prefetch(
                 query=qdrant_sparse_vector,
                 using=sparse_vector_name,  # Точное имя разреженного вектора
                 limit=limit * 2,
-                filter=query_filter
+                filter=query_filter,
+                # Отсекаем мусорный BM25 (если ключевое слово вообще не найдено в тексте)
+                score_threshold=0.1
             )
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),  # type: ignore
@@ -257,7 +261,7 @@ async def qdrant_search(
     return response.points
 
 
-async def qdrant_remove_by(collection_name: str, metadata:dict, metadata_filter: dict[str, Any]) -> Any:
+async def qdrant_remove_by(collection_name: str, metadata: dict, metadata_filter: dict[str, Any]) -> Any:
     """
     Динамическое удаление точек из Qdrant по заданным фильтрам метаданных.
     Все переданные фильтры объединяются через логическое 'И' (must).
