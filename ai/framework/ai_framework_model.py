@@ -24,7 +24,8 @@ class AiFrameworkModel:
     session_disabled: bool = False
     memory_short_length: int = 10
     entity_agent: dict = field(default_factory=dict)
-    entity_llm: dict = field(default_factory=dict)
+    entities_llm: list = field(default_factory=list)
+    entity_llm_current: dict = field(default_factory=dict)
     response_model: str | BaseModel = str
 
     # params for operation using

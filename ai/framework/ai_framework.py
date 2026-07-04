@@ -206,8 +206,8 @@ class AbstractAiFramework(ABC):
 
     def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
-        if framework_model.entity_llm:
-            model_name = framework_model.entity_llm.get('name')
+        if framework_model.entity_llm_current:
+            model_name = framework_model.entity_llm_current.get('name')
 
         model = None
 
