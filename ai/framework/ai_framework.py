@@ -16,6 +16,7 @@ from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -248,19 +249,21 @@ class AbstractAiFramework(ABC):
                 provider=provider
             )
 
-        if model_name.lower().startswith('gemini'):
+        if model_name.lower().startswith('gemini/'):
+            provider = GoogleProvider(api_key=config_get('GEMINI_API_KEY'))
+            model_name = model_name.replace('gemini/', '')
             model = GoogleModel(
-                model_name=model_name.lower()
+                model_name=model_name,
+                provider=provider
             )
 
-        if model_name.lower().startswith('groq'):
-            model_name = re.sub(r'^groq:', '', model_name, flags=re.IGNORECASE)
-
+        if model_name.lower().startswith('groq/'):
             provider = GroqProvider(
                 api_key=os.getenv('GROQ_API_KEY'),
                 base_url='https://api.groq.com',
                 http_client=http_client
             )
+            model_name = model_name.replace('groq/', '')
             model = GroqModel(
                 model_name=model_name,
                 provider=provider,
