@@ -14,9 +14,11 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from ai.ai_session import ai_session_message_add
 from ai.framework.ai_framework_model import AiFrameworkModel
@@ -218,6 +220,15 @@ class AbstractAiFramework(ABC):
             }
         )
 
+        if model_name.lower().startswith('openrouter/'):
+            provider = OpenRouterProvider(
+                app_url=config_get('OPENROUTER_API_URL'),
+                api_key=config_get('OPENROUTER_API_KEY'),
+                http_client=http_client
+            )
+            model_name = model_name.replace('openrouter/', '')
+            model = OpenRouterModel(model_name, provider=provider)
+
         if model_name.lower().startswith('claude'):
             provider = AnthropicProvider(
                 api_key=config_get('ANTHROPIC_API_KEY'),
@@ -265,5 +276,7 @@ class AbstractAiFramework(ABC):
 
         if not model:
             model = OpenAIChatModel(model_name)
+
+        logger_info(f'🧠 LLM модель: {model_name} ({type(model).__name__})')
 
         return model
