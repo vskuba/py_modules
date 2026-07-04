@@ -32,6 +32,13 @@ class AiFrameworkResult:
     text: str
 
 
+class AgentRateLimitError(Exception):
+    """Вызывается, когда AI-провайдер возвращает 429 (Rate Limit) или 413 (Context Window Exceeded)"""
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class AbstractAiFramework(ABC):
     def __init__(self):
         self.uuid = str(uuid.uuid4()).split('-')[0]
