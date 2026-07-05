@@ -231,15 +231,15 @@ class AbstractAiFramework(ABC):
                     api_key=config_get(i.upper() + '_API_KEY'),
                     http_client=http_client
                 )
-                model_name = model_name[len(i) + 1:]
-                model = OpenAIChatModel(model_name, provider=provider)
+                model_name_clean = model_name[len(i) + 1:]
+                model = OpenAIChatModel(model_name_clean, provider=provider)
 
                 if i == 'gemini':
                     provider = GoogleProvider(
                         base_url=config_get(i.upper() + '_API_URL'),
                         api_key=config_get(i.upper() + '_API_KEY'),
                         http_client=http_client)
-                    model = GoogleModel(model_name, provider=provider)
+                    model = GoogleModel(model_name_clean, provider=provider)
 
                 break
 
