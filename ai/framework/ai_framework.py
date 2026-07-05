@@ -222,6 +222,7 @@ class AbstractAiFramework(ABC):
             'groq',
             'mistral',
             'huggingface',
+            'cerebras',
         }
 
         for i in mapping_providers:
