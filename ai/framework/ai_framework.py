@@ -1,5 +1,3 @@
-import os
-import re
 import uuid
 
 import httpx
@@ -10,16 +8,10 @@ from pydantic import TypeAdapter
 
 from pydantic_ai import Agent, ModelMessage
 from pydantic_ai.models import Model
-from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.models.openrouter import OpenRouterModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
-from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from ai.ai_session import ai_session_message_add
 from ai.framework.ai_framework_model import AiFrameworkModel
@@ -37,6 +29,7 @@ class AiFrameworkResult:
 
 class AgentRateLimitError(Exception):
     """Вызывается, когда AI-провайдер возвращает 429 (Rate Limit) или 413 (Context Window Exceeded)"""
+
     def __init__(self, message, status_code=None):
         super().__init__(message)
         self.status_code = status_code
@@ -208,7 +201,7 @@ class AbstractAiFramework(ABC):
     def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
         if framework_model.entity_llm_current:
-            model_name = framework_model.entity_llm_current.get('name')
+            model_name: str = framework_model.entity_llm_current.get('name', '')
 
         model = None
 
@@ -221,64 +214,37 @@ class AbstractAiFramework(ABC):
             }
         )
 
-        if model_name.lower().startswith('openrouter/'):
-            provider = OpenRouterProvider(
-                app_url=config_get('OPENROUTER_API_URL'),
-                api_key=config_get('OPENROUTER_API_KEY'),
-                http_client=http_client
-            )
-            model_name = model_name.replace('openrouter/', '')
-            model = OpenRouterModel(model_name, provider=provider)
+        mapping_providers = {
+            'openrouter',
+            'claude',
+            'ollama',
+            'gemini',
+            'groq',
+            'mistral',
+            'huggingface',
+        }
 
-        if model_name.lower().startswith('claude'):
-            provider = AnthropicProvider(
-                api_key=config_get('ANTHROPIC_API_KEY'),
-                http_client=http_client
-            )
-            model = AnthropicModel(model_name, provider=provider)
+        for i in mapping_providers:
+            if model_name.lower().startswith(i + '/'):
+                provider = OpenAIProvider(
+                    base_url=config_get(i.upper() + '_API_URL'),
+                    api_key=config_get(i.upper() + '_API_KEY'),
+                    http_client=http_client
+                )
+                model_name = model_name[len(i) + 1:]
+                model = OpenAIChatModel(model_name, provider=provider)
 
-        if model_name.lower().startswith('ollama'):
-            provider = OpenAIProvider(
-                base_url='http://host.docker.internal:11434/v1',
-                api_key='ollama',
-                http_client=http_client
-            )
-            model_name = re.sub(r'^[^/]*/', '', model_name)
-            model = OpenAIChatModel(
-                model_name=model_name,
-                provider=provider
-            )
+                if i == 'gemini':
+                    provider = GoogleProvider(
+                        base_url=config_get(i.upper() + '_API_URL'),
+                        api_key=config_get(i.upper() + '_API_KEY'),
+                        http_client=http_client)
+                    model = GoogleModel(model_name, provider=provider)
 
-        if model_name.lower().startswith('gemini/'):
-            provider = GoogleProvider(api_key=config_get('GEMINI_API_KEY'))
-            model_name = model_name.replace('gemini/', '')
-            model = GoogleModel(
-                model_name=model_name,
-                provider=provider
-            )
-
-        if model_name.lower().startswith('groq/'):
-            provider = GroqProvider(
-                api_key=os.getenv('GROQ_API_KEY'),
-                base_url='https://api.groq.com',
-                http_client=http_client
-            )
-            model_name = model_name.replace('groq/', '')
-            model = GroqModel(
-                model_name=model_name,
-                provider=provider,
-            )
-
-        if model_name.lower().startswith('grok'):
-            provider = OpenAIProvider(
-                base_url='https://api.x.ai/v1',
-                api_key=os.getenv('XAI_API_KEY'),
-                http_client=http_client  # Твой клиент с хуками теперь БУДЕТ работать
-            )
-            model = OpenAIChatModel(model_name=model_name, provider=provider)
+                break
 
         if not model:
-            model = OpenAIChatModel(model_name)
+            raise ValueError(f"Для LLM модели '{model_name}' не найден подходящий провайдер. Проверьте конфигурацию.")
 
         logger_info(f'🧠 LLM модель: {model_name} ({type(model).__name__})')
 

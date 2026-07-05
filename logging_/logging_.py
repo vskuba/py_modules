@@ -106,7 +106,7 @@ async def log_response_body(response: httpx.Response):
                 role = '🧠' if m['role'] == 'assistant' else ('🔧' if m['role'] == 'tool' else '👤')
                 replica = m.get('reasoning') or m.get('content') or ''
                 tool_calls = []
-                if 'tool_calls' in m:
+                if 'tool_calls' in m and m['tool_calls']:
                     for tc in m['tool_calls']:
                         tool_calls.append(f"🔧 {tc['function']['name']} -> ({tc['function']['arguments']})")
                 if tool_calls:
