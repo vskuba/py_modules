@@ -175,6 +175,7 @@ async def qdrant_search(
                 field_name.endswith('_id')
                 or field_name == 'id'
                 or field_name == 'document_id'
+                or field_name == 'tags'
         )
 
         if isinstance(value, list):
@@ -231,6 +232,10 @@ async def qdrant_search(
         values=sparse_res.values.tolist()
     )
 
+    logger_info(
+        f"🔍 Qdrant search, query filter: {query_filter}"
+    )
+
     # 4. Выполняем векторный запрос с точными системными именами векторов
     response = await client.query_points(
         collection_name=collection_name,
@@ -242,7 +247,7 @@ async def qdrant_search(
                 limit=limit * 2,
                 filter=query_filter,
                 # Отсекаем всё, что имеет сходство ниже 45-50% (для косинусного расстояния)
-                score_threshold=0.45
+                # score_threshold=0.45
             ),
             # Второй префетч: Поиск по разреженным векторам (BM25)
             models.Prefetch(
@@ -251,7 +256,7 @@ async def qdrant_search(
                 limit=limit * 2,
                 filter=query_filter,
                 # Отсекаем мусорный BM25 (если ключевое слово вообще не найдено в тексте)
-                score_threshold=0.1
+                # score_threshold=0.1
             )
         ],
         query=models.FusionQuery(fusion=models.Fusion.RRF),  # type: ignore
