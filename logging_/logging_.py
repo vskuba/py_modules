@@ -75,11 +75,11 @@ async def log_response_body(response: httpx.Response):
 
     request_time = None
     if 'Datetime' in request.headers:
-        request_time = int(time.time()) - int(request.headers['Datetime'])
+        request_time = time.time() - float(request.headers['Datetime'])
 
     http_status = response.status_code
     http_status_icon = '✅' if http_status == 200 else '⚠️'
-    request_time_message = f", время запроса {request_time:.2f}s" if request_time else ''
+    request_time_message = f", время запроса {request_time:.2f}s" if request_time is not None else ''
 
     logger_info(
         f"🌐📥 {http_status_icon} HTTP Response: {response.status_code}{request_time_message}",
@@ -91,27 +91,36 @@ async def log_response_body(response: httpx.Response):
     dialog = []
     total_tokens = 0
     if 'user-agent' in request.headers and 'pydantic-ai/' in request.headers['user-agent']:
-        request_json_data = json.loads(request.content)
-        if 'messages' in request_json_data:
-            messages = request_json_data['messages']
+        try:
+            request_json_data = json.loads(request.content)
+            if 'messages' in request_json_data:
+                messages = request_json_data['messages']
 
-            response_json_data = json.loads(body_response.decode(errors='ignore'))
-            if response_json_data.get('choices') and response_json_data['choices'][0].get('message'):
-                messages = messages + [response_json_data['choices'][0]['message']]
+                # Безопасно пытаемся распарсить JSON ответа от LLM
+                try:
+                    response_json_data = json.loads(body_response.decode(errors='ignore'))
+                    if response_json_data.get('choices') and response_json_data['choices'][0].get('message'):
+                        messages = messages + [response_json_data['choices'][0]['message']]
 
-            if response_json_data.get('usage') and response_json_data['usage'].get('total_tokens'):
-                total_tokens = response_json_data['usage']['total_tokens']
+                    if response_json_data.get('usage') and response_json_data['usage'].get('total_tokens'):
+                        total_tokens = response_json_data['usage']['total_tokens']
+                except json.JSONDecodeError:
+                    # Если сервер вернул не JSON (ошибка шлюза/сети), просто не добавляем ответ в диалог
+                    pass
 
-            for m in messages:
-                role = '🧠' if m['role'] == 'assistant' else ('🔧' if m['role'] == 'tool' else '👤')
-                replica = m.get('reasoning') or m.get('content') or ''
-                tool_calls = []
-                if 'tool_calls' in m and m['tool_calls']:
-                    for tc in m['tool_calls']:
-                        tool_calls.append(f"🔧 {tc['function']['name']} -> ({tc['function']['arguments']})")
-                if tool_calls:
-                    replica += '\n\n' + '\n'.join(tool_calls)
-                dialog.append(f"\n{role}: {replica}\n")
+                for m in messages:
+                    role = '🧠' if m['role'] == 'assistant' else ('🔧' if m['role'] == 'tool' else '👤')
+                    replica = m.get('reasoning') or m.get('content') or ''
+                    tool_calls = []
+                    if 'tool_calls' in m and m['tool_calls']:
+                        for tc in m['tool_calls']:
+                            tool_calls.append(f"🔧 {tc['function']['name']} -> ({tc['function']['arguments']})")
+                    if tool_calls:
+                        replica += '\n\n' + '\n'.join(tool_calls)
+                    dialog.append(f"\n{role}: {replica}\n")
+        except json.JSONDecodeError:
+            # На случай, если сам исходящий запрос от pydantic-ai оказался поврежден
+            pass
 
     if dialog:
         logger_info(
