@@ -42,7 +42,7 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
             # что общается с ботом): либо модель дождется слота, либо будет молча
             # отброшена по TTL с безопасным завершением ожидающего future
             if isinstance(framework_model, AiFrameworkModel) and framework_model.name in async_task_running:
-                queued_at = getattr(framework_model, 'queued_at', 0)
+                queued_at: float| None = getattr(framework_model, 'queued_at', None)
 
                 if queued_at is None:
                     framework_model.queued_at = time.monotonic()
