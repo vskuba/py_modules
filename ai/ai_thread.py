@@ -79,6 +79,10 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
             if isinstance(framework_model, AiFrameworkModel):
                 logger_info(f"🎭 Запуск агента '{framework_model.name}' в асинхронной задаче")
 
+                # Сброс метки ожидания: модель переиспользуется для следующих шагов
+                # workflow, каждое новое попадание в занятость получает свежее TTL-окно
+                framework_model.queued_at = None
+
                 async_task = asyncio.create_task(ai_framework.framework_run(framework_model))
                 async_task_running[framework_model.name] = async_task
 
