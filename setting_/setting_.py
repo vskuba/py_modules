@@ -24,11 +24,28 @@ async def setting_get(key: str, default: Any | None = None, user_id: int | None 
 
 async def setting_set(key: str, value, user_id: int | None = None) -> bool:
     async with mysql_get_db_async() as db:
-        sql = """
-            INSERT INTO setting (`key`, value, user_id) 
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE value = VALUES(value)
-        """
-        await db.execute(sql, (key, str(value), user_id))
+        if user_id is None:
+            # Уникальный индекс (key, user_id) не ловит дубли при user_id NULL — свой upsert
+            await db.execute(
+                "UPDATE setting SET value = %s WHERE `key` = %s AND user_id IS NULL",
+                (str(value), key)
+            )
+            if not db.rowcount:
+                # rowcount 0 и при неизменившемся значении — проверяем наличие строки
+                await db.execute(
+                    "SELECT id FROM setting WHERE `key` = %s AND user_id IS NULL", (key,)
+                )
+                if not await db.fetchone():
+                    await db.execute(
+                        "INSERT INTO setting (`key`, value, user_id) VALUES (%s, %s, NULL)",
+                        (key, str(value))
+                    )
+        else:
+            sql = """
+                INSERT INTO setting (`key`, value, user_id)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE value = VALUES(value)
+            """
+            await db.execute(sql, (key, str(value), user_id))
         await db.commit()
     return True
