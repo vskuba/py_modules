@@ -223,6 +223,7 @@ class AbstractAiFramework(ABC):
             'mistral',
             'huggingface',
             'cerebras',
+            'openai',
         }
 
         for i in mapping_providers:
