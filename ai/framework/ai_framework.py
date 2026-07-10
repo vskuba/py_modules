@@ -35,6 +35,15 @@ class AgentRateLimitError(Exception):
         self.status_code = status_code
 
 
+class LlmProviderError(Exception):
+    """Вызывается, когда AI-провайдер возвращает некорректный ответ
+    (не-JSON вместо JSON, UnexpectedModelBehavior и т.п.)"""
+
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class AbstractAiFramework(ABC):
     def __init__(self):
         self.uuid = str(uuid.uuid4()).split('-')[0]

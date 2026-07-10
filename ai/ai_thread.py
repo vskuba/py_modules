@@ -1,6 +1,8 @@
 import asyncio
 import copy
+import inspect
 import queue
+import time
 import traceback
 
 from ai.framework.ai_framework import AiFrameworkModel, AbstractAiFramework
@@ -8,6 +10,11 @@ from logging_.logging_ import logger_info
 from queue_.queue_ import queue_get
 
 async_task_running: dict[str, asyncio.Task] = {}
+
+# Сколько секунд модель может ждать освобождения занятого агента.
+# Согласовано с таймаутом ожидания ответа в чате (60 с): дольше ждать нет смысла —
+# HTTP-запрос уже отвалился по 504, а запоздалый ответ собеседнику выдаст бота
+AI_FRAMEWORK_QUEUE_TTL = 60.0
 
 
 async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
@@ -30,7 +37,46 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
             if not ai_framework:
                 raise ValueError(f'Не могу определить ai_framework')
 
-            if isinstance(framework_model, AiFrameworkModel) and framework_model.name not in async_task_running:
+            # Агент уже выполняется: возвращаем модель в очередь и ждем освобождения.
+            # Ошибку пользователю не показываем никогда (собеседник не должен знать,
+            # что общается с ботом): либо модель дождется слота, либо будет молча
+            # отброшена по TTL с безопасным завершением ожидающего future
+            if isinstance(framework_model, AiFrameworkModel) and framework_model.name in async_task_running:
+                queued_at = getattr(framework_model, 'queued_at', 0)
+
+                if queued_at is None:
+                    framework_model.queued_at = time.monotonic()
+                    logger_info(f"⏳ Агент '{framework_model.name}' занят — запрос ждет в очереди")
+                    queue_get('ai_framework_model').put(framework_model)
+                    await asyncio.sleep(0.1)
+                    continue
+
+                if time.monotonic() - queued_at < AI_FRAMEWORK_QUEUE_TTL:
+                    queue_get('ai_framework_model').put(framework_model)
+                    await asyncio.sleep(0.1)
+                    continue
+
+                # TTL истек: ожидающего уже нет (чат отвалился по своему таймауту),
+                # а запоздалый ответ вреден. Дропаем молча, но обязательно завершаем
+                # future через on_complete — иначе workflow-задача зависнет навсегда
+                logger_info(
+                    f"🗑 Агент '{framework_model.name}' занят дольше {AI_FRAMEWORK_QUEUE_TTL:.0f} с — "
+                    f"запрос отброшен без ответа"
+                )
+                if framework_model.on_complete:
+                    drop_error = TimeoutError(
+                        f"Агент '{framework_model.name}' занят: запрос отброшен по TTL очереди."
+                    )
+                    sig = inspect.signature(framework_model.on_complete)
+                    if 'exception' in sig.parameters:
+                        await framework_model.on_complete('', exception=drop_error)
+                    else:
+                        # Колбэк без параметра exception (например, sub-агент, ждущий
+                        # queue 'agent_response'): разблокируем его пустым ответом
+                        await framework_model.on_complete('')
+                continue
+
+            if isinstance(framework_model, AiFrameworkModel):
                 logger_info(f"🎭 Запуск агента '{framework_model.name}' в асинхронной задаче")
 
                 async_task = asyncio.create_task(ai_framework.framework_run(framework_model))
