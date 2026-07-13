@@ -47,5 +47,5 @@ async def setting_set(key: str, value, user_id: int | None = None) -> bool:
                 ON DUPLICATE KEY UPDATE value = VALUES(value)
             """
             await db.execute(sql, (key, str(value), user_id))
-        await db.commit()
+        await db.connection.commit()
     return True
