@@ -15,7 +15,6 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from ai.ai_session import ai_session_message_add
 from ai.framework.ai_framework_model import AiFrameworkModel
-from ai.tool.ai_tool import ai_tools_get, ai_tools_permanent_get
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
 
@@ -190,24 +189,8 @@ class AbstractAiFramework(ABC):
 
         self.message_history = {}
 
-    def engine_tools_local_add(self, engine, framework_model: AiFrameworkModel):
-        tools_local = ai_tools_get()
-        tools_mapping = {func.__name__: func for func in tools_local}
-        tools_local_added = []
-        for t_name in framework_model.tools:
-            if t_name in tools_mapping:
-                engine.tool_plain(tools_mapping[t_name])
-                tools_local_added.append(t_name)
-
-        ai_tools_permanent = ai_tools_permanent_get()
-        for t in ai_tools_permanent:
-            if t.__name__ not in tools_mapping:
-                engine.tool_plain(t)
-                tools_local_added.append(t.__name__)
-
-        logger_info('🛠 Local инструменты добавлены: ' + ', '.join(tools_local_added))
-
-    def llm_model_get(self, framework_model: AiFrameworkModel) -> Model:
+    @staticmethod
+    def llm_model_get(framework_model: AiFrameworkModel) -> Model:
         model_name = config_get('llm')
         if framework_model.entity_llm_current:
             model_name: str = framework_model.entity_llm_current.get('name', '')
