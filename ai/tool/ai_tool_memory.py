@@ -9,7 +9,9 @@ from ai.tool.ai_tool_agent import agent_invoke
 from logging_.logging_ import logger_info
 from qdrant_.qdrant_ import _qdrant_db_get_client
 
-encoder = SentenceTransformer("all-MiniLM-L6-v2", device='cpu')
+# Ленивый синглтон: загрузка модели при первом обращении к инструментам памяти,
+# а не при импорте модуля — иначе каждый старт сервера блокируется походом в Hugging Face
+_encoder: SentenceTransformer | None = None
 qdrant_collection_name = 'bank_memory'
 VECTOR_SIZE = 384
 
@@ -47,7 +49,7 @@ async def qdrant_memory_save(text: str, collection_name: str = ''):
             logger_info(f"⏭️ Факт уже известен, пропускаю: {fact}")
             continue
 
-        fact_vector = encoder.encode(fact).tolist()
+        fact_vector = _encoder_get().encode(fact).tolist()
         await client.upsert(
             collection_name=col_name,
             points=[
@@ -94,7 +96,7 @@ async def _qdrant_memory_raw_search(query: str, collection_name: str = '', limit
     elif isinstance(vectors_config, dict) and vectors_config:
         vector_name = list(vectors_config.keys())[0]
 
-    query_vector = encoder.encode(query).tolist()
+    query_vector = _encoder_get().encode(query).tolist()
 
     # Полнотекстовый фильтр для поиска по словам (телефон и т.д.)
     search_condition = models.FieldCondition(
@@ -130,3 +132,10 @@ async def _vector_extract_facts_from_text(text: str) -> list[str]:
     except Exception as e:
         logger_info(f"❌ Fact extraction error: {e}")
         return []
+
+
+def _encoder_get() -> SentenceTransformer:
+    global _encoder
+    if _encoder is None:
+        _encoder = SentenceTransformer("all-MiniLM-L6-v2", device='cpu')
+    return _encoder

@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import cast, Callable
 
 from ai.tool.ai_tool_agent import agent_desc_list, agent_invoke
-from ai.tool.ai_tool_chat import chat_me, chat_me_question
-from ai.tool.ai_tool_memory import qdrant_memory_search_text, qdrant_memory_save
+from ai.tool.ai_tool_memory import qdrant_memory_search_text
 from ai.tool.ai_tool_task import task_abort
 from config.config import config_get
 from logging_.logging_ import logger_info
