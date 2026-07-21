@@ -32,8 +32,19 @@ class MySQLConnectionManager:
         self.pool = await mysql_pool_get()
         self.conn = await self.pool.acquire()
 
-        self.cursor_ctx = self.conn.cursor()
-        self._cursor = await self.cursor_ctx.__aenter__()
+        # Если что-то после acquire() упадет (в т.ч. asyncio.CancelledError при обрыве
+        # запроса клиентом) — __aenter__ не вернет self, и Python НЕ вызовет __aexit__
+        # (так работает async with: cleanup только при успешном enter). Без этого try
+        # соединение навсегда остается в pool._used — видимый эффект: MySQL показывает
+        # обычные "Sleep"-соединения, а пул приложения считает их занятыми навечно,
+        # пока maxsize не исчерпается и все запросы к БД не начнут зависать на acquire().
+        try:
+            self.cursor_ctx = self.conn.cursor()
+            self._cursor = await self.cursor_ctx.__aenter__()
+        except BaseException:
+            await self.pool.release(self.conn)
+            self.conn = None
+            raise
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
