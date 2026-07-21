@@ -178,6 +178,7 @@ async def mysql_pool_get() -> Pool:
                 db=db,
                 autocommit=True,
                 cursorclass=aiomysql.DictCursor,
+                charset='utf8mb4',
                 minsize=5,
                 maxsize=10,
                 loop=loop
