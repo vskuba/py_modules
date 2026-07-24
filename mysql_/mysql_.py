@@ -12,7 +12,12 @@ from logging_.logging_ import logger_info
 pool: Optional[aiomysql.Pool] = None
 pool_lock = asyncio.Lock()
 
+# Счетчик выданных соединений — только для диагностики зависаний пула (см. __aenter__/__aexit__).
+# Позволяет по логам сопоставить acquire/release одного и того же чекаута и найти висящий "хвост".
+_conn_seq = 0
+
 host = config_get('MYSQL_HOST', 'mysql')
+port = int(config_get('MYSQL_PORT', '3306'))
 user = config_get('MYSQL_USER', 'developer')
 password = config_get('MYSQL_PASSWORD', 'password')
 db = config_get('MYSQL_DATABASE', 'project')
@@ -27,10 +32,16 @@ class MySQLConnectionManager:
         self.cursor_ctx = None
         # Инициализируем пустой строкой или None, но обрабатываем это в __getattr__
         self._cursor = None
+        self._seq = None
 
     async def __aenter__(self):
         self.pool = await mysql_pool_get()
         self.conn = await self.pool.acquire()
+
+        global _conn_seq
+        _conn_seq += 1
+        self._seq = _conn_seq
+        logger_info(f"[MySQL POOL] acquire #{self._seq}: used={len(self.pool._used)} free={self.pool.freesize} size={self.pool.size}")
 
         # Если что-то после acquire() упадет (в т.ч. asyncio.CancelledError при обрыве
         # запроса клиентом) — __aenter__ не вернет self, и Python НЕ вызовет __aexit__
@@ -42,6 +53,7 @@ class MySQLConnectionManager:
             self.cursor_ctx = self.conn.cursor()
             self._cursor = await self.cursor_ctx.__aenter__()
         except BaseException:
+            logger_info(f"[MySQL POOL] acquire #{self._seq} failed before enter, releasing")
             await self.pool.release(self.conn)
             self.conn = None
             raise
@@ -54,6 +66,7 @@ class MySQLConnectionManager:
         finally:
             if self.conn and self.pool:
                 await self.pool.release(self.conn)
+                logger_info(f"[MySQL POOL] release #{self._seq}: used={len(self.pool._used)} free={self.pool.freesize} size={self.pool.size}")
 
     def __getattr__(self, name):
         # Если курсор еще не создан (вызов до async with), отдаем понятное исключение
@@ -128,12 +141,13 @@ class LoggingCursor:
 
 
 def mysql_get_url() -> str:
-    return f'mysql://{user}:{password}@{host}/{db}'
+    return f'mysql://{user}:{password}@{host}:{port}/{db}'
 
 
 def mysql_conn_get() -> pymysql.Connection:
     return pymysql.connect(
         host=host,
+        port=port,
         user=user,
         password=password,
         database=db,
@@ -161,11 +175,13 @@ async def mysql_pool_get() -> Pool:
             loop = asyncio.get_running_loop()
             pool = await _create_pool(
                 host=host,
+                port=port,
                 user=user,
                 password=password,
                 db=db,
                 autocommit=True,
                 cursorclass=aiomysql.DictCursor,
+                charset='utf8mb4',
                 minsize=5,
                 maxsize=10,
                 loop=loop
