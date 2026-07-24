@@ -17,6 +17,7 @@ pool_lock = asyncio.Lock()
 _conn_seq = 0
 
 host = config_get('MYSQL_HOST', 'mysql')
+port = int(config_get('MYSQL_PORT', '3306'))
 user = config_get('MYSQL_USER', 'developer')
 password = config_get('MYSQL_PASSWORD', 'password')
 db = config_get('MYSQL_DATABASE', 'project')
@@ -140,12 +141,13 @@ class LoggingCursor:
 
 
 def mysql_get_url() -> str:
-    return f'mysql://{user}:{password}@{host}/{db}'
+    return f'mysql://{user}:{password}@{host}:{port}/{db}'
 
 
 def mysql_conn_get() -> pymysql.Connection:
     return pymysql.connect(
         host=host,
+        port=port,
         user=user,
         password=password,
         database=db,
@@ -173,6 +175,7 @@ async def mysql_pool_get() -> Pool:
             loop = asyncio.get_running_loop()
             pool = await _create_pool(
                 host=host,
+                port=port,
                 user=user,
                 password=password,
                 db=db,

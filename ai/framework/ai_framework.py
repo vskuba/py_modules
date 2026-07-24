@@ -13,7 +13,6 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from ai.ai_session import ai_session_message_add
 from ai.framework.ai_framework_model import AiFrameworkModel
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
@@ -114,7 +113,7 @@ class AbstractAiFramework(ABC):
                     part_kind = 'final-user-prompt'
 
                     # Используем твою функцию для добавления
-                    await ai_session_message_add(
+                    await self.session_message_add(
                         session_uuid=framework_model.session_uuid,
                         request_uuid=framework_model.request_uuid,
                         llm_id=llm_id,
@@ -143,7 +142,7 @@ class AbstractAiFramework(ABC):
 
                         # Размышления
                         if "ThinkingPart" in p_type:
-                            await ai_session_message_add(
+                            await self.session_message_add(
                                 session_uuid=framework_model.session_uuid,
                                 request_uuid=framework_model.request_uuid,
                                 llm_id=llm_id,
@@ -159,7 +158,7 @@ class AbstractAiFramework(ABC):
                         # Текст ответа (Финальный или промежуточный)
                         elif "TextPart" in p_type:
                             kind = 'response-final' if is_final and not framework_model.is_transition else 'response'
-                            await ai_session_message_add(
+                            await self.session_message_add(
                                 session_uuid=framework_model.session_uuid,
                                 request_uuid=framework_model.request_uuid,
                                 llm_id=llm_id,
@@ -174,7 +173,7 @@ class AbstractAiFramework(ABC):
 
                         # Вызовы инструментов
                         elif "ToolCallPart" in p_type:
-                            await ai_session_message_add(
+                            await self.session_message_add(
                                 session_uuid=framework_model.session_uuid,
                                 request_uuid=framework_model.request_uuid,
                                 llm_id=llm_id,
@@ -243,3 +242,19 @@ class AbstractAiFramework(ABC):
         logger_info(f'🧠 LLM модель: {model_name} ({type(model).__name__})')
 
         return model
+
+    @abstractmethod
+    async def session_message_add(
+            self,
+            session_uuid,
+            request_uuid,
+            llm_id,
+            user_id,
+            companion_id,
+            role,
+            agent_id,
+            kind_type,
+            content,
+            token=None
+    ):
+        pass
