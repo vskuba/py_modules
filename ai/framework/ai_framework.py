@@ -173,6 +173,7 @@ class AbstractAiFramework(ABC):
 
                         # Вызовы инструментов
                         elif "ToolCallPart" in p_type:
+                            tool_content = getattr(part, 'content', '')
                             await self.session_message_add(
                                 session_uuid=framework_model.session_uuid,
                                 request_uuid=framework_model.request_uuid,
@@ -181,7 +182,7 @@ class AbstractAiFramework(ABC):
                                 role=role,
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='tool-call',
-                                content=part.content.strip(),
+                                content=tool_content,
                                 token=tokens_count,
                                 companion_id=framework_model.companion_id
                             )
