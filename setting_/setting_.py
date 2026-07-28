@@ -27,14 +27,15 @@ async def setting_set(
         key: str,
         value,
         user_id: int | None = None,
-        node_id: int | None = None
+        node_id: int | None = None,
+        dynamic: int = 0,
 ) -> bool:
     async with mysql_get_db_async() as db:
         # Уникальный индекс не ловит дубли при NULL в scope-колонках — свой upsert
         condition, params = _scope_condition(user_id, node_id)
         await db.execute(
-            f"UPDATE setting SET value = %s WHERE `key` = %s AND {condition}",
-            [str(value), key, *params]
+            f"UPDATE setting SET value = %s, dynamic = %s WHERE `key` = %s AND {condition}",
+            [str(value), dynamic, key, *params]
         )
         if not db.rowcount:
             # rowcount 0 и при неизменившемся значении — проверяем наличие строки
@@ -44,8 +45,8 @@ async def setting_set(
             )
             if not await db.fetchone():
                 await db.execute(
-                    "INSERT INTO setting (`key`, value, user_id, node_id) VALUES (%s, %s, %s, %s)",
-                    (key, str(value), user_id, node_id)
+                    "INSERT INTO setting (`key`, value, user_id, node_id, dynamic) VALUES (%s, %s, %s, %s, %s)",
+                    (key, str(value), user_id, node_id, dynamic)
                 )
         await db.connection.commit()
     return True
