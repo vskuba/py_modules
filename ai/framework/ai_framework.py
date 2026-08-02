@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from pydantic import TypeAdapter
 
-from pydantic_ai import Agent, ModelMessage
+from pydantic_ai import Agent, ModelMessage, ModelSettings
 from pydantic_ai.models import Model
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -216,6 +216,7 @@ class AbstractAiFramework(ABC):
             'huggingface',
             'cerebras',
             'openai',
+            'gx10',
         }
 
         for i in mapping_providers:
@@ -226,7 +227,19 @@ class AbstractAiFramework(ABC):
                     http_client=http_client
                 )
                 model_name_clean = model_name[len(i) + 1:]
-                model = OpenAIChatModel(model_name_clean, provider=provider)
+                model = OpenAIChatModel(
+                    model_name_clean,
+                    provider=provider
+                )
+
+                if i == 'gx10':
+                    model = OpenAIChatModel(
+                        model_name_clean,
+                        provider=provider,
+                        settings=ModelSettings(
+                            extra_body={"chat_template_kwargs": {"enable_thinking": framework_model.thinking_enable}}
+                        )
+                    )
 
                 if i == 'gemini':
                     provider = GoogleProvider(

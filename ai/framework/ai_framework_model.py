@@ -19,6 +19,7 @@ class AiFrameworkModel:
     tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None
+    on_tokens: Callable | None = None
     is_gui_mode: bool = True
     is_transition: bool = False
     session_disabled: bool = False
@@ -27,6 +28,11 @@ class AiFrameworkModel:
     entities_llm: list = field(default_factory=list)
     entity_llm_current: dict = field(default_factory=dict)
     response_model: str | BaseModel = str
+
+    llm_parallel_per_agent_max: int = 1
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    thinking_enable: bool = False
 
     # params for operation using
     metadata: dict = field(default_factory=dict)
