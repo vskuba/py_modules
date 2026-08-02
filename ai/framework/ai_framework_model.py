@@ -29,6 +29,7 @@ class AiFrameworkModel:
     entity_llm_current: dict = field(default_factory=dict)
     response_model: str | BaseModel = str
 
+    node_id: int | None = None
     llm_parallel_per_agent_max: int = 1
     tokens_input: int | None = None
     tokens_output: int | None = None
