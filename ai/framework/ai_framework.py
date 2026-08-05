@@ -221,18 +221,26 @@ class AbstractAiFramework(ABC):
 
         for i in mapping_providers:
             if model_name.lower().startswith(i + '/'):
-                provider = OpenAIProvider(
-                    base_url=config_get(i.upper() + '_API_URL'),
-                    api_key=config_get(i.upper() + '_API_KEY'),
-                    http_client=http_client
-                )
                 model_name_clean = model_name[len(i) + 1:]
-                model = OpenAIChatModel(
-                    model_name_clean,
-                    provider=provider
-                )
+
+                if i != 'gx10':
+                    provider = OpenAIProvider(
+                        base_url=config_get(i.upper() + '_API_URL'),
+                        api_key=config_get(i.upper() + '_API_KEY'),
+                        http_client=http_client
+                    )
+                    model = OpenAIChatModel(
+                        model_name_clean,
+                        provider=provider
+                    )
 
                 if i == 'gx10':
+                    last_char = model_name_clean[-1]
+                    provider = OpenAIProvider(
+                        base_url=config_get(i.upper() + f'_{last_char}_API_URL'),
+                        api_key=config_get(i.upper() + '_API_KEY'),
+                        http_client=http_client
+                    )
                     model = OpenAIChatModel(
                         model_name_clean,
                         provider=provider,
