@@ -235,9 +235,9 @@ class AbstractAiFramework(ABC):
                     )
 
                 if i == 'gx10':
-                    last_char = model_name_clean[-1]
+                    model_size = model_name_clean.split('-')[-1].upper()
                     provider = OpenAIProvider(
-                        base_url=config_get(i.upper() + f'_{last_char}_API_URL'),
+                        base_url=config_get(i.upper() + f'_{model_size}_API_URL'),
                         api_key=config_get(i.upper() + '_API_KEY'),
                         http_client=http_client
                     )
