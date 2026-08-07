@@ -35,7 +35,46 @@ def json_from_string(string: str, raise_on_error: bool = False) -> dict:
         logger_info(f"⚠️ {error_msg} Текст: {string}")
         return {}
 
-    except Exception as e:
+    except json.JSONDecodeError as e:
+        # LLM часто добавляет текст после JSON — ищем matching закрывающую '}'
+        # для первого '{'. Это покрывает: `{"plan": {...}}\n\nПроверь: ...`
+        if 'Extra data' in str(e):
+            depth = 0
+            match_end = -1
+            in_string = False
+            escape_next = False
+            for i, ch in enumerate(string_clean):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if ch == '\\':
+                    escape_next = True
+                    continue
+                if ch == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        match_end = i
+                        break
+            if match_end > 0:
+                try:
+                    parsed = json.loads(string_clean[:match_end+1], strict=False)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+
+        backtrace = traceback.format_exc()
+        logger_info(
+            f"❌ Не удалось распарсить json: {e}, string: {string}\n"
+            f"Полный стек вызовов:\n{backtrace}"
+        )
         backtrace = traceback.format_exc()
         logger_info(
             f"❌ Не удалось распарсить json: {e}, string: {string}\n"
