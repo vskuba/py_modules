@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 import time
 import uuid
 from logging.handlers import RotatingFileHandler
@@ -38,6 +39,17 @@ def logging_init():
     )
     log_handler.setFormatter(formatter)
     logger.addHandler(log_handler)
+
+    # Дубль в stdout, чтобы ошибки были видны в `docker logs <container>`:
+    # без него единственный способ узнать о проблеме - открыть data/log/app.log
+    # внутри контейнера. Формат плоский, а не JSON: extra-поля (тела HTTP-запросов,
+    # заголовки) остаются только в файле и не забивают вывод docker.
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(logging.Formatter(
+        fmt='%(asctime)s %(levelname)s %(name)s %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(stdout_handler)
 
     # 3. Настройка сторонних библиотек
     for lib in [
