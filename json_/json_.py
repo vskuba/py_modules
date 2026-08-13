@@ -21,6 +21,15 @@ def json_from_string(string: str, raise_on_error: bool = False) -> dict:
         if not string_clean:
             return {}
 
+        # LLM часто предваряет объект текстом: «Готово, бла-бла. {"plan": ...}»,
+        # и для парсера это ошибка с первого же символа. Режем всё до первой '{' —
+        # заодно снимается и обёртка ```json, а текст после объекта добирает
+        # ветка 'Extra data' ниже.
+        if not string_clean.startswith('{'):
+            brace_pos = string_clean.find('{')
+            if brace_pos > 0:
+                string_clean = string_clean[brace_pos:]
+
         parsed = json.loads(string_clean, strict=False)
 
         # Гарантируем, что результат парсинга — это именно словарь (dict)
