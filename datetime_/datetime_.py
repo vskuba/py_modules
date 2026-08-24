@@ -36,7 +36,41 @@ def datetime_utc_now() -> datetime:
 
 def datetime_offset_now(offset: Any | None) -> datetime:
     """Текущее время, сдвинутое на часовое смещение вида '+3' / 'UTC-2'; мусор = UTC."""
-    match = re.search(r'([+-]?\d+)', str(offset or ''))
-    hours = int(match.group(1)) if match else 0
+    return datetime_utc_now() + timedelta(hours=datetime_offset_hours(offset))
 
-    return datetime_utc_now() + timedelta(hours=hours)
+
+def datetime_offset_hours(offset: Any | None) -> int:
+    """Часы из смещения вида '+3' / 'UTC-2' / 3; мусор и пустота — ноль."""
+    match = re.search(r'([+-]?\d+)', str(offset or ''))
+
+    return int(match.group(1)) if match else 0
+
+
+def datetime_offset_apply(value: datetime | None, offset: Any | None) -> datetime | None:
+    """
+    Хранимое UTC-время в часовом поясе настройки — для показа человеку.
+
+    Нужна там, где время не берут «сейчас», а читают из базы: `created_at` трасс,
+    `started_at` прогонов, отметки журналов. MySQL в контейнере живёт по UTC, и
+    без сдвига человек видит метку на несколько часов раньше, чем событие
+    случилось, — а сверяет он её с часами на стене.
+
+    `None` пропускаем как есть: у пустой колонки нет времени, которое можно
+    сдвинуть, и подставлять вместо него «сейчас» было бы враньём.
+    """
+    if value is None:
+        return None
+
+    return value + timedelta(hours=datetime_offset_hours(offset))
+
+
+async def datetime_local(value: datetime | None,
+                         user_id: int | None = None,
+                         node_id: int | None = None) -> datetime | None:
+    """
+    То же, что `datetime_offset_apply`, но смещение берётся из настройки само.
+
+    Удобно для разовых показов; когда меток много, дешевле прочитать настройку
+    один раз и звать `datetime_offset_apply` — иначе на каждую метку уйдёт запрос.
+    """
+    return datetime_offset_apply(value, await setting_get('timezone', '+0', user_id, node_id))
