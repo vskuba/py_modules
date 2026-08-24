@@ -55,8 +55,6 @@ def logging_init():
     for lib in [
         "github",
         "urllib3",
-        "httpx",
-        'httpcore',
         "mcp",
         'pydantic_ai',
         'xai_sdk',
@@ -66,6 +64,19 @@ def logging_init():
     ]:
         lib_logger = logging.getLogger(lib)
         lib_logger.setLevel(level)
+
+    # httpx на INFO печатает строку «HTTP Request: METHOD URL статус» — и вместе
+    # с ней всё, что лежит в самом адресе. У Telegram Bot API токен стоит прямо
+    # в пути (`/bot<token>/sendMessage`), поэтому каждый вызов бота клал секрет
+    # в `data/log/app.log`, в `docker logs` и в вывод cron-джобов. Поймано на
+    # ежедневном отчёте уборки логов Cronicle.
+    #
+    # Диагностическая ценность этой строки невелика: код ответа и так виден по
+    # месту вызова, а тела запросов пишут хуки `log_request_body` /
+    # `log_response_body` там, где они нужны. Ошибки самой библиотеки на WARNING
+    # никуда не деваются.
+    for lib in ("httpx", "httpcore"):
+        logging.getLogger(lib).setLevel(logging.WARNING)
 
     logger_info('📝 логирование включено', status='ready')
 
