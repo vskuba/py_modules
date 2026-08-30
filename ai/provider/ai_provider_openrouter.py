@@ -38,3 +38,28 @@ class AiProviderOpenrouter(AiProvider):
 
         return OpenAIChatModel(model_name, provider=provider,
                                settings=self.thinking_settings(model))
+
+    def raw_endpoint(self, model_name: str) -> tuple[str, str]:
+        """
+        Адрес по общему соглашению; пустой `OPENROUTER_API_URL` — не беда.
+
+        Для сборки модели адрес не нужен вовсе (`OpenRouterProvider` знает его сам),
+        но сырому запросу деваться некуда: он идёт обычным HTTP, и адрес назвать
+        обязан. Соглашение то же, что у соседей, — переопределение здесь только
+        ради этой оговорки.
+        """
+        return super().raw_endpoint(model_name)
+
+    def raw_body_no_thinking(self) -> dict:
+        """
+        У маршрутизатора размышления гасит собственное поле `reasoning`.
+
+        Не `reasoning_effort`: в него единый ключ переводит уже pydantic-ai, а сырой
+        запрос идёт мимо неё. Проверено живьём на `qwen/qwen3.7-flash`: без поля
+        ответ пришёл с `content: null` и полным `reasoning`, с полем — «Pong» за
+        820 мс.
+
+        `{'max_tokens': 0}` вместо `enabled` не годится — маршрутизатор рвёт
+        соединение, не отвечая вовсе.
+        """
+        return {'reasoning': {'enabled': False}}

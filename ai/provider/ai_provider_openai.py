@@ -47,6 +47,9 @@ class AiProviderClaude(AiProviderOpenai):
 class AiProviderOllama(AiProviderOpenai):
     name = 'ollama'
 
+    # Ollama поднимают на своём железе — то же ограничение, что и у gx10.
+    local = True
+
 
 class AiProviderGroq(AiProviderOpenai):
     name = 'groq'

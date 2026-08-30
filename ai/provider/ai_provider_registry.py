@@ -39,6 +39,31 @@ AI_PROVIDER_REGISTRY: dict[str, type[AiProvider]] = {
 }
 
 
+def ai_provider_registry_get(model_name: str,
+                             http_client: httpx.AsyncClient = None) -> AiProvider | None:
+    """
+    Стратегия сервиса по имени модели — без сборки самой модели.
+
+    Нужна тем, кто говорит с сервисом сырым HTTP и модель не собирает: пингу пула
+    (`team_llm_ping`) от стратегии нужны только адрес с ключом и поля, глушащие
+    размышления. Собирать ради этого объект модели значило бы требовать `thinking`,
+    настройки хода и прочее, которого у пинга нет и быть не может.
+
+    `None` — сервис незнакомый. Здесь это не отказ, в отличие от сборки модели:
+    вызов сырого запроса вправе решить, что делать с неизвестным именем, — пинг,
+    например, помечает такую модель «проверить не смогли», а не «мертва».
+
+    `http_client` необязателен: сырому вызову он не нужен, у него свой.
+    """
+    provider_name, _, model_name_clean = str(model_name or '').partition('/')
+    provider_class = AI_PROVIDER_REGISTRY.get(provider_name.lower())
+
+    if not provider_class or not model_name_clean:
+        return None
+
+    return provider_class(http_client)
+
+
 def ai_provider_registry_model_get(model_name: str, framework_model: AiFrameworkModel,
                                    http_client: httpx.AsyncClient) -> Model:
     """

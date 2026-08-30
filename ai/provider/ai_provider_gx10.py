@@ -34,6 +34,9 @@ from config.config import config_get
 class AiProviderGx10(AiProvider):
     name = 'gx10'
 
+    # Модель крутится на нашей машине (llama.cpp на GX10) — одна карта на все роли.
+    local = True
+
     def model_get(self, model_name: str, framework_model: AiFrameworkModel) -> Model:
         provider = OpenAIProvider(
             base_url=config_get(f'{self.name.upper()}_{self._size(model_name)}_API_URL'),
@@ -48,6 +51,26 @@ class AiProviderGx10(AiProvider):
                 'chat_template_kwargs': {'enable_thinking': framework_model.thinking},
             }),
         )
+
+    def raw_endpoint(self, model_name: str) -> tuple[str, str]:
+        """
+        Адрес свой на каждый размер модели — то же правило, что и при сборке.
+
+        Ключ один на все размеры: машина одна, разные только порты.
+        """
+        return (str(config_get(f'{self.name.upper()}_{self._size(model_name)}_API_URL') or ''),
+                str(config_get(self.name.upper() + '_API_KEY') or ''))
+
+    def raw_body_no_thinking(self) -> dict:
+        """
+        Размышления у llama.cpp гасит аргумент шаблона чата, а не поле запроса.
+
+        Значение передаём явно: у шаблона своё умолчание, и «не передали» здесь
+        означает не «выключено», а «как решит модель». Проверено живьём — без флага
+        модель вернула пустой `content` при непустом `reasoning_content`, с флагом
+        ответила «Pong».
+        """
+        return {'chat_template_kwargs': {'enable_thinking': False}}
 
     @staticmethod
     def _size(model_name: str) -> str:
