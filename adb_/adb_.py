@@ -14,7 +14,10 @@
 import argparse
 import subprocess
 
-from ai.ai_vision import ai_vision_describe_wait, ai_vision_normalize
+# `ai_vision` подключается лениво, внутри функций, — не шапкой модуля:
+# снимок экрана нужен и в тощих проектах без LLM-стека, а `ai_vision`
+# через реестр провайдеров тянет `pydantic_ai` (проверено на Reserve: без
+# него падал даже `adb_capture`, хотя модели там и не нюхом бывало).
 
 
 def adb_devices() -> list[str]:
@@ -54,6 +57,7 @@ def adb_capture(serial: str = '', max_side: int = 0) -> bytes:
     Raises:
         RuntimeError: adb/устройство подвело или вывод не похож на PNG.
     """
+    from ai.ai_vision import ai_vision_normalize
     png = _screencap_png(serial)
     return ai_vision_normalize(png, max_side=max_side)
 
@@ -86,6 +90,7 @@ def adb_screen_describe(prompt: str = '', serial: str = '', model_name: str = ''
     Returns:
         Текст описания экрана.
     """
+    from ai.ai_vision import ai_vision_describe_wait
     return ai_vision_describe_wait(adb_capture(serial=serial), prompt=prompt,
                                    model_name=model_name)
 
