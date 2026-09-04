@@ -27,7 +27,6 @@ import io
 import httpx
 from PIL import Image
 
-from ai.provider.ai_provider_registry import ai_provider_registry_get
 from config.config import config_get
 
 # Модель по умолчанию, если её не назвали вызовом и в `.env`: размер нашей
@@ -106,8 +105,12 @@ async def ai_vision_describe(image: bytes, prompt: str = '', model_name: str = '
         RuntimeError: сервис ответил ошибкой или пустым ответом.
     """
     name = str(model_name or config_get('AI_VISION_MODEL_NAME') or AI_VISION_DEFAULT_MODEL)
-    model_clean = name.partition('/')[2]  # адрес спрашиваем у стратегии полным именем, в запрос идёт имя без префикса сервиса
+    # Реестр провайдеров — тяжёлый (через них едет `pydantic_ai`), а нужен он
+    # только здесь, при обращении к модели; `ai_vision_normalize` и без него
+    # живёт в тощих окружениях, куда LLM-стек не ставили.
+    from ai.provider.ai_provider_registry import ai_provider_registry_get
 
+    model_clean = name.partition('/')[2]  # адрес спрашиваем у стратегии полным именем, в запрос идёт имя без префикса сервиса
     provider = ai_provider_registry_get(name)
     if not provider:
         raise ValueError(f"Vision: сервис модели '{name}' не найден в реестре провайдеров.")
