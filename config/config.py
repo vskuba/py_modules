@@ -1,6 +1,9 @@
+"""Чтение окружения: базовый слой `.env` и накладка машины `.env.local` поверх него."""
 import os
-from dotenv import find_dotenv, set_key, load_dotenv
+from pathlib import Path
 from typing import Any
+
+from dotenv import find_dotenv, load_dotenv, set_key
 
 # Два слоя: `.env` — базовый (на деплое он пересобирается из секрета, поэтому
 # правки в нём недолговечны), `.env.local` — необязательная накладка машины
@@ -8,11 +11,24 @@ from typing import Any
 # из `.env`, и переменную, которую контейнеру подсунул `env_file` compose-а, —
 # иначе локальные порты и учётки в ней бессмысленны. Файла нет (прод) — остаётся
 # один слой, поведение прежнее.
-ENV_PATH = find_dotenv(usecwd=True)
-ENV_LOCAL_PATH = os.path.join(os.path.dirname(ENV_PATH), '.env.local') if ENV_PATH else ''
+#
+# Корень проекта берём **от себя**, а не обходом вверх от рабочего каталога.
+# Модуль лежит в `<корень>/py_modules/config/config.py`, поэтому третий родитель —
+# всегда корень проекта, откуда бы процесс ни запустили.
+#
+# Так было не всегда, и прежний способ (`find_dotenv(usecwd=True)`) стоил дорого.
+# Обход поднимается вверх до первого встреченного `.env` и границы репозитория не
+# знает. В проекте, где `.env` нет вовсе (бывает: вся конфигурация в `.env.local`),
+# он уходил выше корня и находил **чужой** `.env` в домашнем каталоге: свой
+# `.env.local` при этом не читался совсем, а в окружение процесса подмешивался
+# посторонний секрет. Тихо и без единой ошибки в журнале.
+ENV_BASE_DIR = Path(__file__).resolve().parents[2]
+ENV_PATH = str(ENV_BASE_DIR / '.env')
+ENV_LOCAL_PATH = str(ENV_BASE_DIR / '.env.local')
 
-load_dotenv(ENV_PATH)
-if ENV_LOCAL_PATH and os.path.isfile(ENV_LOCAL_PATH):
+if os.path.isfile(ENV_PATH):
+    load_dotenv(ENV_PATH)
+if os.path.isfile(ENV_LOCAL_PATH):
     load_dotenv(ENV_LOCAL_PATH, override=True)
 
 
@@ -30,6 +46,10 @@ def config_update_and_save(key: str, value: Any):
     Пишем в базовый слой. Если этот же ключ переопределён в `.env.local`, после
     перезапуска процесса вернётся значение накладки, а не сохранённое, — правку
     надо делать в самой накладке.
+
+    Файла может не быть (проект держит всё в накладке): `set_key` заводит его сам,
+    поэтому отдельной проверки здесь нет. `find_dotenv` остаётся запасным адресом
+    для случая, когда модуль подключён не из корня проекта.
     """
     set_key(ENV_PATH or find_dotenv(), key.upper(), value)
     os.environ[key.upper()] = value
