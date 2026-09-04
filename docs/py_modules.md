@@ -80,6 +80,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `ai/framework` | абстракции движка: `AbstractAiFramework`, `AbstractAiFrameworkManager`, `AiFrameworkModel`, `AiFrameworkResult` |
 | `ai/provider` | клиенты провайдеров: Claude, Gemini, OpenAI, OpenRouter, Groq, Cerebras, Huggingface, Gx10 — и реестр `ai_provider_registry_get` |
 | `ai/ai_thread` | `ai_thread_framework_run` — запуск прогона |
+| `ai/ai_vision` | зрение: `ai_vision_describe` (async) и `ai_vision_describe_wait` — «что на картинке» любой моделью из реестра; `ai_vision_normalize` — JPEG без альфы, без него локальные mtmd-серверы отвергают RGBA/WebP-снимки с `400 Failed to load image or audio file` |
 | `mcp_` | конфигурация MCP-серверов: `mcp_config_get`, `mcp_config_save`, `mcp_config_tools_json_get` |
 
 Здесь лежит **основа**, а конкретный движок сценариев — в проекте: он знает его таблицы,
@@ -113,6 +114,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `translator` | `translate_text` |
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
+| `adb_` | андроид-устройство через adb: `adb_devices`, `adb_capture` (снимок экрана сразу RGB-JPEG), `adb_capture_save`, `adb_screen_describe` — «увидеть экран телефона»; CLI: `python -m adb_.adb_ describe` |
 
 ### Документация
 
