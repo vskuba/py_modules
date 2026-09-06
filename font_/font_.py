@@ -112,8 +112,11 @@ def font_render_text(path: str, text: str, out_png: str, size: int = 64) -> str:
     без выравнивания по ней разница метрик выглядит как разница глифов на
     всей картинке.
     """
+    import os
+
     from PIL import Image, ImageDraw, ImageFont
 
+    os.makedirs(os.path.dirname(os.path.abspath(out_png)) or ".", exist_ok=True)
     font = ImageFont.truetype(path, size)
     canvas = Image.new("L", (max(size * 2, size * len(text) * 2), size * 3), 255)
     ImageDraw.Draw(canvas).text((size // 2, size * 2), text, font=font, fill=0, anchor="ls")
@@ -132,6 +135,7 @@ def font_text_diff(path_a: str, path_b: str, text: str, size: int = 64,
     округление растеризатора; проценты и больше — формы разошлись.
     `out_dir` — положить `a.png`, `b.png`, `diff.png` для глазной проверки.
     """
+    import os
     import tempfile
 
     from PIL import Image, ImageChops
@@ -144,6 +148,7 @@ def font_text_diff(path_a: str, path_b: str, text: str, size: int = 64,
             ib = ib.resize(ia.size)
         result = _image_stats(ia, ib)
         if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
             heat = ImageChops.difference(ia.convert("RGB"), ib.convert("RGB")).convert("L").convert("RGB")
             for src, name in ((pa, "a.png"), (pb, "b.png")):
                 Image.open(src).save(f"{out_dir}/{name}")
@@ -152,6 +157,34 @@ def font_text_diff(path_a: str, path_b: str, text: str, size: int = 64,
         else:
             result["images"] = None
     return result
+
+
+def main() -> None:
+    """CLI: `python -m font_.font_ info|coverage|compare|render|textdiff …`."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(prog="python -m font_.font_")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("info"); p.add_argument("font")
+    p = sub.add_parser("coverage"); p.add_argument("font"); p.add_argument("text")
+    p = sub.add_parser("compare"); p.add_argument("a"); p.add_argument("b")
+    p = sub.add_parser("render"); p.add_argument("font"); p.add_argument("text"); p.add_argument("out_png"); p.add_argument("--size", type=int, default=64)
+    p = sub.add_parser("textdiff"); p.add_argument("a"); p.add_argument("b"); p.add_argument("text"); p.add_argument("--size", type=int, default=64); p.add_argument("--out-dir")
+
+    a = parser.parse_args()
+    if a.cmd == "info":
+        print(json.dumps(font_info(a.font), ensure_ascii=False, indent=1))
+    elif a.cmd == "coverage":
+        print("\n".join(font_coverage(a.font, a.text)) or "— покрыто всё")
+    elif a.cmd == "compare":
+        print(json.dumps(font_compare(a.a, a.b), ensure_ascii=False, indent=1))
+    elif a.cmd == "render":
+        print(font_render_text(a.font, a.text, a.out_png, size=a.size))
+    elif a.cmd == "textdiff":
+        print(json.dumps(font_text_diff(a.a, a.b, a.text, size=a.size, out_dir=a.out_dir), ensure_ascii=False, indent=1))
+
 
 
 def _format(tt) -> str:
@@ -187,3 +220,6 @@ def _image_stats(img_a, img_b) -> dict:
     pct = 100.0 * sum(hist[threshold + 1:]) / total
     return {"max_diff": max_diff, "mean_abs": round(mean_abs, 3),
             "pct_pixels": {"threshold": threshold, "pct": round(pct, 3)}}
+
+if __name__ == "__main__":
+    main()
