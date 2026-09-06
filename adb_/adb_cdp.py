@@ -20,6 +20,7 @@ WebView одним узлом — текста и кнопок страницы 
 forward на старый pid — типовая грабля после переустановки APK.
 """
 import argparse
+import base64
 import json
 import re
 import time
@@ -280,6 +281,70 @@ def adb_cdp_element_rect(selector: str, port: int = ADB_CDP_PORT,
     return result
 
 
+def adb_cdp_element_shot(selector: str, out: str, port: int = ADB_CDP_PORT,
+                         url_part: str = '', serial: str = '') -> dict:
+    """
+    Снять элемент по селектору отдельным png — кадр ровно по границам элемента.
+
+    Это выкройка для `image_seam`/`image_rect_seams`/`image_audit`: в полном
+    снимке каждый раз надо не испортить вычитание статус-бара, а здесь
+    координаты берёт `adb_cdp_element_rect`, и крой просит странице в её
+    CSS-пикселях с масштабом devicePixelRatio — на выходе физические пиксели,
+    те самые, которыми меряют инструменты. Отдельный кадр ещё и тем удобен,
+    что `image_diff_zones` сворачивает его с эталоном без ручной обрезки.
+
+    Args:
+        selector: CSS-селектор; берут первое совпадение.
+        out: файл для записи; если заканчивается `/` (или это существующий
+            каталог) — имя выводят из селектора (не-буквы-и-цифры в дефисы).
+        port: локальный порт DevTools.
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        serial: устройство; пусто — единственное подключённое.
+
+    Returns:
+        {'file': записанный путь, 'rect': экранный прямоугольник
+         {'x','y','w','h'}} элемента.
+
+    Raises:
+        RuntimeError: селектор ничего не нашёл или страница не отдала кадр.
+        TimeoutError: страница не ответила за timeout.
+    """
+    rect = adb_cdp_element_rect(selector, port=port, url_part=url_part, serial=serial)
+    if not rect['items']:
+        raise RuntimeError(f'селектор {selector!r} не нашёл ничего — проверь адрес и вёрстку')
+    css, screen = rect['items'][0]['css'], rect['items'][0]['screen']
+    target = Path(out)
+    if out.endswith('/') or target.is_dir():
+        name = re.sub(r'[^0-9A-Za-z]+', '-', selector).strip('-').lower() or 'element'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target = target / f'{name}.png'
+    sock = adb_ws_open(_socket_target(port, url_part))
+    try:
+        # captureBeyondViewport (по умолчанию true) уже домножает кадр на
+        # devicePixelRatio: scale: dpr удвоил бы степень и выкройка вышла бы
+        # чужого размера. Держим scale=1 и явно просим за границами вьюпорта —
+        # так выходит ровно css×dpr, то есть экранный прямоугольник элемента.
+        shot = _cdp_call(sock, 1, 'Page.captureScreenshot',
+                         {'format': 'png', 'captureBeyondViewport': True,
+                          'clip': {'x': css['x'], 'y': css['y'],
+                                   'width': css['w'], 'height': css['h'],
+                                   'scale': 1.0}}, ADB_CDP_TIMEOUT)
+    finally:
+        sock.close()
+    if not shot.get('data'):
+        raise RuntimeError('Page.captureScreenshot вернул пустой кадр')
+    png = base64.b64decode(shot['data'])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(png)
+    # Chrome берёт целые пиксели с округлением вниз, и кадр выходит на 1–2 px
+    # короче теоретического css×dpr. Прямоугольник в ответе описывает записанный
+    # кадр (ширина и высота PNG лежат в IHDR, big-endian со смещения 16 —
+    # Pillow ради двух чисел сюда не нужен), чтобы seam не мерил за его краем.
+    w_px, h_px = int.from_bytes(png[16:20], 'big'), int.from_bytes(png[20:24], 'big')
+    return {'file': str(target),
+            'rect': {'x': screen['x'], 'y': screen['y'], 'w': w_px, 'h': h_px}}
+
+
 # docstring для eval: прямоугольник считается страницей — dpr и прокрутка
 # берются с неё же. Селектор подставляется через json.dumps: кавычки и
 # скобки селектора не ломают выражение.
@@ -411,9 +476,11 @@ if __name__ == '__main__':
         epilog="connect com.example.app | pages | eval 'location.href' | "
                "navigate https://localhost/menu.html | "
                "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
-               "element 540 300 | element-rect .card-cover")
+               "element 540 300 | element-rect .card-cover | "
+               "element-shot .card-cover shots/cover.png")
     parser.add_argument('command', choices=['connect', 'pages', 'eval', 'navigate',
-                                            'capture', 'element', 'element-rect'])
+                                            'capture', 'element', 'element-rect',
+                                            'element-shot'])
     parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
     parser.add_argument('--serial', default='', help='устройство для connect и снимков')
     parser.add_argument('--port', type=int, default=ADB_CDP_PORT, help='локальный порт DevTools')
@@ -447,6 +514,11 @@ if __name__ == '__main__':
                 print(f"  <{item['tag']} .{item['cls']}> «{item['text']}» "
                       f"css=({css['x']},{css['y']} {css['w']}×{css['h']}) "
                       f"screen=({scr['x']},{scr['y']} {scr['w']}×{scr['h']})")
+        elif ns.command == 'element-shot':
+            shot = adb_cdp_element_shot(ns.args[0], ns.args[1], port=ns.port,
+                                        url_part=ns.url_part, serial=ns.serial)
+            r = shot['rect']
+            print(f"{shot['file']}: screen=({r['x']},{r['y']} {r['w']}×{r['h']})")
         else:
             print(adb_cdp_navigate(ns.args[0], port=ns.port, url_part=ns.url_part))
     except (IndexError, ValueError) as err:

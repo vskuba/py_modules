@@ -17,6 +17,7 @@
 с `backup` правит всегда от нетронутой копии: повторный прогон повторяет
 первый, а не складывает яркость дважды. Грабли замера — `image_tooling.md`.
 """
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -48,6 +49,18 @@ IMAGE_SEAM_STEP = 6
 # это скачок на границе, а попавшие в длинный профиль буквы считать краем
 # нельзя (профиль с ними просто показывают для отладки).
 IMAGE_SEAM_WINDOW = 3
+
+# Сколько положений полосы перпендикулярно оси перебирает поиск спокойного
+# места (`best`): полоса ищется без глифов, потому что на тексте ступень
+# завышается и вердикт врал бы. Шаг берётся не меньше толщины полосы — иначе
+# соседние пробы меряли бы одно и то же, и «спокойно» засчитывалось бы трижды.
+IMAGE_SEAM_SCAN = 96
+
+# Цветовые литералы разметки: hex (#rgb/#rgba/#rrggbb/#rrggbbaa) и rgb()/rgba();
+# альфа у hex отбрасывается, функциональные сводятся к тем же '#rrggbb'.
+# Именованных цветов и дробных значений тут намеренно нет: контракт тону
+# держится на hex-литералах, снятых с картинки.
+_LITERAL_RE = re.compile(r'#([0-9a-fA-F]{3,8})\b|rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)', re.IGNORECASE)
 
 
 def image_measure(path: str, box: tuple = None, top: int = 0) -> dict:
@@ -142,6 +155,53 @@ def image_audit(path: str, grid: tuple = (3, 3)) -> dict:
     return {'zones': zones, 'edges': edges, 'tones': tones, 'warnings': warnings}
 
 
+def image_diff_zones(path_a: str, path_b: str, grid: tuple = (3, 3),
+                     tol: int = IMAGE_AUDIT_FLAG) -> dict:
+    """
+    Сравнить два кадра зона-к-зоне: один ли тон там, где сверяют окно замера.
+
+    Историческая грабля: «починили контраст» меряют двумя вызовами
+    `image_measure` и вычитают числа в голове — так же легко вычесть
+    не то окно, как и не так. Инструмент обходит сетку на двух кадрах
+    сразу и вердикты отдаёт готовыми. Окна — доли кадра, поэтому кадром
+    другой высоты (свой статус-бар, другой Android) не собьёт координатой,
+    но и не сравнит: доли считают по каждому кадру свою арифметику.
+
+    Args:
+        path_a: первый кадр (например, эталонный скриншот).
+        path_b: второй кадр (напр. снимок с эмулятора после правки).
+        grid: разбивка `(столбцы, строки)`; по умолчанию 3x3, как в `image_audit`.
+        tol: яркостная разница, с которой зона считается «не как в эталоне»
+            (та же ступень восприятия, `IMAGE_AUDIT_FLAG`).
+
+    Returns:
+        {'zones': [{'box': (x0,y0,x1,y1) долями, 'a', 'b': яркости мод зон,
+                    'delta': a−b, 'edge': abs(delta) ≥ tol}],
+         'warnings': [] при едином тоне кадров, иначе — в каких зонах кадры
+         различаются; окна — доли каждого кадра, арифметика vw→px не нужна.
+    """
+    img_a, img_b = _load(path_a), _load(path_b)
+    cols, rows = grid
+    if cols < 1 or rows < 1:
+        raise ValueError(f'grid: ждём хотя бы 1x1, пришло {cols}x{rows}')
+    zones = []
+    for r in range(rows):
+        for c in range(cols):
+            box = (c / cols, r / rows, (c + 1) / cols, (r + 1) / rows)
+            la = _luma(Counter(_window(img_a, box)).most_common(1)[0][0])
+            lb = _luma(Counter(_window(img_b, box)).most_common(1)[0][0])
+            zones.append({'box': tuple(round(v, 3) for v in box),
+                          'a': la, 'b': lb, 'delta': la - lb,
+                          'edge': abs(la - lb) >= tol})
+    warnings = []
+    diff = [i + 1 for i, z in enumerate(zones) if z['edge']]
+    if diff:
+        warnings.append(f'кадры различаются в {len(diff)} зонах: '
+                        f'{", ".join(str(i) for i in diff)} — '
+                        f'окно замера бери внутри той области, под которую подгоняешь')
+    return {'a': path_a, 'b': path_b, 'zones': zones, 'warnings': warnings}
+
+
 def image_match(path: str, target, out: str = '', backup: str = '',
                 box: tuple = None) -> dict:
     """
@@ -197,7 +257,7 @@ def image_match(path: str, target, out: str = '', backup: str = '',
 
 
 def image_seam(path: str, pos: int, at: int = None, axis: str = 'x',
-               span: int = 24, band: int = 6) -> dict:
+               span: int = 24, band: int = 6, best: bool = False) -> dict:
     """
     Проверить шов: одно ли это фон по обе стороны границы `pos` или виден край.
 
@@ -218,23 +278,133 @@ def image_seam(path: str, pos: int, at: int = None, axis: str = 'x',
         axis: 'x' или 'y'.
         span: ширина каждой из сравниваемых полос вдоль оси.
         band: толщина профильной полосы поперёк оси; выбирать место без текста.
+        best: не верить одному `at`, а перебрать полосу по всей длине (шагом
+            `at` пренебречь) и решить по самой спокойной позиции: на глифах
+            ступень завышается, и один неудачный `at` объявил бы шов там,
+            где его нет.
 
     Returns:
         {'a': яркость полосы до границы, 'b': после, 'delta': a−b,
          'max_step': самый большой скачок между соседними пикселями
          вблизи границы — он решает вердикт, 'edge': True, если он
          ≥ IMAGE_SEAM_STEP; для отладки — 'profile_max' по всему профилю
-         и сам 'profile' (яркости от pos−span до pos+span)}.
+         и сам 'profile' (яркости от pos−span до pos+span); при best
+         добавлены 'at' — выбранная позиция и 'agree'/'scanned' — сколько
+         проб дали тот же вердикт (стойкость: ступенька текста уходит,
+         настоящая — нет).
     """
     img = _load(path)
-    w, h = img.size
     if axis not in ('x', 'y'):
         raise ValueError(f"axis: ждём 'x' или 'y', пришло {axis!r}")
     pos = int(pos)
-    along, across = (w, h) if axis == 'x' else (h, w)
+    along, across = (img.size if axis == 'x' else (img.size[1], img.size[0]))
     if not 0 < pos < along:
         raise ValueError(f'pos={pos} вне кадра по оси {axis} (0..{along})')
-    mid = min(max(0, int(at) if at is not None else across // 2), across - 1)
+    if not best:
+        mid = min(max(0, int(at) if at is not None else across // 2), across - 1)
+        return _seam_measure(img, pos, mid, axis, span, band)
+    return _seam_scan(img, pos, axis, span, band)
+
+
+def image_rect_seams(path: str, rect, tol: int = IMAGE_SEAM_STEP,
+                     span: int = 24, band: int = 6) -> dict:
+    """
+    Проверить швы прямоугольника целиком: все четыре его края одним вызовом.
+
+    Плоский CSS-слой (подложка, крышка запечённого текста) невидим только
+    тогда, когда стык не читается ни с одной стороны; шов на одном краю —
+    это уже пятно с видимым краем. Прямоугольник берут из
+    `adb_cdp_element_rect` (запись `screen`): она знает экранные координаты
+    элемента с поправкой на статус-бар, своей арифметики vw→px здесь нет.
+    Полосу каждой стороны ищут спокойную, как `best` у `image_seam`: на
+    глифах ступень завышается и ни за что объявила бы сторону швом.
+
+    Args:
+        path: картинка или снимок экрана (физические пиксели).
+        rect: прямоугольник — словарь {'x','y','w','h'} (запись `screen`
+            из `adb_cdp_element_rect`) или кортеж (x, y, w, h).
+        tol: ступень яркости, с которой край читается глазом как край
+            (по умолчанию `IMAGE_SEAM_STEP`).
+        span: ширина сравниваемых полос вдоль стороны.
+        band: толщина профильной полосы поперёк стороны.
+
+    Returns:
+        {'file': путь, 'rect': нормализованный {'x','y','w','h'},
+         'ok': True, если ни один край не читается краем,
+         'sides': {'left'/'right'/'top'/'bottom': {'at', 'a', 'b',
+         'max_step', 'edge', 'agree'} — или {'skip': ...}, если сторона
+         лежит ровно на краю кадра: сравнивать там не с чем}.
+    """
+    img = _load(path)
+    w, h = img.size
+    if isinstance(rect, dict):
+        x, y = int(rect['x']), int(rect['y'])
+        rw, rh = int(rect['w']), int(rect['h'])
+    else:
+        x, y, rw, rh = (int(v) for v in rect)
+    if rw <= 0 or rh <= 0:
+        raise ValueError(f'размер прямоугольника {rw}×{rh}: мерить нечего')
+    sides = {}
+    for name, (pos, axis, span0, span1) in {
+            'left': (x, 'x', y, y + rh), 'right': (x + rw, 'x', y, y + rh),
+            'top': (y, 'y', x, x + rw), 'bottom': (y + rh, 'y', x, x + rw)}.items():
+        along = w if axis == 'x' else h
+        if not 0 < pos < along:
+            sides[name] = {'skip': 'сторона ровно по краю кадра — сравнивать не с чем'}
+            continue
+        across = h if axis == 'x' else w
+        # полосу ищем внутри прямоугольника (с отступом 2 px от его углов):
+        # за ним меряет уже не этот слой, а соседний.
+        lo, hi = max(0, min(span0 + 2, across)), min(max(span1 - 2, 0), across)
+        sides[name] = _seam_scan(img, pos, axis, span, band, lo, hi, tol=tol)
+    return {'file': path, 'rect': {'x': x, 'y': y, 'w': rw, 'h': rh},
+            'ok': all(not s.get('edge') for s in sides.values()), 'sides': sides}
+
+
+def image_literals(path: str) -> dict:
+    """
+    Инвентарь цветов разметки: каждый литерал текста с его яркостью.
+
+    Тоновый контракт обязывает после `image_match` перемерять все тоновые
+    литералы CSS — до этого это grep по файлу и глаза: инвентарь выдаёт
+    каждый уникальный цвет, его яркость Rec.601 и сколько раз он встретился,
+    так что «что заявлено в CSS и не уехал ли тон» — одна ведомость.
+
+    Args:
+        path: HTML- или CSS-файл.
+
+    Returns:
+        {'file': путь, 'colors': [{'color': '#rrggbb', 'luma': 0–255,
+         'count': сколько раз}]} по убыванию числа встреч; 4- и 8-значные
+        литералы возвращаются без альфа-канала, `rgb()`/`rgba()` сведены
+        к тем же '#rrggbb', что и hex.
+    """
+    text = Path(path).read_text(encoding='utf-8', errors='replace')
+    found = Counter()
+    for match in _LITERAL_RE.finditer(text):
+        if match.group(1):
+            body = match.group(1).lower()
+            if len(body) in (3, 4):
+                body = ''.join(c * 2 for c in body[:3])
+            elif len(body) in (6, 8):
+                body = body[:6]
+            else:
+                continue  # не цвет: '#12345' — ни 3, ни 6 знаков
+        else:
+            body = '%02x%02x%02x' % tuple(int(g) for g in match.groups()[1:])
+        found['#' + body] += 1
+    colors = [{'color': c,
+               'luma': _luma((int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16))),
+               'count': n} for c, n in found.items()]
+    colors.sort(key=lambda c: (-c['count'], c['luma'], c['color']))
+    return {'file': path, 'colors': colors}
+
+
+def _seam_measure(img: Image.Image, pos: int, mid: int, axis: str, span: int,
+                  band: int, tol: int = IMAGE_SEAM_STEP) -> dict:
+    """Профиль через границу и вердикт для проверенного места полосы."""
+    w, h = img.size
+    along, across = (w, h) if axis == 'x' else (h, w)
     lo, hi = max(0, mid - band // 2), min(across, mid + band // 2 + 1)
     start, stop = max(0, pos - span), min(along, pos + span)
     if axis == 'x':
@@ -246,10 +416,34 @@ def image_seam(path: str, pos: int, at: int = None, axis: str = 'x',
     near = [s for i, s in enumerate(steps)
             if pos - IMAGE_SEAM_WINDOW <= start + i < pos + IMAGE_SEAM_WINDOW]
     max_step = max(near, default=0)
-    return {'a': _median_luma_profile(profile[:k]), 'b': _median_luma_profile(profile[k:]),
+    return {'at': mid, 'a': _median_luma_profile(profile[:k]),
+            'b': _median_luma_profile(profile[k:]),
             'delta': _median_luma_profile(profile[:k]) - _median_luma_profile(profile[k:]),
             'max_step': max_step, 'profile_max': max(steps, default=0),
-            'profile': profile, 'edge': max_step >= IMAGE_SEAM_STEP}
+            'profile': profile, 'edge': max_step >= tol}
+
+
+def _seam_scan(img: Image.Image, pos: int, axis: str, span: int, band: int,
+               lo: int = None, hi: int = None, tol: int = IMAGE_SEAM_STEP) -> dict:
+    """
+    Найти спокойное место полосы и решить по нему.
+
+    Положения перебираются поперёк оси в пределах [lo, hi) (по умолчанию —
+    весь кадр), шагом не меньше толщины полосы; спокойное место выбирается
+    по ступени в окне вердикта, при равенстве — ближе к центру. Доля проб
+    с тем же вердиктом — про стойкость: ступенька текста уходит, настоящая — нет.
+    """
+    w, h = img.size
+    across = h if axis == 'x' else w
+    lo, hi = (band // 2, across - band // 2) if lo is None else (lo, hi)
+    step = max(band, (hi - lo) // IMAGE_SEAM_SCAN or band)
+    probes = [_seam_measure(img, pos, mid, axis, span, band, tol=tol)
+              for mid in range(lo, max(lo + 1, hi), step)]
+    center = (lo + hi) // 2
+    best = min(probes, key=lambda p: (p['max_step'], abs(p['at'] - center)))
+    best['agree'] = sum(1 for p in probes if p['edge'] == best['edge'])
+    best['scanned'] = len(probes)
+    return best
 
 
 def _load(path: str) -> Image.Image:
@@ -356,9 +550,12 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Замер яркости фона, тоновая подгонка по эталону, аудит окон, проверка швов.')
-    parser.add_argument('command', choices=['measure', 'match', 'audit', 'seam'])
-    parser.add_argument('files', nargs='+', help='картинки (для seam — одна)')
+        description='Замер яркости фона, тоновая подгонка по эталону, аудит окон, '
+                    'проверка швов, сравнение кадров, инвентарь цветов разметки.')
+    parser.add_argument('command',
+                        choices=['measure', 'match', 'audit', 'seam',
+                                 'diff', 'rect-seams', 'literals'])
+    parser.add_argument('files', nargs='+', help='картинки (для seam/rect-seams — одна, для diff — две)')
     parser.add_argument('--target', default='', help='эталон для match: файл или яркость 0-255')
     parser.add_argument('--out', default='', help='каталог для match; пусто — поверх')
     parser.add_argument('--backup', default='', help='каталог нетронутых оригиналов (идемпотентность)')
@@ -369,6 +566,10 @@ if __name__ == '__main__':
     parser.add_argument('--axis', default='x', choices=['x', 'y'], help='seam: ось границы')
     parser.add_argument('--span', type=int, default=24, help='seam: ширина полос вдоль оси')
     parser.add_argument('--band', type=int, default=6, help='seam: толщина профиля поперёк оси')
+    parser.add_argument('--best', action='store_true',
+                        help='seam: перебрать полосу и решить по спокойному месту (не верить одному --at)')
+    parser.add_argument('--rect', default='',
+                        help='rect-seams: прямоугольник x,y,w,h (запись screen из adb_cdp element-rect)')
     ns = parser.parse_args()
     box = tuple(float(v) for v in ns.box.split(',')) if ns.box else None
 
@@ -396,11 +597,45 @@ if __name__ == '__main__':
             if ns.pos is None:
                 raise SystemExit('нужен --pos: координата границы, по которой проверяем стык')
             for f in ns.files:
-                s = image_seam(f, ns.pos, at=ns.at, axis=ns.axis, span=ns.span, band=ns.band)
+                s = image_seam(f, ns.pos, at=ns.at, axis=ns.axis, span=ns.span,
+                               band=ns.band, best=ns.best)
                 verdict = (f'край виден: ступень {s["max_step"]}' if s['edge']
                            else 'стыка не видно')
-                print(f'{f}: {ns.axis}={ns.pos} — до {s["a"]}, после {s["b"]} '
+                if ns.best:
+                    verdict += f' (согласно {s["agree"]}/{s["scanned"]} проб)'
+                print(f'{f}: {ns.axis}={ns.pos} at={s["at"]} — до {s["a"]}, после {s["b"]} '
                       f'(Δ {s["delta"]}, max_step {s["max_step"]}) — {verdict}')
+        elif ns.command == 'diff':
+            if len(ns.files) != 2:
+                raise SystemExit('нужно ровно два кадра: эталон и проверяемый')
+            d = image_diff_zones(ns.files[0], ns.files[1])
+            print(f'{ns.files[0]} vs {ns.files[1]}:')
+            for i, z in enumerate(d['zones']):
+                print(f'  зона {i + 1} {z["box"]}: L {z["a"]:>3} vs {z["b"]:>3} '
+                      f'(Δ {z["delta"]:>3}) {"≠" if z["edge"] else "="}')
+            for w in d['warnings']:
+                print(f'  ВНИМАНИЕ: {w}')
+        elif ns.command == 'rect-seams':
+            if not ns.rect:
+                raise SystemExit('нужен --rect: x,y,w,h (запись screen из adb_cdp element-rect)')
+            rect = tuple(int(v) for v in ns.rect.split(','))
+            if len(rect) != 4:
+                raise SystemExit('--rect: ждём x,y,w,h')
+            for f in ns.files:
+                r = image_rect_seams(f, rect)
+                print(f'{f}: rect {r["rect"]} — ' + ('швов нет' if r['ok'] else 'ЕСТЬ ШОВ'))
+                for name, s in r['sides'].items():
+                    if 'skip' in s:
+                        print(f'  {name}: {s["skip"]}')
+                    else:
+                        verdict = (f'край виден: ступень {s["max_step"]}' if s['edge']
+                                   else 'стыка не видно')
+                        print(f'  {name}: at={s["at"]} — до {s["a"]}, после {s["b"]} '
+                              f'(max_step {s["max_step"]}, согласно {s["agree"]}/{s["scanned"]}) — {verdict}')
+        elif ns.command == 'literals':
+            for f in ns.files:
+                for c in image_literals(f)['colors']:
+                    print(f'{f}: {c["color"]} L={c["luma"]:>3} ×{c["count"]}')
         else:
             if not ns.target:
                 raise SystemExit('нужен --target: файл эталона или яркость числом')

@@ -196,11 +196,12 @@ python -m adb_.adb_log crash
 | `adb_cdp_capture_all('package', urls, 'out', serial='') -> list` | пачка: открыть каждый адрес, дождаться дорисовки, снять экран PNG в каталог (имя — из адреса); сбой одного адреса не гонит пачку |
 | `adb_cdp_element_at(x, y, url_part='') -> dict` | элемент под экранными координатами снимка: `{tag, id, cls, text, href, rect, chain}`; деление на `devicePixelRatio` — внутри |
 | `adb_cdp_element_rect('селектор', url_part='', serial='') -> dict` | обратный ход: прямоугольники всех элементов по CSS-селектору — `{count, dpr, origin, items: [{tag, cls, text, css, screen}]}`; `screen` — уже пиксели снимка, с поправкой на начало WebView на экране |
+| `adb_cdp_element_shot('селектор', 'out', url_part='', serial='') -> dict` | выкройка элемента: `Page.captureScreenshot` с clip по первому совпадению — `{file, rect}`; `out` с `/` на конце — имя из селектора; кадр в физических пикселях (`captureBeyondViewport` домножает на dpr, `scale` держат 1) |
 
 CLI: `python -m adb_.adb_cdp connect com.example.app | pages | eval 'location.href' |
 navigate https://localhost/menu.html | capture com.example.app shots/ <url...> |
-element 540 300 | element-rect .tab`. Транспорт — `adb_ws` (WebSocket на stdlib):
-фрагментация длинных ответов и ping/pong уже учтены в нём.
+element 540 300 | element-rect .tab | element-shot .tab shots/`. Транспорт — `adb_ws`
+(WebSocket на stdlib): фрагментация длинных ответов и ping/pong уже учтены в нём.
 
 `element_rect` нужна, когда элементом надо померить картинку: «где на снимке
 лежит эта крышка/кнопка/поле», чтобы загнать координаты в `image_seam` или
@@ -217,6 +218,12 @@ WebView начинается не с верха снимка, а ниже ста
 Навигация асинхронна — `Page.navigate` отвечает до смены страницы, — поэтому
 ходят через `adb_cdp_navigate`, иначе следующий шаг отработает по старой странице
 и примет её за новую.
+
+`element_shot` бережёт от ручного кроя: вместо «снять полный экран и вычесть
+статус-бар» она отдаёт кадр ровно по элементу — его меряют `image_seam`,
+`image_rect_seams` и `image_audit` (`image_tooling.md`, §5–6). Chrome берёт
+целые пиксели с округлением вниз, поэтому `rect` в ответе описывает записанный
+кадр (IHDR png), а не теоретический `css×dpr` — мерить надо по нему.
 
 ## Грабли
 
