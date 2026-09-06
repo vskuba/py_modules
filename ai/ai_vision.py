@@ -20,9 +20,11 @@ RGB-JPEG — `ai_vision_normalize`, и только так уходит в мо�
 Запрос сырой: pydantic-ai здесь избыточен — один вопрос к одной картинке,
 одно POST, одно поле ответа.
 """
+import argparse
 import asyncio
 import base64
 import io
+import sys
 
 import httpx
 from PIL import Image
@@ -158,3 +160,35 @@ def ai_vision_describe_wait(image: bytes, prompt: str = '', model_name: str = ''
     когда чужой уже крутится — там прямой `await ai_vision_describe(...)`.
     """
     return asyncio.run(ai_vision_describe(image, prompt, model_name, max_tokens, timeout))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Прочитать картинку с диска vision-моделью.',
+        epilog='вопрос идёт последним, ключи — до пути: '
+               'describe --tokens 400 снимок.png что на экране')
+    parser.add_argument('command', choices=['describe', 'normalize'])
+    parser.add_argument('path', help='файл изображения; `-` — байты со stdin')
+    parser.add_argument('--out', default='', help='куда сохранить JPEG (normalize)')
+    parser.add_argument('--model', default='', help='модель с префиксом сервиса, например gx10/qwen-large')
+    parser.add_argument('--tokens', type=int, default=2500, help='потолок ответа')
+    parser.add_argument('--timeout', type=float, default=180.0, help='секунды на весь запрос')
+    parser.add_argument('prompt', nargs='*', help='вопрос о картинке (describe)')
+    ns = parser.parse_args()
+
+    raw = sys.stdin.buffer.read() if ns.path == '-' else open(ns.path, 'rb').read()
+
+    try:
+        if ns.command == 'normalize':
+            jpeg = ai_vision_normalize(raw)
+            if ns.out:
+                open(ns.out, 'wb').write(jpeg)
+                print(f'{ns.out}: {len(jpeg)} байт JPEG')
+            else:
+                sys.stdout.buffer.write(jpeg)
+        else:
+            print(ai_vision_describe_wait(raw, ' '.join(ns.prompt),
+                                          model_name=ns.model,
+                                          max_tokens=ns.tokens, timeout=ns.timeout))
+    except (RuntimeError, ValueError, OSError) as err:
+        raise SystemExit(f'ошибка: {err}')
