@@ -252,6 +252,46 @@ def pdf_print_html(html_path: str, out_pdf: str, chrome: str | None = None, time
         raise RuntimeError(f"chrome не записал {out_pdf}")
 
 
+def main() -> None:
+    """CLI: `python -m pdf_.pdf_ info|text|render|diff|whiteout|print …`."""
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(prog="python -m pdf_.pdf_")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("info"); p.add_argument("pdf")
+    p = sub.add_parser("text"); p.add_argument("pdf"); p.add_argument("--page", type=int)
+    p = sub.add_parser("render"); p.add_argument("pdf"); p.add_argument("out_dir"); p.add_argument("--dpi", type=int, default=150)
+    p = sub.add_parser("diff"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--dpi", type=int, default=150); p.add_argument("--out-dir")
+    p = sub.add_parser("whiteout"); p.add_argument("pdf"); p.add_argument("out_png"); p.add_argument("--box", action="append", required=True, help="x,y,w,h в пунктах, начало сверху слева"); p.add_argument("--dpi", type=int, default=300)
+    p = sub.add_parser("print"); p.add_argument("html"); p.add_argument("out_pdf")
+
+    a = parser.parse_args()
+    if a.cmd == "info":
+        print(json.dumps(pdf_info(a.pdf), ensure_ascii=False, indent=1))
+    elif a.cmd == "text":
+        sys.stdout.write(pdf_text(a.pdf, a.page))
+    elif a.cmd == "render":
+        print("\n".join(pdf_render(a.pdf, a.out_dir, dpi=a.dpi)))
+    elif a.cmd == "diff":
+        print(json.dumps(pdf_diff(a.a, a.b, dpi=a.dpi, out_dir=a.out_dir), ensure_ascii=False, indent=1))
+    elif a.cmd == "whiteout":
+        boxes = []
+        for s in a.box:
+            x, y, w, h = (float(v) for v in s.split(","))
+            boxes.append({"x": x, "y": y, "w": w, "h": h})
+        print(pdf_whiteout(a.pdf, a.out_png, boxes, dpi=a.dpi))
+    elif a.cmd == "print":
+        pdf_print_html(a.html, a.out_pdf)
+        print(a.out_pdf)
+
+
+if __name__ == "__main__":
+    main()
+
+
 def _stats(img_a, img_b) -> dict:
     """Пиксельная статистика разницы: максимум по каналам, среднее по L, доля пикселей выше порога."""
     from PIL import ImageChops

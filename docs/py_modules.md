@@ -116,6 +116,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
 | `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
+| `pdf_` | PDF: `pdf_info` (паспорт), `pdf_text`, `pdf_render`, `pdf_diff` (сверка с эталоном), `pdf_whiteout`, `pdf_print_html` (headless Chrome); CLI: `python -m pdf_.pdf_` |
 
 ### Документация
 
