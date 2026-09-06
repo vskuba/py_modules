@@ -21,6 +21,11 @@ glyf), `upem` (единиц на em: 512, 1000, 2048 — все честные),
 3. **Покрытие** — `font_coverage(path, текст)` для всего текста, который
    шрифт должен обслужить; для многоязычных строк — построчно.
 
+Вход у всех функций общий: путь, байты или бинарный поток. Подмножество,
+извлечённое из PDF (`pdf_fonts_extract`), приезжает байтами и сверяется без
+временных файлов; поток читается один раз — для второго вызова нужен новый
+поток или байты.
+
 ## 2. «Это тот же шрифт?»: три проверки по возрастанию стоимости
 
 1. **`font_compare` — контуры.** Набор глифов (без `.notdef`) и совпадение
@@ -35,7 +40,34 @@ glyf), `upem` (единиц на em: 512, 1000, 2048 — все честные),
 3. **`font_render_text` + глаз** — рядом положить PNG, смотреть кернинг и
    конкретные глифы.
 
-## 3. Чек-лист сверки шрифта с мастером
+## 3. Синтетический шрифт для теста — FontBuilder за 15 строк
+
+Тесту не нужен настоящий шрифт: минимальную сборку из двух глифов
+(`.notdef`, `A`) FontBuilder делает на лету — образцы живые,
+`tests/test_font_tooling.py::_make_ttf`. Важные ручки — `upem` и множитель
+контура: ровно те оси, по которым разъезжаются мастер и подмножество:
+
+```python
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+pen = TTGlyphPen(None)
+pen.moveTo((100, 0)); pen.lineTo((100, 700)); pen.lineTo((400, 700)); pen.closePath()
+fb = FontBuilder(upem, isTTF=True)
+fb.setupGlyphOrder([".notdef", "A"])
+fb.setupCharacterMap({65: "A"})
+fb.setupGlyf({".notdef": TTGlyphPen(None).glyph(), "A": pen.glyph()})
+fb.setupHorizontalMetrics({65: (500, 0), ".notdef": (250, 0)})
+fb.setupHorizontalHeader(ascent=800, descent=-200)
+fb.setupNameTable({"familyName": name, "styleName": "Regular"})
+fb.setupPost()
+fb.save(path)
+```
+
+CFF-вариант — тот же каркас с `isTTF=False` и `CFFCharstringPen`
+(образец — `_make_cff` в том же файле).
+
+## 4. Чек-лист сверки шрифта с мастером
 
 1. `font_info` обоих: формат, upem, имена — расхождения запомнить.
 2. `font_coverage` мастер-файлом по всему целевому тексту.
@@ -63,6 +95,8 @@ glyf), `upem` (единиц на em: 512, 1000, 2048 — все честные),
    шрифта; вывод по `postscript`/`family` и контурам, не по имени.
 6. **Число глифов ≠ покрытие**: у сабсета глифы могут быть, а cmap — нет
    (и наоборот); проверять `font_coverage` именно по целевому тексту.
+7. **Один и тот же `BytesIO` дважды не читается** — второй вызов получит
+   пустой шрифт; между вызовами — новый поток или байты.
 
 ## Что читать рядом
 

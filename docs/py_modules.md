@@ -115,9 +115,9 @@ assert a is b, 'модуль загружен дважды — разное со
 | `translator` | `translate_text` |
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
-| `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
-| `pdf_` | PDF: `pdf_info` (паспорт), `pdf_text`, `pdf_render`, `pdf_diff` (сверка с эталоном), `pdf_whiteout`, `pdf_print_html` (headless Chrome); CLI: `python -m pdf_.pdf_` |
-| `font_` | шрифты: `font_info` (паспорт), `font_coverage`, `font_compare` (нормированные контуры), `font_render_text`, `font_text_diff`; CLI: `python -m font_.font_` |
+| `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. Эмулятор без телефона — `adb_emu` (поднять AVD и дождаться настоящей загрузки, не давая экрану спать, см. `mobile_emulator.md`). Содержимое WebView изнутри — `adb_cdp` поверх транспорта `adb_ws` (см. `mobile_control.md`, § 8). У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
+| `pdf_` | PDF: `pdf_info` (паспорт), `pdf_text`, `pdf_render`, `pdf_diff` (сверка с эталоном, окна с ключом `"page"`), `pdf_whiteout`, `pdf_print_html` (headless Chrome), `pdf_fonts_extract` (вложенные шрифты байтами — прямой вход для `font_`); CLI: `python -m pdf_.pdf_` |
+| `font_` | шрифты: `font_info` (паспорт), `font_coverage`, `font_compare` (нормированные контуры), `font_render_text`, `font_text_diff`; вход — путь, байты или поток; CLI: `python -m font_.font_` |
 
 ### Документация
 
@@ -176,6 +176,10 @@ py_modules/qdrant_/qdrant_.py     ->  qdrant_search()
 - **Знание о проекте.** Одна проектная подробность — и модуль перестал быть переносимым
   для всех остальных. Нужно и общее, и частное: общая часть остаётся здесь, частное
   уходит в проект и импортирует её.
+- **Связность между namespace-папками.** Папки друг друга не импортируют: общего кода
+  нет, есть копии (`_stats` в `pdf_` и `_image_stats` в `font_` — один и тот же расчёт
+  по разные стороны границы). Дублирование дешевле связности, **но копии считай:
+  третья — сигнал выносить** в отдельный общий модуль, а не множить четвёртую.
 
 ## Грабли
 

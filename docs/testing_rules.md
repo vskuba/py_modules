@@ -95,7 +95,26 @@ test_llm_reasoning_disable_falls_back_to_minimal  # llm.reasoning_disable
    доказанным, пока прогон был единственный. Перед прогоном машинно проверить, что
    соседа нет: `pgrep -af pytest`.
 
-## 6. Чек-лист «готово»
+## 6. Тест, запускающий подпроцесс
+
+`pythonpath` из `pyproject.toml` действует **только внутри процесса pytest**:
+подпроцесс его не наследует (проверено живьём). Тест, который зовёт
+`python -m пакет.модуль`, обязан передать пути поиска сам, иначе локально он
+зелёный, а в свежем окружении падает на `ModuleNotFoundError`. Готовое
+окружение собирает `project_.project_env()` — руками `PYTHONPATH` не склеивать.
+Если `project_` под рукой нет, короткий узор:
+
+```python
+root = os.path.dirname(os.path.dirname(os.path.abspath(__import__("pdf_").__file__)))
+subprocess.run([sys.executable, "-m", "pdf_.pdf_", "info", path],
+               capture_output=True, text=True,
+               env={**os.environ, "PYTHONPATH": root})
+```
+
+Корень считается от файла модуля, а не от `cwd`: рабочий каталог запуска никто
+не гарантирует.
+
+## 7. Чек-лист «готово»
 
 - [ ] модуль импортируется
 - [ ] `grep` по старым именам — пусто
@@ -115,3 +134,4 @@ test_llm_reasoning_disable_falls_back_to_minimal  # llm.reasoning_disable
 5. **Проверено только под админом** — 403 находит пользователь
 6. **Credentials в коде тестов** — секрет в репозитории навсегда
 7. **Пул соединений не закрыт** — рабочее приложение остаётся без соединений
+8. **Подпроцесс теста без PYTHONPATH** — зелёный под pytest, красный в свежем окружении
