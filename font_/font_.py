@@ -65,5 +65,54 @@ def font_coverage(path: str, text: str) -> list[str]:
     return missing
 
 
+def font_compare(path_a: str, path_b: str) -> dict:
+    """
+    Сверка двух шрифтов: набор глифов (без `.notdef`) и совпадение контуров
+    общих глифов, нормированных по unitsPerEm каждого.
+
+    Нормировка — суть функции: подмножество из PDF часто несёт те же контуры,
+    отмасштабированные вместе со сменой upem (512 -> 2048, координаты x4);
+    без деления на upem сравнение показало бы различие всего.
+
+    Форматы (`formats`) разных библиотек рисуют кривые по-разному
+    (glyf — квадратичные, CFF — кубические): при разных форматах поле
+    `outlines_differ` не читается, спор решается `font_text_diff` по растру.
+    """
+    from fontTools.pens.recordingPen import RecordingPen
+    from fontTools.ttLib import TTFont
+
+    a, b = TTFont(path_a), TTFont(path_b)
+    upem_a, upem_b = a["head"].unitsPerEm, b["head"].unitsPerEm
+    names_a = set(a.getGlyphOrder()) - {".notdef"}
+    names_b = set(b.getGlyphOrder()) - {".notdef"}
+    common = sorted(names_a & names_b)
+
+    differ = []
+    for name in common:
+        pa, pb = RecordingPen(), RecordingPen()
+        a.getGlyphSet()[name].draw(pa)
+        b.getGlyphSet()[name].draw(pb)
+        if _norm(pa.value, upem_a) != _norm(pb.value, upem_b):
+            differ.append(name)
+
+    return {
+        "count_a": len(names_a), "count_b": len(names_b),
+        "only_a": sorted(names_a - names_b), "only_b": sorted(names_b - names_a),
+        "common": len(common), "outlines_differ": differ,
+        "upems": [upem_a, upem_b], "formats": [_format(a), _format(b)],
+    }
+
+
 def _format(tt) -> str:
     return "CFF" if "CFF " in tt else "TrueType"
+
+
+def _norm(value, upem: int):
+    """Нормировка записей пера к единицам upem: координаты /upem, остальное как есть."""
+    def walk(obj):
+        if isinstance(obj, tuple):
+            return tuple(walk(v) for v in obj)
+        if isinstance(obj, (int, float)):
+            return round(obj / upem, 4)
+        return obj
+    return [(op, walk(args)) for op, args in value]
