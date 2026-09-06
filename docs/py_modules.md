@@ -115,7 +115,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `translator` | `translate_text` |
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
-| `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. Эмулятор без телефона — `adb_emu` (поднять AVD и дождаться настоящей загрузки, не давая экрану спать, см. `mobile_emulator.md`). Содержимое WebView изнутри — `adb_cdp` поверх транспорта `adb_ws` (см. `mobile_control.md`, § 8). У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
+| `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. Шаг с проверкой — `adb_step` (действие, покой экрана, отчёт «что изменилось»), замер и сравнение — `adb_state`, вырезка в натуральную величину — `adb_crop`, см. `mobile_steps.md`. Эмулятор без телефона — `adb_emu` (поднять AVD и дождаться настоящей загрузки, не давая экрану спать, см. `mobile_emulator.md`). Содержимое WebView изнутри — `adb_cdp` поверх транспорта `adb_ws` (см. `mobile_control.md`, § 8). У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
 | `pdf_` | PDF: `pdf_info` (паспорт), `pdf_text`, `pdf_render`, `pdf_diff` (сверка с эталоном, окна с ключом `"page"`), `pdf_whiteout`, `pdf_print_html` (headless Chrome), `pdf_fonts_extract` (вложенные шрифты байтами — прямой вход для `font_`); CLI: `python -m pdf_.pdf_` |
 | `font_` | шрифты: `font_info` (паспорт), `font_coverage`, `font_compare` (нормированные контуры), `font_render_text`, `font_text_diff`; вход — путь, байты или поток; CLI: `python -m font_.font_` |
 
@@ -202,6 +202,12 @@ py_modules/qdrant_/qdrant_.py     ->  qdrant_search()
 | Разовый прогон кода и запрос к базе в окружении проекта | `project_runtime.md` |
 | Посмотреть на экран телефона: снимок, зрение, `scrcpy` | `mobile_device.md` |
 | Нажать, ввести, запустить приложение на телефоне | `mobile_control.md` |
+| Шаг с проверкой, замер экрана, вырезка в натуральную величину | `mobile_steps.md` |
+| Координата уехала: px/dp, даунсемплинг просмотрщика | `mobile_hardware.md` |
+| Поднять эмулятор вместо телефона | `mobile_emulator.md` |
+| PDF: осмотр, сверка с эталоном, печать HTML | `pdf_tooling.md` |
+| Шрифт: паспорт, покрытие, сверка подмножества с мастером | `font_tooling.md` |
+| Схема базы, миграции; дамп и восстановление | `database_rules.md`, `backup_rules.md` |
 | Как завести новый проект на этом слое | `new_project.md` |
 | Namespace, дробление файлов, приватные внизу | `code_rules.md` |
 | Хранение времени и пояс показа | `datetime_rules.md` |

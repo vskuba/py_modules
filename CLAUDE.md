@@ -28,7 +28,7 @@ namespace-папок, которые проекты импортируют на�
 Свод универсальных правил лежит в `docs/` — это **единственный источник**, в проекты он
 приходит симлинком `.claude/docs-common -> ../py_modules/docs`. Оглавление — `docs/readme.md`.
 
-Перед правкой кода здесь читать:
+Перед правкой **любого** кода здесь читать:
 
 | Файл | Зачем |
 |------|-------|
@@ -36,6 +36,34 @@ namespace-папок, которые проекты импортируют на�
 | `docs/py_modules.md` | границы слоя, двойной импорт, осторожность с сигнатурами |
 | `docs/tool_rules.md`, §1 | куда писать код: общая библиотека или инструменты проекта |
 | `docs/docs_rules.md` | формат документации, если правится `docs/` |
+
+Дальше — по тому, какой namespace правится. Документа с описанием «как этот модуль
+устроен и обо что об него уже спотыкались» может не быть — но если он есть, читать
+его обязательно, иначе грабли собираются заново:
+
+| Правится | Читать |
+|----------|--------|
+| `adb_/adb_.py` | `docs/mobile_device.md` — снимок, зрение, грабли скриншотов |
+| `adb_/adb_ui.py`, `adb_input`, `adb_app`, `adb_log` | `docs/mobile_control.md` — карта экрана, нажатия, журнал |
+| `adb_/adb_step.py`, `adb_state`, `adb_crop` | `docs/mobile_steps.md` — шаг с проверкой, замер, вырезка |
+| `adb_/adb_cdp.py`, `adb_ws` | `docs/mobile_control.md`, §8 — WebView изнутри через CDP |
+| `adb_/adb_emu.py` | `docs/mobile_emulator.md` — жизненный цикл AVD, сон экрана, пиксельные базы |
+| любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
+| `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
+| `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
+| `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
+| `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
+| `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
+| `config/`, `setting_/` | `docs/env_config_rules.md` |
+| `logging_/` | `docs/observability_rules.md` |
+| `datetime_/` | `docs/datetime_rules.md` |
+| `auth_/` | `docs/auth_rules.md` |
+| `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
+| `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
+
+Полное оглавление — `docs/readme.md`. Три файла оттуда к правкам здесь отношения не
+имеют, они про устройство проекта-потребителя: `new_project.md`, `frontend_rules.md`,
+`deploy_rules.md`. `testing_rules.md` — тоже про проект: сюита живёт там (см. «Команды»).
 
 Короткая выжимка `code_rules.md` — то, что нарушают чаще всего:
 
@@ -55,14 +83,31 @@ namespace-папок, которые проекты импортируют на�
 
 ## Команды
 
-Сборки, линтера и сюиты тестов в репозитории нет — ни `pyproject.toml`, ни `requirements.txt`,
-ни `tests/`. Код проверяют проекты-потребители своими интеграционными сюитами. Проверка правки
-**здесь** — импорт модуля и вызов его CLI.
+Сборки, линтера и сюиты тестов в репозитории нет — ни `pyproject.toml`, ни `tests/`. Код
+проверяют проекты-потребители своими интеграционными сюитами. Проверка правки **здесь** —
+импорт модуля и вызов его CLI.
 
 ```bash
 .venv/bin/python -c "from adb_.adb_ui import adb_ui_find"     # импорт: зависимости на месте
 PYTHONPATH=. .venv/bin/python -m ai.ai_vision describe <файл>  # прогон CLI модуля
 ```
+
+### Зависимости
+
+Библиотеки объявлены **здесь**, рядом с кодом, а не угадываются в проекте. Ядро тощее
+сознательно: снимок экрана не должен требовать LLM-стек.
+
+```bash
+pip install -r requirements.txt          # ядро: Pillow, numpy — картинки и пиксельные замеры
+pip install -r requirements-vision.txt   # + зрение через ai_vision (pydantic-ai)
+```
+
+В requirements проекта — одна строка `-r py_modules/requirements.txt`.
+
+⚠️ `pdf_` и `font_` тянут `pypdf`, `pypdfium2`, `fontTools` **лениво, внутри функций**, и
+эти пакеты не объявлены ни в одном requirements — в venv их может не быть (в выкачке
+репозитория на сегодня нет). Импорт модуля при этом проходит, падает только вызов
+функции: `ModuleNotFoundError` из `pdf_info`, а не при `from pdf_.pdf_ import pdf_info`.
 
 CLI есть у модулей, которыми пользуются «руками» (`python -m <пакет>.<модуль> <команда>`):
 
@@ -70,15 +115,26 @@ CLI есть у модулей, которыми пользуются «рука
 |--------|---------|
 | `project_.project_` | `root`, `main-root`, `python`, `env` |
 | `project_.project_run` | `-c` / `-a` / `-m` / `<файл>` / `-` (stdin) |
-| `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format json\|csv]` |
+| `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
 | `ai.ai_vision` | `describe`, `normalize` |
-| `adb_.adb_` | `devices`, `size`, `capture`, `describe` |
+| `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake` |
 | `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait` |
 | `adb_.adb_log` | `read`, `crash`, `clear`, `pid` |
+| `adb_.adb_step` | `tap`, `scroll`, `key`, `text`, `look` |
+| `adb_.adb_state` | `read`, `settle`, `last` |
+| `adb_.adb_crop` | `on`, `box`, `part` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
 | `adb_.adb_cdp` | `connect`, `pages`, `eval`, `navigate` |
+| `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `whiteout`, `print`, `extract` |
+| `font_.font_` | `info`, `coverage`, `compare`, `render`, `textdiff` |
+
+Список сверяется командой — таблица устаревает быстрее кода:
+
+```bash
+grep -rln "__main__" --include=*.py . | grep -v '\.venv\|__pycache__'
+```
 
 Машинные проверки соглашений (вывод обязан быть пустым; полные версии — в
 `docs/code_rules.md`, раздел «Автопроверка»):
@@ -133,12 +189,29 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 
 `config` и `logging_` — фундамент, их импортируют почти все. Обратной зависимости нет.
 Дальше — плоский набор независимых namespace-папок; общего реестра или точки входа не
-существует, проект импортирует нужное напрямую.
+существует, проект импортирует нужное напрямую. Что где лежит:
+
+| Слой | Namespace |
+|------|-----------|
+| Фундамент | `config`, `logging_` |
+| Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_`, `redis_queue`, `qdrant_`, `sqllite3`, `queue_`, `state` |
+| LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/ai_vision`, `mcp_` |
+| Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_` |
+| Утилиты | `project_`, `datetime_`, `json_`, `async_`, `thread_` |
+| Внешнее и файлы | `adb_` (устройство), `pdf_`, `font_`, `translator`, `flux_schnell`, `microphone` |
+
+Назначение каждого — `docs/py_modules.md`, §3; актуальный список — всегда `ls`, а не эта
+таблица.
 
 Тяжёлые зависимости подключаются **лениво, внутри функции**, чтобы соседний модуль не тянул
 чужой стек: `adb_` импортирует `ai.ai_vision` только в момент распознавания (снимок экрана не
 должен требовать pydantic-ai), а `ai_vision` импортирует реестр провайдеров только в момент
-запроса (нормализация JPEG живёт без него).
+запроса (нормализация JPEG живёт без него). По той же схеме `pdf_` берёт `pypdf`/`pypdfium2`,
+а `font_` — `fontTools`: на уровне модуля у них только stdlib.
+
+Цена приёма: **импорт больше не проверяет зависимости** — `from pdf_.pdf_ import pdf_info`
+пройдёт и там, где `pypdf` не стоит. Проверка правки в таком модуле — вызов функции или CLI,
+одного импорта мало (см. «Зависимости»).
 
 ### `ai/` — провайдеры LLM как стратегии
 
