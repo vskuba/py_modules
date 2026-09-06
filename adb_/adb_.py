@@ -127,6 +127,35 @@ def adb_screen_size(serial: str = '') -> tuple[int, int]:
     return int(sizes[-1][0]), int(sizes[-1][1])
 
 
+def adb_device_info(serial: str = '') -> dict:
+    """
+    Паспорт устройства: модель, версия Android, разрешение, плотность.
+
+    Снимается живьём перед любым расчётом dp/px и нигде не зашивается: числа
+    прошлой сессии или чужого телефона молча становятся ложью, а override
+    разрешения пользователь включает когда хочет, даже под работающим кодом
+    (`mobile_hardware.md`).
+
+    Args:
+        serial: устройство; пусто — единственное подключённое.
+
+    Returns:
+        `{'model', 'android', 'sdk', 'width', 'height', 'density'}`: размеры и
+        плотность — целые, модель и версии — строки; несуществующее свойство
+        отдаётся пустой строкой (скромный `getprop` отвечает `?`).
+
+    Raises:
+        RuntimeError: adb подвёл или вывод `wm size`/`wm density` не разобран.
+    """
+    width, height = adb_screen_size(serial=serial)
+    return {'model': _getprop('ro.product.model', serial),
+            'android': _getprop('ro.build.version.release', serial),
+            'sdk': _getprop('ro.build.version.sdk', serial),
+            'width': width,
+            'height': height,
+            'density': _wm_density(serial)}
+
+
 def adb_run(*args: str, serial: str = '', timeout: float = ADB_TIMEOUT) -> str:
     """
     Вызвать adb и вернуть stdout текстом — общий вход для всего пакета.
@@ -174,6 +203,21 @@ def _screencap_png(serial: str = '') -> bytes:
     return png
 
 
+def _getprop(name: str, serial: str) -> str:
+    """Значение свойства из getprop; отсутствующее adb отдаёт пустяком или '?' — сводим к пустой строке."""
+    value = adb_run('shell', 'getprop', name, serial=serial).strip()
+    return '' if value == '?' else value
+
+
+def _wm_density(serial: str) -> int:
+    """Плотность из `wm density`; та же пара Physical/Override, что у `wm size`, — действует последняя названная."""
+    out = adb_run('shell', 'wm', 'density', serial=serial)
+    densities = re.findall(r'density:\s*(\d+)', out)
+    if not densities:
+        raise RuntimeError(f'adb wm density: не разобран ответ: {out.strip()[:200]}')
+    return int(densities[-1])
+
+
 def _adb_exec(args: tuple, serial: str, timeout: float, text: bool):
     """Собственно запуск: сборка команды и перевод отказов среды в понятную ошибку."""
     try:
@@ -195,7 +239,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Снимки андроид-устройства и их описание.',
         epilog='вопрос идёт последним, ключи — до него: describe --model gx10/qwen-large что на экране')
-    parser.add_argument('command', choices=['devices', 'size', 'capture', 'describe'])
+    parser.add_argument('command', choices=['devices', 'info', 'size', 'capture', 'describe'])
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
     parser.add_argument('--out', default='/tmp/adb_screen.jpg', help='куда сохранить снимок (capture)')
     parser.add_argument('--model', default='', help='vision-модель, например gx10/qwen-large')
@@ -205,6 +249,11 @@ if __name__ == '__main__':
     try:
         if ns.command == 'devices':
             print('\n'.join(adb_devices()) or 'устройств нет')
+        elif ns.command == 'info':
+            info = adb_device_info(serial=ns.serial)
+            print(f"модель: {info['model'] or '?'}; Android {info['android'] or '?'} "
+                  f"(SDK {info['sdk'] or '?'}); "
+                  f"{info['width']}x{info['height']} @ {info['density']} dpi")
         elif ns.command == 'size':
             print('{}x{}'.format(*adb_screen_size(serial=ns.serial)))
         elif ns.command == 'capture':
