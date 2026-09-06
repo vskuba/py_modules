@@ -103,6 +103,57 @@ def font_compare(path_a: str, path_b: str) -> dict:
     }
 
 
+def font_render_text(path: str, text: str, out_png: str, size: int = 64) -> str:
+    """
+    Растр строки `text` шрифтом `path`: чёрное на белом, базовая линия
+    на 2/3 высоты холста (`anchor="ls"`).
+
+    Базовая линия — не деталька: у разных шрифтов собственные выступы, и
+    без выравнивания по ней разница метрик выглядит как разница глифов на
+    всей картинке.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    font = ImageFont.truetype(path, size)
+    canvas = Image.new("L", (max(size * 2, size * len(text) * 2), size * 3), 255)
+    ImageDraw.Draw(canvas).text((size // 2, size * 2), text, font=font, fill=0, anchor="ls")
+    canvas.convert("RGB").save(out_png)
+    return out_png
+
+
+def font_text_diff(path_a: str, path_b: str, text: str, size: int = 64,
+                   out_dir: str | None = None) -> dict:
+    """
+    Спор «это тот же рисунок?» растром: одна и та же строка, отрисованная
+    обоими шрифтами по общей базовой линии, и попиксельная статистика.
+
+    Применяется, когда контуры напрямую несравнимы (форматы разные, либо
+    один из файлов — подмножество из PDF). Порог решения: доли процента —
+    округление растеризатора; проценты и больше — формы разошлись.
+    `out_dir` — положить `a.png`, `b.png`, `diff.png` для глазной проверки.
+    """
+    import tempfile
+
+    from PIL import Image, ImageChops
+
+    with tempfile.TemporaryDirectory() as d:
+        pa = font_render_text(path_a, text, f"{d}/a.png", size=size)
+        pb = font_render_text(path_b, text, f"{d}/b.png", size=size)
+        ia, ib = Image.open(pa), Image.open(pb)
+        if ia.size != ib.size:
+            ib = ib.resize(ia.size)
+        result = _image_stats(ia, ib)
+        if out_dir:
+            heat = ImageChops.difference(ia.convert("RGB"), ib.convert("RGB")).convert("L").convert("RGB")
+            for src, name in ((pa, "a.png"), (pb, "b.png")):
+                Image.open(src).save(f"{out_dir}/{name}")
+            heat.save(f"{out_dir}/diff.png")
+            result["images"] = {"a": f"{out_dir}/a.png", "b": f"{out_dir}/b.png", "diff": f"{out_dir}/diff.png"}
+        else:
+            result["images"] = None
+    return result
+
+
 def _format(tt) -> str:
     return "CFF" if "CFF " in tt else "TrueType"
 
@@ -116,3 +167,23 @@ def _norm(value, upem: int):
             return round(obj / upem, 4)
         return obj
     return [(op, walk(args)) for op, args in value]
+
+
+def _image_stats(img_a, img_b) -> dict:
+    """Статистика растровой разницы: максимум по каналам, среднее по L, доля пикселей выше порога.
+
+    Копия статистики из `pdf_` осознанная: модули не должны знать друг о
+    друге, а общий файл ради двух вызовов — связность больше экономии.
+    """
+    from PIL import ImageChops
+
+    diff = ImageChops.difference(img_a.convert("RGB"), img_b.convert("RGB"))
+    max_diff = max(diff.getchannel(c).getextrema()[1] for c in ("R", "G", "B"))
+    gray = diff.convert("L")
+    hist = gray.histogram()
+    total = sum(hist)
+    mean_abs = sum(v * n for v, n in enumerate(hist)) / total
+    threshold = 24
+    pct = 100.0 * sum(hist[threshold + 1:]) / total
+    return {"max_diff": max_diff, "mean_abs": round(mean_abs, 3),
+            "pct_pixels": {"threshold": threshold, "pct": round(pct, 3)}}
