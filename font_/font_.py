@@ -12,11 +12,16 @@ import re
 SUBSET_RE = re.compile(r"^[A-Z]{6}\+")
 
 
-def font_info(path: str) -> dict:
+def font_info(path: str | bytes) -> dict:
     """
     Паспорт шрифта: формат, unitsPerEm, число глифов, hhea-выступы, имена,
     признак подмножества (префикс `ABCDEF+` в PostScript-имени), число
     покрытых cmap-символов.
+
+    Принимает путь, байты или бинарный поток: подмножество, извлечённое из PDF
+    (`pdf_fonts_extract`), приезжает байтами, и ради одного вызова его никто
+    не обязан класть на диск. Поток читается до конца — для повторного вызова
+    нужен новый поток или байты.
 
     Метрики (`ascender`/`descender`) — в единицах upem: сравнивать их между
     собой можно только разделив на upem, у перекодированного подмножества
@@ -24,7 +29,7 @@ def font_info(path: str) -> dict:
     """
     from fontTools.ttLib import TTFont
 
-    t = TTFont(path)
+    t = TTFont(_stream(path))
     name = t["name"]
 
     def _n(name_id: int) -> str:
@@ -47,7 +52,7 @@ def font_info(path: str) -> dict:
     }
 
 
-def font_coverage(path: str, text: str) -> list[str]:
+def font_coverage(path: str | bytes, text: str) -> list[str]:
     """
     Символы `text`, отсутствующих в таблице cmap, в порядке появления.
 
@@ -57,7 +62,7 @@ def font_coverage(path: str, text: str) -> list[str]:
     """
     from fontTools.ttLib import TTFont
 
-    cmap = TTFont(path).getBestCmap() or {}
+    cmap = TTFont(_stream(path)).getBestCmap() or {}
     missing = []
     for ch in text:
         if ord(ch) not in cmap and ch not in missing:
@@ -65,7 +70,7 @@ def font_coverage(path: str, text: str) -> list[str]:
     return missing
 
 
-def font_compare(path_a: str, path_b: str) -> dict:
+def font_compare(path_a: str | bytes, path_b: str | bytes) -> dict:
     """
     Сверка двух шрифтов: набор глифов (без `.notdef`) и совпадение контуров
     общих глифов, нормированных по unitsPerEm каждого.
@@ -81,7 +86,7 @@ def font_compare(path_a: str, path_b: str) -> dict:
     from fontTools.pens.recordingPen import RecordingPen
     from fontTools.ttLib import TTFont
 
-    a, b = TTFont(path_a), TTFont(path_b)
+    a, b = TTFont(_stream(path_a)), TTFont(_stream(path_b))
     upem_a, upem_b = a["head"].unitsPerEm, b["head"].unitsPerEm
     names_a = set(a.getGlyphOrder()) - {".notdef"}
     names_b = set(b.getGlyphOrder()) - {".notdef"}
@@ -103,10 +108,10 @@ def font_compare(path_a: str, path_b: str) -> dict:
     }
 
 
-def font_render_text(path: str, text: str, out_png: str, size: int = 64) -> str:
+def font_render_text(path: str | bytes, text: str, out_png: str, size: int = 64) -> str:
     """
-    Растр строки `text` шрифтом `path`: чёрное на белом, базовая линия
-    на 2/3 высоты холста (`anchor="ls"`).
+    Растр строки `text` шрифтом `path` (файл, байты или поток): чёрное на
+    белом, базовая линия на 2/3 высоты холста (`anchor="ls"`).
 
     Базовая линия — не деталька: у разных шрифтов собственные выступы, и
     без выравнивания по ней разница метрик выглядит как разница глифов на
@@ -117,14 +122,14 @@ def font_render_text(path: str, text: str, out_png: str, size: int = 64) -> str:
     from PIL import Image, ImageDraw, ImageFont
 
     os.makedirs(os.path.dirname(os.path.abspath(out_png)) or ".", exist_ok=True)
-    font = ImageFont.truetype(path, size)
+    font = ImageFont.truetype(_stream(path), size)
     canvas = Image.new("L", (max(size * 2, size * len(text) * 2), size * 3), 255)
     ImageDraw.Draw(canvas).text((size // 2, size * 2), text, font=font, fill=0, anchor="ls")
     canvas.convert("RGB").save(out_png)
     return out_png
 
 
-def font_text_diff(path_a: str, path_b: str, text: str, size: int = 64,
+def font_text_diff(path_a: str | bytes, path_b: str | bytes, text: str, size: int = 64,
                    out_dir: str | None = None) -> dict:
     """
     Спор «это тот же рисунок?» растром: одна и та же строка, отрисованная
@@ -185,6 +190,14 @@ def main() -> None:
     elif a.cmd == "textdiff":
         print(json.dumps(font_text_diff(a.a, a.b, a.text, size=a.size, out_dir=a.out_dir), ensure_ascii=False, indent=1))
 
+
+
+def _stream(source):
+    """Байты обёртывает в поток: PIL сырых байтов не переваривает, fontTools —
+    да, а вход у функций общий (путь / байты / поток)."""
+    import io
+
+    return io.BytesIO(source) if isinstance(source, bytes) else source
 
 
 def _format(tt) -> str:
