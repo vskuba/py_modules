@@ -66,6 +66,7 @@ scrcpy                            # живое окно на одно подкл
 | `adb_capture(serial='', max_side=0) -> bytes` | кадр экрана сразу в JPEG без альфы; `max_side` — уменьшить длинную сторону |
 | `adb_capture_save(path, serial='') -> str` | тот же кадр в файл, возвращает путь |
 | `adb_screen_size(serial='') -> tuple[int, int]` | ширина и высота экрана в пикселях — от неё считаются доли в жестах |
+| `adb_device_info(serial='') -> dict` | паспорт: модель, Android, SDK, разрешение, плотность — снимать живьём, не помнить (`mobile_hardware.md`) |
 | `adb_screen_describe(prompt='', serial='', model_name='') -> str` | «увидеть экран»: снимок + `ai_vision_describe_wait` |
 
 Соседние модули пакета (`adb_ui`, `adb_input`, `adb_app`, `adb_log`) отличаются командой,
@@ -76,6 +77,7 @@ CLI для ручной проверки без обёрток:
 
 ```bash
 python -m adb_.adb_ devices
+python -m adb_.adb_ info
 python -m adb_.adb_ capture --out /tmp/screen.jpg
 python -m adb_.adb_ describe ["вопрос про экран"] [--serial ...] [--model ...]
 ```

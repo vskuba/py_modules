@@ -1,0 +1,5 @@
+# Тяжёлая половина: зрение через ai_vision и adb_screen_describe (pydantic-ai).
+# Ставится поверх ядра, для работы adb_ без описания экрана не нужна.
+# Флор по venv py_modules (1.80 проверена); проект волен поднять версию выше.
+-r requirements.txt
+pydantic-ai>=1.80
