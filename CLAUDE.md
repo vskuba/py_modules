@@ -77,6 +77,8 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake` |
 | `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait` |
 | `adb_.adb_log` | `read`, `crash`, `clear`, `pid` |
+| `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
+| `adb_.adb_cdp` | `connect`, `pages`, `eval`, `navigate` |
 
 Машинные проверки соглашений (вывод обязан быть пустым; полные версии — в
 `docs/code_rules.md`, раздел «Автопроверка»):
