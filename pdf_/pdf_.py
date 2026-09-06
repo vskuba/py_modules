@@ -96,6 +96,7 @@ def pdf_render(path: str, out_dir: str, dpi: int = 150, page: int | None = None)
     import pypdfium2 as pdfium
 
     doc = pdfium.PdfDocument(path)
+    os.makedirs(out_dir, exist_ok=True)  # вызывающий вправе указать свежий путь — CLI так и делает
     indices = range(len(doc)) if page is None else [page]
     out_paths = []
     for i in indices:
@@ -126,6 +127,8 @@ def pdf_diff(path_a: str, path_b: str, dpi: int = 150, out_dir: str | None = Non
 
     from PIL import Image, ImageChops
 
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
         files_a = pdf_render(path_a, d1, dpi=dpi)
         files_b = pdf_render(path_b, d2, dpi=dpi)
@@ -288,9 +291,6 @@ def main() -> None:
         print(a.out_pdf)
 
 
-if __name__ == "__main__":
-    main()
-
 
 def _stats(img_a, img_b) -> dict:
     """Пиксельная статистика разницы: максимум по каналам, среднее по L, доля пикселей выше порога."""
@@ -306,3 +306,6 @@ def _stats(img_a, img_b) -> dict:
     pct = 100.0 * sum(hist[threshold + 1:]) / total
     return {"max_diff": max_diff, "mean_abs": round(mean_abs, 3),
             "pct_pixels": {"threshold": threshold, "pct": round(pct, 3)}}
+
+if __name__ == "__main__":
+    main()
