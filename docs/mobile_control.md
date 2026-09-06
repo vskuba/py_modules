@@ -193,9 +193,12 @@ python -m adb_.adb_log crash
 | `adb_cdp_pages() -> list` | открытые страницы: `{title, url, ws}` |
 | `adb_cdp_eval('js', url_part='') -> значение` | вычислить и вернуть значение; `returnByValue` — только данные, DOM-объекты так не вернуть |
 | `adb_cdp_navigate('url', url_part='') -> str` | открыть и дождаться загрузки, вернуть итоговый адрес |
+| `adb_cdp_capture_all('package', urls, 'out', serial='') -> list` | пачка: открыть каждый адрес, дождаться дорисовки, снять экран PNG в каталог (имя — из адреса); сбой одного адреса не гонит пачку |
+| `adb_cdp_element_at(x, y, url_part='') -> dict` | элемент под экранными координатами снимка: `{tag, id, cls, text, href, rect, chain}`; деление на `devicePixelRatio` — внутри |
 
 CLI: `python -m adb_.adb_cdp connect com.example.app | pages | eval 'location.href' |
-navigate https://localhost/menu.html`. Транспорт — `adb_ws` (WebSocket на stdlib):
+navigate https://localhost/menu.html | capture com.example.app shots/ <url...> |
+element 540 300`. Транспорт — `adb_ws` (WebSocket на stdlib):
 фрагментация длинных ответов и ping/pong уже учтены в нём.
 
 Страницы ассетов открываются схемой `https://localhost/<страница>`: на `file://`

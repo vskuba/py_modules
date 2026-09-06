@@ -21,11 +21,13 @@ forward на старый pid — типовая грабля после пер�
 """
 import argparse
 import json
+import re
 import time
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from adb_.adb_ import adb_run
+from adb_.adb_ import adb_run, adb_run_bytes
 from adb_.adb_ws import adb_ws_open, adb_ws_recv, adb_ws_send
 
 # Порт, на который вешается unix-сокет DevTools. Правило adb: локальный порт —
@@ -43,6 +45,10 @@ ADB_CDP_NAV_TIMEOUT = 15.0
 
 # Пауза между опросами адреса при ожидании навигации, секунды.
 ADB_CDP_POLL = 0.4
+
+# Пауза после загрузки страницы перед снимком, секунды: адрес уже правильный,
+# но шрифты и фоновые картинки дорисовываются ещё мгновение.
+ADB_CDP_SETTLE = 0.7
 
 
 def adb_cdp_connect(package: str, serial: str = '', port: int = ADB_CDP_PORT) -> dict:
@@ -167,6 +173,115 @@ def adb_cdp_navigate(url: str, port: int = ADB_CDP_PORT, url_part: str = '',
         sock.close()
 
 
+def adb_cdp_capture_all(package: str, urls: list, out_dir: str, serial: str = '',
+                        port: int = ADB_CDP_PORT, settle: float = ADB_CDP_SETTLE) -> list:
+    """
+    Открыть каждый адрес по очереди и снять экран; сложить кадры в каталог.
+
+    Пачка «как выглядит каждая страница» одним вызовом: навигация, ожидание
+    дорисовки, снимок и имя файла без ручной цикла-по-страницам. Снимок —
+    голый PNG без нормализации JPEG: кадры берут для замеров, и сжатие не
+    должно двигать яркость. Сбой одного адреса не гонит пачку — остальные
+    доснимаются, ошибка лежит в строке результата.
+
+    Args:
+        package: пакет запущенного приложения (debuggable-сборка) — forward
+            переповешивается на его свежий pid.
+        urls: адреса; страницы ассетов — `https://localhost/<страница>`.
+            Несуществующую страницу обёртка откроет диалогом ошибки, и он
+            отравит следующие снимки — список адресов проверяют заранее.
+        out_dir: каталог снимков; имя файла — из адреса (`menu.html` →
+            `menu.png`), при коллизии дописывается счётчик, старая пачка
+            не затирается.
+        serial: устройство; пусто — единственное подключённое.
+        port: локальный порт DevTools.
+        settle: пауза после загрузки перед кадром, секунды.
+
+    Returns:
+        По записи на каждый url: {'url', 'file'} либо {'url', 'error'}.
+    """
+    adb_cdp_connect(package, serial=serial, port=port)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    results = []
+    for url in urls:
+        try:
+            adb_cdp_navigate(url, port=port)
+            time.sleep(settle)
+            target = _shot_path(Path(out_dir), url)
+            target.write_bytes(_screencap_png_raw(serial))
+            results.append({'url': url, 'file': str(target)})
+        except (RuntimeError, TimeoutError, OSError) as err:
+            results.append({'url': url, 'error': str(err)})
+    return results
+
+
+def adb_cdp_element_at(x: float, y: float, port: int = ADB_CDP_PORT,
+                       url_part: str = '', device_px: bool = True) -> dict:
+    """
+    Сказать, что за элемент под экранными координатами — ответ на «что тут».
+
+    Координаты берут из снимка экрана (пиксели устройства): разница между
+    ними и CSS-пикселями страницы делится здесь же, на devicePixelRatio.
+    Без этого элемент ищется в (x/3, y/3) от того места, куда смотрят.
+
+    Args:
+        x, y: координаты; по умолчанию — пиксели снимка.
+        port: локальный порт DevTools.
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        device_px: False — координаты уже CSS-пиксели, делить не надо.
+
+    Returns:
+        {'tag', 'id', 'cls', 'text' (первые 80 символов), 'href',
+         'rect': {'x','y','w','h'} в CSS-пикселях, 'chain' — теги от
+        элемента вверх} или None, если под координатами ничего нет.
+    """
+    js = _ELEMENT_AT_JS % (float(x), float(y), 'true' if device_px else 'false')
+    return adb_cdp_eval(js, port=port, url_part=url_part)
+
+
+def _screencap_png_raw(serial: str) -> bytes:
+    """Голый PNG со снимка экрана; JPEG-нормализация не нужна — кадры для замеров."""
+    png = adb_run_bytes('exec-out', 'screencap', '-p', serial=serial)
+    if not png.startswith(b'\x89PNG'):
+        raise RuntimeError('screencap: вывод не похож на PNG (устройство спит?)')
+    return png
+
+
+def _shot_path(out_dir: Path, url: str) -> Path:
+    """Имя файла снимка из адреса; существующее имя получает счётчик."""
+    name = urlsplit(url).path.rsplit('/', 1)[-1].rsplit('.', 1)[0] or 'page'
+    name = re.sub(r'[^0-9A-Za-z._-]', '-', name)
+    target = out_dir / f'{name}.png'
+    n = 1
+    while target.exists():
+        target = out_dir / f'{name}-{n}.png'
+        n += 1
+    return target
+
+
+# docstring для eval: одна страница считает элемент сама — только так
+# devicePixelRatio берётся с неё, а не догадкой с хоста. Шаблоны подставляют
+# числа до вставки в выражение; % в JS нет, форматирование безопасное.
+_ELEMENT_AT_JS = """
+((x, y, dev) => {
+  const d = dev ? (window.devicePixelRatio || 1) : 1;
+  const el = document.elementFromPoint(x / d, y / d);
+  if (!el) return null;
+  const chain = [];
+  for (let e = el; e && chain.length < 6; e = e.parentElement)
+    chain.push(e.tagName.toLowerCase());
+  const r = el.getBoundingClientRect();
+  return {tag: el.tagName.toLowerCase(), id: el.id || '',
+          cls: typeof el.className === 'string' ? el.className : '',
+          text: (el.textContent || '').trim().slice(0, 80),
+          href: el.getAttribute('href') || '',
+          rect: {x: Math.round(r.x), y: Math.round(r.y),
+                 w: Math.round(r.width), h: Math.round(r.height)},
+          chain: chain};
+})(%s, %s, %s)
+"""
+
+
 def _cdp_call(sock, msg_id: int, method: str, params: dict, timeout: float) -> dict:
     """Один вызов CDP: события по дороге пропускаются, error — исключение."""
     sock.settimeout(timeout)
@@ -215,12 +330,18 @@ def _eval_value(result: dict):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='DevTools внутри WebView: читать и двигать страницы приложения.',
-        epilog="connect com.example.app | pages | eval 'location.href' | navigate https://localhost/menu.html")
-    parser.add_argument('command', choices=['connect', 'pages', 'eval', 'navigate'])
-    parser.add_argument('args', nargs='*', help='пакет / JS / адрес')
-    parser.add_argument('--serial', default='', help='устройство для connect')
+        epilog="connect com.example.app | pages | eval 'location.href' | "
+               "navigate https://localhost/menu.html | "
+               "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
+               "element 540 300")
+    parser.add_argument('command', choices=['connect', 'pages', 'eval', 'navigate',
+                                            'capture', 'element'])
+    parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
+    parser.add_argument('--serial', default='', help='устройство для connect и снимков')
     parser.add_argument('--port', type=int, default=ADB_CDP_PORT, help='локальный порт DevTools')
     parser.add_argument('--url-part', default='', help='часть адреса целевой страницы')
+    parser.add_argument('--settle', type=float, default=ADB_CDP_SETTLE,
+                        help='пауза после загрузки перед кадром, capture')
     ns = parser.parse_args()
 
     try:
@@ -231,6 +352,13 @@ if __name__ == '__main__':
                 print(page['url'], '—', page['title'])
         elif ns.command == 'eval':
             print(adb_cdp_eval(ns.args[0], port=ns.port, url_part=ns.url_part))
+        elif ns.command == 'capture':
+            for row in adb_cdp_capture_all(ns.args[0], ns.args[2:], ns.args[1],
+                                           serial=ns.serial, port=ns.port, settle=ns.settle):
+                print(row.get('file') or f"{row['url']}: ОШИБКА {row['error']}")
+        elif ns.command == 'element':
+            print(adb_cdp_element_at(float(ns.args[0]), float(ns.args[1]),
+                                     port=ns.port, url_part=ns.url_part))
         else:
             print(adb_cdp_navigate(ns.args[0], port=ns.port, url_part=ns.url_part))
     except (IndexError, ValueError) as err:

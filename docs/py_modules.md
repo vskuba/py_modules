@@ -105,6 +105,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `project_` | окружение проекта без догадок: `project_root` и `project_main_root` (второй — для всего, что помнит проект по каталогу), `project_python`, `project_env`; `project_run_python` — разовый прогон кода в этом окружении вместо составной команды с `cd` и heredoc, см. `project_runtime.md` |
 | `datetime_` | `datetime_now`, `datetime_utc_now`, сдвиг в пояс настройки (`datetime_offset_apply`) |
 | `json_` | `json_from_string` — терпимый разбор JSON: ответ LLM с текстом вокруг, обёртка ```` ```json ````, мусор по краям |
+| `image_` | тон картинок: `image_measure` (яркость фона — мода цвета в окне), `image_match` (пачка по эталону кусочно-линейными уровнями; с `backup` правит от оригинала — идемпотентно); CLI и грабли замера — `image_tooling.md` |
 | `async_` | цикл событий и ожидания: `async_loop_init`, `async_waiting_*` |
 | `thread_` | `thread_with_callback` — фоновый поток с колбэком |
 
