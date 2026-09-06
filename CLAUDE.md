@@ -123,14 +123,18 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake` |
-| `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait` |
+| `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait`, `install <apk> [-d]` |
 | `adb_.adb_log` | `read`, `crash`, `clear`, `pid` |
+| `adb_.adb_file` | `push <local> <remote>`, `pull <remote> [каталог]`, `ls <dir> [--pattern glob]`, `latest <dir> [--pattern glob]` |
+| `adb_.adb_doc` | `save [--dir Download]` |
 | `adb_.adb_step` | `tap`, `scroll`, `key`, `text`, `look` |
 | `adb_.adb_state` | `read`, `settle`, `last` |
 | `adb_.adb_crop` | `on`, `box`, `part` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
-| `adb_.adb_cdp` | `connect`, `pages`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot` |
-| `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `whiteout`, `print`, `extract` |
+| `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>` |
+| `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
+| `pdf_.pdf_spans` | `get <файл> [--page N]` |
+| `pdf_.pdf_xobject` | `list <файл> [--page N]` |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `textdiff` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals` |
 

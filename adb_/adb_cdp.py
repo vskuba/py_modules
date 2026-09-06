@@ -28,7 +28,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from adb_.adb_ import adb_run, adb_run_bytes
+from adb_.adb_ import adb_run, adb_run_bytes, adb_screen_size
+from adb_.adb_ui import adb_ui_nodes
 from adb_.adb_ws import adb_ws_open, adb_ws_recv, adb_ws_send
 
 # Порт, на который вешается unix-сокет DevTools. Правило adb: локальный порт —
@@ -214,6 +215,99 @@ def adb_cdp_capture_all(package: str, urls: list, out_dir: str, serial: str = ''
         except (RuntimeError, TimeoutError, OSError) as err:
             results.append({'url': url, 'error': str(err)})
     return results
+
+
+def adb_cdp_target_pick(url_part: str, port: int = ADB_CDP_PORT) -> dict:
+    """
+    Выбрать цель DevTools по части адреса — одну и ровно ту, что названа.
+
+    `adb_cdp_pages` при открытых нескольких страницах отдаёт список, а
+    «первая страница» при живом оффскрин-WebView (свой `evod_pdf.html` плюс
+    видимый `reserve.html`) — лотерея: eval уезжает не туда и молчит
+    правильным ответом не на тот вопрос.
+
+    Args:
+        url_part: подстрока адреса цели (`reserve`, `evod_pdf`).
+        port: локальный порт, подключённый `adb_cdp_connect`.
+
+    Returns:
+        Строка страницы `{'title','url','ws'}`.
+
+    Raises:
+        RuntimeError: ни одна страница не подошла или подошли несколько —
+            в сообщении перечислены доступные адреса.
+    """
+    return _pick_target(adb_cdp_pages(port), url_part)
+
+
+def adb_cdp_viewport(url_part: str = '', serial: str = '',
+                     port: int = ADB_CDP_PORT) -> dict:
+    """
+    geometrie страницы глазами самого WebView: dpr, CSS-размер и сдвиги кадра.
+
+    Страница приложения видит не весь кадр экрана: сверху съеден статус-бар,
+    снизу — панель навигации, и обе полосы надо учесть. CSS-пиксели
+    страницы переводятся в экранные умножением на `dpr` и сдвигом `(x0, y0)`;
+    `dpr` и CSS-размер называет сама страница, а сдвиг — uiautomator по окну
+    WebView: сам WebView о своём положении не знает (`screenTop` = 0).
+
+    Args:
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        serial: устройство; пусто — единственное подключённое.
+        port: локальный порт, подключённый `adb_cdp_connect`.
+
+    Returns:
+        `{'dpr', 'css_w', 'css_h', 'screen_w', 'screen_h', 'x0', 'y0'}`;
+        `x0`/`y0` — левый верхний угол страницы в пикселях экрана.
+    """
+    view = adb_cdp_eval(_VIEWPORT_JS, port=port, url_part=url_part)
+    if not view:
+        raise RuntimeError('страница не отдала геометрию (documentElement мёртв?)')
+    screen_w, screen_h = adb_screen_size(serial=serial)
+    x0, y0 = _webview_origin(serial)
+    dpr, css_w, css_h = float(view['dpr']), float(view['w']), float(view['h'])
+    return {'dpr': dpr, 'css_w': css_w, 'css_h': css_h,
+            'screen_w': screen_w, 'screen_h': screen_h, 'x0': x0, 'y0': y0}
+
+
+def adb_cdp_tap(selector: str, url_part: str = '', serial: str = '',
+                port: int = ADB_CDP_PORT) -> tuple:
+    """
+    Нажать на элемент страницы — координаты считает сам WebView.
+
+    `uiautomator` не видит узлов WebView, а тап в угаданную точку экрана
+    промахивается на статус-бар и масштаб. Здесь центр элемента берётся из
+    `getBoundingClientRect` целевой страницы и переводит в экранные пиксели
+    калибровкой из `adb_cdp_viewport`.
+
+    Событие доставляется напрямую в страницу через CDP Input, а не системным
+    `input tap`: тот идёт через SurfaceFlinger и попадает окну только после
+    отрисованного кадра — на холодном, загруженном WebView клик доживает до
+    обработчика 3–5 с, и любая проверка «нажал — открылось» превращается в
+    лотерею. Доставка в тот же рендерер, где читали прямоугольник, идёт
+    столько же, сколько eval.
+
+    Args:
+        selector: CSS-селектор, передаётся в `querySelector` как есть.
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        serial: устройство; нужно для калибровки возвращаемых координат.
+        port: локальный порт, подключённый `adb_cdp_connect`.
+
+    Returns:
+        `(x, y)` — экранные пиксели, куда попал тап (для сверки со снимком).
+
+    Raises:
+        RuntimeError: элемент не найден или невидим (нулевой прямоугольник).
+    """
+    js = _TAP_JS % json.dumps(selector, ensure_ascii=False)
+    rect = adb_cdp_eval(js, port=port, url_part=url_part)
+    if not rect:
+        raise RuntimeError(f'элемент {selector!r} не найден на странице')
+    if rect['w'] <= 0 or rect['h'] <= 0:
+        raise RuntimeError(f'элемент {selector!r} невидим (нулевой прямоугольник)')
+    vp = adb_cdp_viewport(url_part=url_part, serial=serial, port=port)
+    _cdp_touch(port, url_part, rect['x'], rect['y'])
+    return int(round(vp['x0'] + rect['x'] * vp['dpr'])), int(round(vp['y0'] + rect['y'] * vp['dpr']))
 
 
 def adb_cdp_element_at(x: float, y: float, port: int = ADB_CDP_PORT,
@@ -424,6 +518,39 @@ _ELEMENT_AT_JS = """
 })(%s, %s, %s)
 """
 
+# Геометрия страницы — её же глазами: dpr у WebView отличается от
+# `wm density` системы, а CSS-размер знает только сам документ.
+_VIEWPORT_JS = "({dpr: window.devicePixelRatio || 1, w: innerWidth, h: innerHeight})"
+
+# Центр элемента в CSS-пикселях страницы; null — селектор никого не нашёл.
+_TAP_JS = """
+(() => {
+  const el = document.querySelector(%s);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return {x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height};
+})()
+"""
+
+
+def _webview_origin(serial: str) -> tuple:
+    """
+    Верхний левый угол окна WebView — его знает uiautomator, а не страница.
+
+    Сам WebView о своём сдвиге молчит (`screenTop` = 0, `screen.height` уже
+    делится на dpr), а арифметика `screen_h − dpr·css_h` предполагает, что
+    всё несъеденное место — сверху; на реальном Reserve сверху статус-бар,
+    снизу панель навигации, и остаток делится между ними пополам. Окно
+    берём из дампа: среди WebView-узлов крупнейшего (мелкие — чужие врезки).
+    """
+    views = [n for n in adb_ui_nodes(serial=serial)
+             if n['class'] == 'android.webkit.WebView' and n['bounds']]
+    if not views:
+        raise RuntimeError('на экране нет окна WebView (uiautomator) — приложение открыто?')
+    bounds = max(views, key=lambda n: (n['bounds'][2] - n['bounds'][0])
+                 * (n['bounds'][3] - n['bounds'][1]))['bounds']
+    return bounds[0], bounds[1]
+
 
 def _cdp_call(sock, msg_id: int, method: str, params: dict, timeout: float) -> dict:
     """Один вызов CDP: события по дороге пропускаются, error — исключение."""
@@ -440,6 +567,24 @@ def _cdp_call(sock, msg_id: int, method: str, params: dict, timeout: float) -> d
             return answer.get('result', {})
 
 
+def _cdp_touch(port: int, url_part: str, x: float, y: float) -> None:
+    """
+    Касание страницы через CDP Input: touchStart + touchEnd в css-пикселях.
+
+    Системный `input tap` SurfaceFlinger отдаёт окну только после отрисованного
+    им кадра, и холодный WebView держит клик в очереди секундами; здесь событие
+    идёт прямо в рендерер — та же страница, та же очередь, что у eval.
+    """
+    sock = adb_ws_open(_socket_target(port, url_part))
+    try:
+        _cdp_call(sock, 1, 'Input.dispatchTouchEvent',
+                  {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]}, ADB_CDP_TIMEOUT)
+        _cdp_call(sock, 2, 'Input.dispatchTouchEvent',
+                  {'type': 'touchEnd', 'touchPoints': []}, ADB_CDP_TIMEOUT)
+    finally:
+        sock.close()
+
+
 def _http_json(port: int, path: str) -> list:
     """GET к DevTools-эндпоинту с JSON-ответом."""
     request = urllib.request.Request(f'http://127.0.0.1:{port}{path}')
@@ -452,13 +597,30 @@ def _http_json(port: int, path: str) -> list:
 
 def _socket_target(port: int, url_part: str = '') -> str:
     """Адрес отладки целевой страницы; пусто в url_part — первой страницы."""
-    pages = [p for p in adb_cdp_pages(port) if p['ws']]
     if url_part:
-        pages = [p for p in pages if url_part in p['url']]
+        return adb_cdp_target_pick(url_part, port)['ws']
+    pages = [p for p in adb_cdp_pages(port) if p['ws']]
     if not pages:
-        seen = ', '.join(p['url'] for p in adb_cdp_pages(port) if p['ws']) or 'ни одной страницы'
-        raise RuntimeError(f'страница {url_part!r} не найдена; доступны: {seen}')
+        raise RuntimeError('ни одной страницы с ws в DevTools — приложение мертво?')
     return pages[0]['ws']
+
+
+def _pick_target(pages: list, url_part: str) -> dict:
+    """
+    Ровно одна страница из списка по подстроке адреса; кандидаты — в ошибку.
+
+    Молча взять первую из двух подошедших — тот же грех, что и «первая
+    страница» при живом оффскрин-WebView: ответ приходит, но не от той цели.
+    """
+    hits = [p for p in pages if p.get('ws') and url_part in p['url']]
+    if not hits:
+        seen = ', '.join(p['url'] for p in pages if p.get('ws')) or 'ни одной страницы'
+        raise RuntimeError(f'страница {url_part!r} не найдена; доступны: {seen}')
+    if len(hits) > 1:
+        raise RuntimeError(f'выбор цели {url_part!r} неоднозначно: '
+                           + ', '.join(p['url'] for p in hits)
+                           + ' — уточните подстроку')
+    return hits[0]
 
 
 def _eval_value(result: dict):
@@ -476,11 +638,11 @@ if __name__ == '__main__':
         epilog="connect com.example.app | pages | eval 'location.href' | "
                "navigate https://localhost/menu.html | "
                "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
-               "element 540 300 | element-rect .card-cover | "
-               "element-shot .card-cover shots/cover.png")
-    parser.add_argument('command', choices=['connect', 'pages', 'eval', 'navigate',
+               "element 540 300 | element-rect .card-cover | element-shot .card-cover shots/cover.png | "
+               "target reserve | viewport | tap '#download'")
+    parser.add_argument('command', choices=['connect', 'pages', 'target', 'eval', 'navigate',
                                             'capture', 'element', 'element-rect',
-                                            'element-shot'])
+                                            'element-shot', 'viewport', 'tap'])
     parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
     parser.add_argument('--serial', default='', help='устройство для connect и снимков')
     parser.add_argument('--port', type=int, default=ADB_CDP_PORT, help='локальный порт DevTools')
@@ -495,6 +657,12 @@ if __name__ == '__main__':
         elif ns.command == 'pages':
             for page in adb_cdp_pages(port=ns.port):
                 print(page['url'], '—', page['title'])
+        elif ns.command == 'target':
+            print(adb_cdp_target_pick(ns.args[0], port=ns.port))
+        elif ns.command == 'viewport':
+            print(adb_cdp_viewport(url_part=ns.url_part, serial=ns.serial, port=ns.port))
+        elif ns.command == 'tap':
+            print(adb_cdp_tap(ns.args[0], url_part=ns.url_part, serial=ns.serial, port=ns.port))
         elif ns.command == 'eval':
             print(adb_cdp_eval(ns.args[0], port=ns.port, url_part=ns.url_part))
         elif ns.command == 'capture':

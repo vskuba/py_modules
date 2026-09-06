@@ -239,6 +239,39 @@ def pdf_diff(path_a: str, path_b: str, dpi: int = 150, out_dir: str | None = Non
     return result
 
 
+def pdf_diff_multi(path_a: str, path_b: str, windows: dict, dpi: int = 150) -> dict:
+    """
+    Сверка документа с несколькими зонами за один проход.
+
+    Обёртка над `pdf_diff`: документ рендерится один раз, а статистика
+    считается и по всему листу, и по каждой зоне — удобно проверять, что
+    правка не задела ничего вокруг.
+
+    Args:
+        path_a: эталон.
+        path_b: кандидат.
+        windows: `{'имя': (x, y, w, h)}` или `{'имя': (x, y, w, h, page)}`
+            в пикселях `dpi`, координаты от верхнего левого угла страницы.
+        dpi: плотность растра.
+
+    Returns:
+        `{'full': {'max_diff','mean_abs','pct_pixels','pages_match'},
+        'windows': {'имя': {'max_diff','mean_abs','pct_pixels','page'}}}`.
+    """
+    regions = []
+    for name, window in windows.items():
+        if len(window) < 4:
+            raise ValueError(f"окно '{name}': нужно (x, y, w, h[, page]), а дали {tuple(window)}")
+        regions.append({"name": name, "x": window[0], "y": window[1],
+                        "w": window[2], "h": window[3],
+                        "page": window[4] if len(window) > 4 else 0})
+    result = pdf_diff(path_a, path_b, dpi=dpi, regions=regions)
+    full = {k: result[k] for k in ("max_diff", "mean_abs", "pct_pixels", "pages_match")}
+    return {"full": full,
+            "windows": {r["name"]: {k: v for k, v in r.items() if k != "name"}
+                        for r in result["regions"]}}
+
+
 def pdf_whiteout(path: str, out_png: str, boxes: list[dict], dpi: int = 300, page: int = 0) -> str:
     """
     Отрендерить страницу и выбелить `boxes` — каркас, на который сверху
@@ -327,6 +360,9 @@ def main() -> None:
     p = sub.add_parser("text"); p.add_argument("pdf"); p.add_argument("--page", type=int)
     p = sub.add_parser("render"); p.add_argument("pdf"); p.add_argument("out_dir"); p.add_argument("--dpi", type=int, default=150)
     p = sub.add_parser("diff"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--dpi", type=int, default=150); p.add_argument("--out-dir")
+    p = sub.add_parser("diff-multi"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--window", action="append", required=True, metavar="ИМЯ=x,y,w,h[,page]",
+                   help="зона в пикселях --dpi, повторяется для нескольких зон")
     p = sub.add_parser("whiteout"); p.add_argument("pdf"); p.add_argument("out_png"); p.add_argument("--box", action="append", required=True, help="x,y,w,h в пунктах, начало сверху слева"); p.add_argument("--dpi", type=int, default=300)
     p = sub.add_parser("print"); p.add_argument("html"); p.add_argument("out_pdf")
     p = sub.add_parser("extract"); p.add_argument("pdf"); p.add_argument("--out-dir")
@@ -340,6 +376,12 @@ def main() -> None:
         print("\n".join(pdf_render(a.pdf, a.out_dir, dpi=a.dpi)))
     elif a.cmd == "diff":
         print(json.dumps(pdf_diff(a.a, a.b, dpi=a.dpi, out_dir=a.out_dir), ensure_ascii=False, indent=1))
+    elif a.cmd == "diff-multi":
+        windows = {}
+        for spec in a.window:
+            name, _, coords = spec.partition("=")
+            windows[name] = tuple(float(v) if "." in v else int(v) for v in coords.split(","))
+        print(json.dumps(pdf_diff_multi(a.a, a.b, windows, dpi=a.dpi), ensure_ascii=False, indent=1))
     elif a.cmd == "whiteout":
         boxes = []
         for s in a.box:

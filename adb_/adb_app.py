@@ -20,6 +20,10 @@ from adb_.adb_ import adb_run
 ADB_APP_WAIT_TIMEOUT = 20.0
 ADB_APP_WAIT_STEP = 0.5
 
+# Установка — не мгновенная команда: APK перетекает через usb/эмулятор секундами,
+# а на устройстве ещё оптимизация; полминуты на неё в самый раз.
+ADB_APP_INSTALL_TIMEOUT = 120.0
+
 
 def adb_app_current(serial: str = '') -> dict:
     """
@@ -165,6 +169,47 @@ def adb_app_version(package: str, serial: str = '') -> dict:
     return fields
 
 
+def adb_app_install(apk: str, serial: str = '', downgrade: bool = False,
+                    timeout: float = ADB_APP_INSTALL_TIMEOUT) -> str:
+    """
+    Поставить APK на устройство.
+
+    `adb install` о провале пишет в обычный вывод и возвращает ненулевой код;
+    `adb_run` на ненулевом бросает свою ошибку без разбора — здесь вывод
+    расшифровывается в человеческую подсказку (`_install_error`).
+
+    Args:
+        apk: путь к APK на машине.
+        serial: устройство; пусто — единственное подключённое.
+        downgrade: ставить и поверх более свежей версии (`-d`) — иначе
+            пересборка с прежним versionCode отклоняется как понижение.
+        timeout: секунды на установку (передача большого APK медленная).
+
+    Returns:
+        Вывод adb (`Success` в последней строке при успехе).
+
+    Raises:
+        ValueError: файла нет на машине.
+        RuntimeError: установка отклонена — в тексте подсказка, что делать.
+    """
+    import os
+
+    if not os.path.exists(apk):
+        raise ValueError(f"APK {apk} на машине не найден")
+    args = ['install', '-r', '-t'] + (['-d'] if downgrade else []) + [apk]
+    try:
+        out = adb_run(*args, serial=serial, timeout=timeout)
+    except RuntimeError as err:
+        # adb пишет «Failure [...]» то в stdout, то в stderr — adb_run уже
+        # собрал непустое в сообщение, разворачиваем его подсказкой.
+        why = _install_error(str(err))
+        raise RuntimeError(f'установка {os.path.basename(apk)}: {why}') from None
+    why = _install_error(out)
+    if why:
+        raise RuntimeError(f'установка {os.path.basename(apk)}: {why}')
+    return out
+
+
 def _component_parse(line: str) -> dict:
     """
     Пакет и активность из строки dumpsys, если они там есть.
@@ -194,16 +239,40 @@ def _start_check(out: str, target: str) -> None:
         raise RuntimeError(f'запуск «{target}»: {out.strip()[:200]}')
 
 
+def _install_error(out: str) -> str:
+    """
+    Расшифровать вывод установки: пусто — успех, иначе — причина с подсказкой.
+
+    `adb install` о провале молчит кодом возврата наполовину: пишет
+    `Failure [...]` и в stdout, и в stderr. Две беды из него лечатся
+    аргументом или вторым шагом, и угадать их без подсказки — пара гуглений:
+    понижение версии (`-d`) и несовпадение подписей (старый пакет снять).
+    """
+    if 'Success' in out:
+        return ''
+    low = out.lower()
+    if 'downgrade' in low:
+        return (out.strip()[:200] + ' — пересборка со старым versionCode: повтори с '
+                'downgrade=True (или подними versionCode в config.xml)')
+    if 'signature' in low or 'update_incompatible' in low:
+        return (out.strip()[:200] + ' — подписи разные (собирал другим ключом): сними старый '
+                'пакет: adb uninstall <package>, потом ставь заново')
+    return out.strip()[:300]
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Приложения устройства: текущее, список, запуск, остановка, версия.',
-        epilog='list --query telegram | start com.example | current')
-    parser.add_argument('command', choices=['current', 'list', 'start', 'stop', 'version', 'wait'])
-    parser.add_argument('package', nargs='?', default='', help='имя пакета')
+        description='Приложения устройства: текущее, список, запуск, остановка, версия, установка.',
+        epilog='list --query telegram | start com.example | install app-debug.apk [-d]')
+    parser.add_argument('command', choices=['current', 'list', 'start', 'stop', 'version', 'wait',
+                                            'install'])
+    parser.add_argument('package', nargs='?', default='', help='имя пакета (путь к APK для install)')
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
     parser.add_argument('--activity', default='', help='активность для start')
     parser.add_argument('--query', default='', help='подстрока имени для list')
     parser.add_argument('--system', action='store_true', help='включить системные пакеты в list')
+    parser.add_argument('--downgrade', action='store_true',
+                        help='разрешить понижение версии (install -d)')
     ns = parser.parse_args()
 
     try:
@@ -218,8 +287,10 @@ if __name__ == '__main__':
             adb_app_stop(ns.package, serial=ns.serial)
         elif ns.command == 'wait':
             print('{package} / {activity}'.format(**adb_app_wait(ns.package, serial=ns.serial)))
+        elif ns.command == 'install':
+            print(adb_app_install(ns.package, serial=ns.serial, downgrade=ns.downgrade))
         else:
             print('{package} {version} ({code}), обновлено {updated}'.format(
                 **adb_app_version(ns.package, serial=ns.serial)))
-    except (RuntimeError, TimeoutError) as err:
+    except (RuntimeError, TimeoutError, ValueError) as err:
         raise SystemExit(f'ошибка: {err}')

@@ -90,6 +90,22 @@ python -m adb_.adb_ describe ["вопрос про экран"] [--serial ...] [
 к модели. Пустой `prompt` описывает экран подробно, короткий вопрос — отвечать
 коротко; формулировать вопрос дешевле, чем фильтровать простыню.
 
+### `adb_file` — файлы на устройстве (файл `adb_/adb_file.py`)
+
+| Функция | Контракт |
+|---------|----------|
+| `adb_file_push(local_path, remote_path, serial='', timeout=60) -> str` | положить файл на устройство, вернуть путь на нём |
+| `adb_file_pull(remote_path, local_dir='.', serial='', timeout=60) -> str` | снять файл на хост, вернуть путь на хосте; каталог создаёт |
+| `adb_file_ls(remote_dir, pattern='', serial='') -> list` | список каталога: `{'name','size','mtime','dir'}` |
+| `adb_file_latest(remote_dir, pattern='*', serial='') -> dict` | самый свежий по mtime — «скачалось ли и как зовётся» |
+
+CLI: `python -m adb_.adb_file latest /sdcard/Download --pattern 'eVOD*.pdf'`.
+
+Отдельный модуль, а не голый `adb push/pull`: после `pull` проверяется, что файл
+на хосте правда появился (голый adb не всегда честен и в этом), а `ls` разбирает
+формат toybox — минуты в дате её потолок, имя с пробелами идёт до конца строки,
+`total` и мусор не должны попадать в результат.
+
 ### `ai/ai_vision` — зрение (файл `ai/ai_vision.py`)
 
 | Функция | Контракт |
