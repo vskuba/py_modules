@@ -179,6 +179,34 @@ def pdf_diff(path_a: str, path_b: str, dpi: int = 150, out_dir: str | None = Non
     return result
 
 
+def pdf_whiteout(path: str, out_png: str, boxes: list[dict], dpi: int = 300, page: int = 0) -> str:
+    """
+    Отрендерить страницу и выбелить `boxes` — каркас, на который сверху
+    накладываются динамические данные.
+
+    Координаты — пункты с началом в верхнем левом углу (HTML-стиль), в
+    пиксели переводятся множителем `dpi / 72`. Плотность по умолчанию 300:
+    каркас печатается фоновой картинкой, текст поверх него должен держать
+    край.
+    """
+    import tempfile
+
+    from PIL import Image, ImageDraw
+
+    with tempfile.TemporaryDirectory() as d:
+        src = pdf_render(path, d, dpi=dpi, page=page)[0]
+        img = Image.open(src).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        k = dpi / 72.0
+        for b in boxes:
+            draw.rectangle(
+                [b["x"] * k, b["y"] * k, (b["x"] + b["w"]) * k, (b["y"] + b["h"]) * k],
+                fill="white",
+            )
+        img.save(out_png)
+    return out_png
+
+
 def _stats(img_a, img_b) -> dict:
     """Пиксельная статистика разницы: максимум по каналам, среднее по L, доля пикселей выше порога."""
     from PIL import ImageChops
