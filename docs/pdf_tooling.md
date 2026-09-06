@@ -79,22 +79,60 @@ CLI: `python -m pdf_.pdf_ extract card.pdf --out-dir /tmp/fonts`.
 
 ## 5. Минимальный PDF для теста — писать руками
 
-Тесту не нужен настоящий генератор: документ собирается из тел объектов,
-смещения xref считаются при сборке (`tests/test_pdf_tooling.py::_raw_pdf`).
-Тело — строка (словари) или байты (поток шрифта бинарный, строкой его не
-выразить):
+Тесту не нужен настоящий генератор: документ собирается из тел объектов, а
+смещения xref считаются при сборке. Тело — строка (словари) или байты (поток
+шрифта бинарный, строкой его не выразить):
 
 ```python
-out = bytearray(b"%PDF-1.7\n")
-for i, body in enumerate(objects, 1):
-    offsets.append(len(out))
-    body_bytes = body if isinstance(body, bytes) else body.encode()
-    out += f"{i} 0 obj\n".encode() + body_bytes + b"\nendobj\n"
+def raw_pdf(path, objects) -> str:
+    out = bytearray(b"%PDF-1.7\n")
+    offsets = []
+    for i, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        body_bytes = body if isinstance(body, bytes) else body.encode()
+        out += f"{i} 0 obj\n".encode() + body_bytes + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += (f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\n"
+            f"startxref\n{xref}\n%%EOF").encode()
+    with open(path, "wb") as fh:
+        fh.write(out)
+    return str(path)
 ```
 
-pypdf такой файл читает без нареканий; поток оформляется как отдельный
-объект `f"<</Length {len(data)}>>\nstream\n".encode() + data + b"\nendstream"`
-со ссылкой из дескриптора.
+**Хвост из xref, трейлера и `%%EOF` — не формальность**, ради него функция и
+существует. Файл без него pypdf отвергает, но исключение показывает не туда:
+`PdfStreamError: Stream has ended unexpectedly` — про конец потока, тогда как
+дело в отсутствующей таблице. Настоящая подсказка приходит строкой выше и
+отдельно от исключения — предупреждением `EOF marker not found`.
+
+Объекты нумеруются с единицы в порядке списка, `/Root` — всегда `1 0 R`, ссылки
+внутри тел проставляются вручную. Двухстраничный документ с текстом и
+композитным Type0, у которого дескриптор лежит у потомка (§1):
+
+```python
+content = b"BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET"
+raw_pdf(path, [
+    "<</Type/Catalog/Pages 2 0 R>>",
+    "<</Type/Pages/Kids[3 0 R 8 0 R]/Count 2>>",
+    "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 4 0 R"
+    "/F2 5 0 R>>>>/Contents 7 0 R>>",
+    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>",
+    "<</Type/Font/Subtype/Type0/BaseFont/ABCDEF+TestFont/Encoding/Identity-H"
+    "/DescendantFonts[6 0 R]>>",
+    "<</Type/Font/Subtype/CIDFontType2/BaseFont/ABCDEF+TestFont/CIDSystemInfo"
+    "<</Registry(Adobe)/Ordering(Identity)/Supplement 0>>/FontDescriptor 9 0 R>>",
+    f"<</Length {len(content)}>>\nstream\n{content.decode()}\nendstream",
+    "<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Resources<<>>>>",
+    "<</Type/FontDescriptor/FontName/ABCDEF+TestFont/Flags 4/FontFile2 <</Length 0>>>>",
+])
+```
+
+Растровый образец (без текстового слоя) проще собрать Pillow: `img.save(path,
+save_all=True, append_images=[...])` — этого хватает на MediaBox, страницы и
+проверку `text_chars == 0`.
 
 ## 6. Чек-лист принятия сгенерированного PDF
 
