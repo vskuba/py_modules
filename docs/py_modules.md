@@ -66,7 +66,7 @@ assert a is b, 'модуль загружен дважды — разное со
 
 | Модуль | Что даёт |
 |--------|----------|
-| `mysql_` | `mysql_get_db_async` (контекст-менеджер соединения), пул (`mysql_pool_get`/`mysql_pool_close`), `AbstractRepository` — база для репозиториев проекта, дамп и восстановление (`backup_engine`), выгрузка таблиц в SQL (`sql_export`), прогон миграций (`mysql_migration_up`) |
+| `mysql_` | `mysql_get_db_async` (контекст-менеджер соединения), пул (`mysql_pool_get`/`mysql_pool_close`), `AbstractRepository` — база для репозиториев проекта, дамп и восстановление (`backup_engine`), выгрузка таблиц в SQL (`sql_export`), прогон миграций (`mysql_migration_up`); разовый запрос мимо приложения — `mysql_host_address` (рабочий адрес: изнутри сети контейнеров и снаружи он разный) и `mysql_query_run` с CLI, см. `project_runtime.md` |
 | `qdrant_` | векторное хранилище: `qdrant_save`, `qdrant_search`, `qdrant_remove_by` |
 | `redis_`, `redis_queue` | соединение с Redis и очередь поверх него |
 | `sqllite3` | локальная короткая память LLM: `sqllite3_llm_short_memory_*` |
@@ -80,7 +80,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `ai/framework` | абстракции движка: `AbstractAiFramework`, `AbstractAiFrameworkManager`, `AiFrameworkModel`, `AiFrameworkResult` |
 | `ai/provider` | клиенты провайдеров: Claude, Gemini, OpenAI, OpenRouter, Groq, Cerebras, Huggingface, Gx10 — и реестр `ai_provider_registry_get` |
 | `ai/ai_thread` | `ai_thread_framework_run` — запуск прогона |
-| `ai/ai_vision` | зрение: `ai_vision_describe` (async) и `ai_vision_describe_wait` — «что на картинке» любой моделью из реестра; `ai_vision_normalize` — JPEG без альфы, без него локальные mtmd-серверы отвергают RGBA/WebP-снимки с `400 Failed to load image or audio file` |
+| `ai/ai_vision` | зрение: `ai_vision_describe` (async) и `ai_vision_describe_wait` — «что на картинке» любой моделью из реестра; `ai_vision_normalize` — JPEG без альфы, без него локальные mtmd-серверы отвергают RGBA/WebP-снимки с `400 Failed to load image or audio file`; CLI: `python -m ai.ai_vision describe <файл>` |
 | `mcp_` | конфигурация MCP-серверов: `mcp_config_get`, `mcp_config_save`, `mcp_config_tools_json_get` |
 
 Здесь лежит **основа**, а конкретный движок сценариев — в проекте: он знает его таблицы,
@@ -102,6 +102,7 @@ assert a is b, 'модуль загружен дважды — разное со
 
 | Модуль | Что даёт |
 |--------|----------|
+| `project_` | окружение проекта без догадок: `project_root` и `project_main_root` (второй — для всего, что помнит проект по каталогу), `project_python`, `project_env`; `project_run_python` — разовый прогон кода в этом окружении вместо составной команды с `cd` и heredoc, см. `project_runtime.md` |
 | `datetime_` | `datetime_now`, `datetime_utc_now`, сдвиг в пояс настройки (`datetime_offset_apply`) |
 | `json_` | `json_from_string` — терпимый разбор JSON: ответ LLM с текстом вокруг, обёртка ```` ```json ````, мусор по краям |
 | `async_` | цикл событий и ожидания: `async_loop_init`, `async_waiting_*` |
@@ -114,7 +115,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `translator` | `translate_text` |
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
-| `adb_` | андроид-устройство через adb: `adb_devices`, `adb_capture` (снимок экрана сразу RGB-JPEG), `adb_capture_save`, `adb_screen_describe` — «увидеть экран телефона»; CLI: `python -m adb_.adb_ describe` |
+| `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
 
 ### Документация
 
@@ -192,6 +193,9 @@ py_modules/qdrant_/qdrant_.py     ->  qdrant_search()
 | Вопрос | Файл |
 |--------|------|
 | Куда писать: библиотека или инструмент проекта | `tool_rules.md`, §1 |
+| Разовый прогон кода и запрос к базе в окружении проекта | `project_runtime.md` |
+| Посмотреть на экран телефона: снимок, зрение, `scrcpy` | `mobile_device.md` |
+| Нажать, ввести, запустить приложение на телефоне | `mobile_control.md` |
 | Как завести новый проект на этом слое | `new_project.md` |
 | Namespace, дробление файлов, приватные внизу | `code_rules.md` |
 | Хранение времени и пояс показа | `datetime_rules.md` |
