@@ -45,29 +45,63 @@ glyf), `upem` (единиц на em: 512, 1000, 2048 — все честные),
 ## 3. Синтетический шрифт для теста — FontBuilder за 15 строк
 
 Тесту не нужен настоящий шрифт: минимальную сборку из двух глифов
-(`.notdef`, `A`) FontBuilder делает на лету — образцы живые,
-`tests/test_font_tooling.py::_make_ttf`. Важные ручки — `upem` и множитель
-контура: ровно те оси, по которым разъезжаются мастер и подмножество:
+(`.notdef`, `A`) FontBuilder делает на лету, образцы живые. Важные ручки —
+`upem` и множитель контура: ровно те оси, по которым разъезжаются мастер и
+подмножество.
 
 ```python
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
-pen = TTGlyphPen(None)
-pen.moveTo((100, 0)); pen.lineTo((100, 700)); pen.lineTo((400, 700)); pen.closePath()
-fb = FontBuilder(upem, isTTF=True)
-fb.setupGlyphOrder([".notdef", "A"])
-fb.setupCharacterMap({65: "A"})
-fb.setupGlyf({".notdef": TTGlyphPen(None).glyph(), "A": pen.glyph()})
-fb.setupHorizontalMetrics({65: (500, 0), ".notdef": (250, 0)})
-fb.setupHorizontalHeader(ascent=800, descent=-200)
-fb.setupNameTable({"familyName": name, "styleName": "Regular"})
-fb.setupPost()
-fb.save(path)
+def make_ttf(path, upem=1000, name="Probe", scale=1.0):
+    pen = TTGlyphPen(None)
+    pen.moveTo((100 * scale, 0)); pen.lineTo((900 * scale, 0))
+    pen.lineTo((900 * scale, 800 * scale)); pen.closePath()
+    fb = FontBuilder(upem, isTTF=True)
+    fb.setupGlyphOrder([".notdef", "A"])
+    fb.setupCharacterMap({65: "A"})            # ключ — код символа
+    fb.setupGlyf({".notdef": TTGlyphPen(None).glyph(), "A": pen.glyph()})
+    fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (upem, 100 * scale)})
+    fb.setupHorizontalHeader(ascent=int(0.8 * upem), descent=int(-0.2 * upem))
+    fb.setupNameTable({"familyName": name, "styleName": "Regular"})
+    fb.setupOS2(); fb.setupPost()
+    fb.save(path)
 ```
 
-CFF-вариант — тот же каркас с `isTTF=False` и `CFFCharstringPen`
-(образец — `_make_cff` в том же файле).
+CFF-вариант — тот же каркас с `isTTF=False`, а вместо `setupGlyf` контуры
+идут через `T2CharStringPen` (класса `CFFCharstringPen` в fontTools нет):
+
+```python
+from fontTools.pens.t2CharStringPen import T2CharStringPen
+
+def _charstring(upem, scale):
+    p = T2CharStringPen(upem, ("latin",))
+    p.moveTo((100 * scale, 0)); p.lineTo((900 * scale, 0))
+    p.lineTo((900 * scale, 800 * scale)); p.closePath()
+    return p.getCharString()
+
+fb = FontBuilder(upem, isTTF=False)
+fb.setupGlyphOrder([".notdef", "A"]); fb.setupCharacterMap({65: "A"})
+fb.setupCFF(name, {"FullName": name},
+            {".notdef": T2CharStringPen(upem, ("latin",)).getCharString(),
+             "A": _charstring(upem, scale)}, {})
+# дальше — как у TTF: метрики, hhea, name, OS/2, post, save
+```
+
+Подводный камень ровно один, и ловится он только запуском:
+**`setupHorizontalMetrics` ключуется именем глифа**, а не кодом символа — в
+отличие от стоящего рядом `setupCharacterMap`. Ключ `65` вместо `"A"` проходит
+без возражений и роняет `fb.save` на `KeyError: 'A'` в пересчёте `maxp`, где
+связь с метриками уже не видна.
+
+`setupOS2()` при этом необязателен: без него шрифт сохраняется, `font_info` и
+`font_coverage` читают его как обычно, а растры совпадают побитово (проверено).
+В рецепте он стоит потому, что настоящие шрифты эту таблицу несут.
+
+Проверка, что образцы делают заявленное: `make_ttf(a, upem=1000)` против
+`make_ttf(b, upem=2000, scale=2.0)` — это один шрифт, `font_compare` даёт
+пустой `outlines_differ`; TTF против CFF того же рисунка даёт `["A"]` и
+предупреждение в `formats` (§2).
 
 ## 4. Чек-лист сверки шрифта с мастером
 
