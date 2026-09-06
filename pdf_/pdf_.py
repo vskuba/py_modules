@@ -15,6 +15,8 @@ import os
 import re
 
 SUBSET_RE = re.compile(r"^[A-Z]{6}\+")
+# Расширения по формату вложенного потока — как их понимает font_.font_.
+FONT_EXTENSIONS = {"TrueType": ".ttf", "OpenType": ".otf", "CFF": ".cff", "Type1": ".pfb"}
 
 
 def pdf_info(path: str) -> dict:
@@ -40,15 +42,7 @@ def pdf_info(path: str) -> dict:
             obj = ref.get_object()
             base = str(obj.get("/BaseFont", "")).lstrip("/")
             subtype = str(obj.get("/Subtype", "")).lstrip("/")
-            desc = obj.get("/FontDescriptor")
-            if desc is None and subtype == "Type0":
-                # У композитного шрифта дескриптор лежит у потомка
-                # (/DescendantFonts[0]), а не в самом объекте Type0.
-                kids = obj.get("/DescendantFonts") or []
-                if kids:
-                    desc = kids[0].get_object().get("/FontDescriptor")
-            desc = desc.get_object() if desc is not None else {}
-            embedded = any(k in desc for k in ("/FontFile", "/FontFile2", "/FontFile3"))
+            embedded = _font_stream(_descriptor(obj)) is not None
             marker = (base, subtype)
             if marker not in seen:
                 seen.add(marker)
@@ -69,6 +63,54 @@ def pdf_info(path: str) -> dict:
         "fonts": fonts,
         "text_chars": text_chars,
     }
+
+
+def pdf_fonts_extract(path: str, out_dir: str | None = None) -> list[dict]:
+    """
+    Извлечь вложенные шрифты: `{"basefont","format","subset","bytes","file"}`.
+
+    Байты доездают живыми до `font_.font_` (он принимает и путь, и байты) —
+    так подмножество из PDF сверяют с мастер-файлом, не создавая временных.
+    С `out_dir` каждый шрифт пишется файлом (`.ttf`/`.otf`/`.cff`/`.pfb`),
+    в `file` — путь; без него `file` None. Форматы: TrueType (FontFile2),
+    OpenType/CFF (FontFile3), Type1 (FontFile); невложенные шрифты
+    (тот же Helvetica из набора) в список не попадают.
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)  # свежий каталог — норма CLI, руки не нужны
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for page in reader.pages:
+        resources = page.get("/Resources")
+        font_dict = resources.get("/Font") if resources else None
+        if not font_dict:
+            continue
+        for _key, ref in font_dict.items():
+            obj = ref.get_object()
+            base = str(obj.get("/BaseFont", "")).lstrip("/")
+            found = _font_stream(_descriptor(obj))
+            if not found:
+                continue
+            stream, fmt = found
+            marker = (base, fmt)
+            if marker in seen:  # одна гарнитура живёт на каждой странице — не повторяться
+                continue
+            seen.add(marker)
+            # Ключ есть, а потока нет (словарь без `stream`) — формальное
+            # вложение с пустыми байтами: не выдумываем содержимое.
+            data = stream.get_data() if hasattr(stream, "get_data") else b""
+            item = {"basefont": base, "format": fmt,
+                    "subset": bool(SUBSET_RE.match(base)), "bytes": data, "file": None}
+            if out_dir:
+                target = os.path.join(out_dir, base.replace("/", "_") + FONT_EXTENSIONS[fmt])
+                with open(target, "wb") as fh:
+                    fh.write(data)
+                item["file"] = target
+            out.append(item)
+    return out
 
 
 def pdf_text(path: str, page: int | None = None) -> str:
@@ -114,10 +156,10 @@ def pdf_diff(path_a: str, path_b: str, dpi: int = 150, out_dir: str | None = Non
     Сравнить два PDF побиксельно в одинаковой плотности растра.
 
     Статистика — по всем общим страницам целиком (`max_diff`, `mean_abs`,
-    `pct_pixels`); `regions` — список окон на странице 1
-    `{"name","x","y","w","h"}` в пикселях данной плотности, по каждому своя
-    статистика. `out_dir` — записать `side-by-side.png` (A | B | теплокарта
-    разницы).
+    `pct_pixels`); `regions` — список окон `{"name","x","y","w","h","page"?}`
+    в пикселях данной плотности (нумерация страниц с нуля, окно по умолчанию
+    на первой), по каждому своя статистика и поле `page` в ответе.
+    `out_dir` — записать `side-by-side.png` (A | B | теплокарта разницы).
 
     `max_diff` до ~30 — копии совпадают в пределах растеризации;
     единичные 200+ на краях глифов текста — антиалиасинг движков, а не
@@ -159,9 +201,13 @@ def pdf_diff(path_a: str, path_b: str, dpi: int = 150, out_dir: str | None = Non
         if regions:
             result["regions"] = []
             for reg in regions:
+                idx = reg.get("page", 0)
+                if idx < 0 or idx >= min(len(imgs_a), len(imgs_b)):
+                    raise ValueError(f"страница {idx} вне документа "
+                                     f"(всего {min(len(imgs_a), len(imgs_b))})")
                 box = (reg["x"], reg["y"], reg["x"] + reg["w"], reg["y"] + reg["h"])
-                s = _stats(imgs_a[0].crop(box), imgs_b[0].crop(box))
-                result["regions"].append({"name": reg.get("name", ""), **s})
+                s = _stats(imgs_a[idx].crop(box), imgs_b[idx].crop(box))
+                result["regions"].append({"name": reg.get("name", ""), "page": idx, **s})
         else:
             result["regions"] = []
 
@@ -240,8 +286,8 @@ def pdf_print_html(html_path: str, out_pdf: str, chrome: str | None = None, time
     import tempfile
 
     binary = chrome or pdf_chrome()
-    if not binary:
-        raise RuntimeError("chrome not found: поставьте google-chrome или передайте chrome=")
+    if not binary or not os.path.exists(binary):
+        raise RuntimeError("chrome не найден: поставьте google-chrome или передайте chrome=")
     profile = tempfile.mkdtemp(prefix="pdfprint-")
     cmd = [
         binary, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
@@ -249,14 +295,16 @@ def pdf_print_html(html_path: str, out_pdf: str, chrome: str | None = None, time
         "--virtual-time-budget=15000", f"--print-to-pdf={out_pdf}",
         "file://" + os.path.abspath(html_path),
     ]
-    subprocess.run(cmd, check=False, capture_output=True, timeout=timeout_s)
+    proc = subprocess.run(cmd, check=False, capture_output=True, timeout=timeout_s)
     shutil.rmtree(profile, ignore_errors=True)
     if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1024:
-        raise RuntimeError(f"chrome не записал {out_pdf}")
+        # Причина отказа живёт в stderr движка: без его хвоста провал — гадание.
+        tail = proc.stderr.decode(errors="replace").strip()[-300:]
+        raise RuntimeError(f"chrome не записал {out_pdf}" + (f": {tail}" if tail else ""))
 
 
 def main() -> None:
-    """CLI: `python -m pdf_.pdf_ info|text|render|diff|whiteout|print …`."""
+    """CLI: `python -m pdf_.pdf_ info|text|render|diff|whiteout|print|extract …`."""
     import argparse
     import json
     import sys
@@ -270,6 +318,7 @@ def main() -> None:
     p = sub.add_parser("diff"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--dpi", type=int, default=150); p.add_argument("--out-dir")
     p = sub.add_parser("whiteout"); p.add_argument("pdf"); p.add_argument("out_png"); p.add_argument("--box", action="append", required=True, help="x,y,w,h в пунктах, начало сверху слева"); p.add_argument("--dpi", type=int, default=300)
     p = sub.add_parser("print"); p.add_argument("html"); p.add_argument("out_pdf")
+    p = sub.add_parser("extract"); p.add_argument("pdf"); p.add_argument("--out-dir")
 
     a = parser.parse_args()
     if a.cmd == "info":
@@ -289,7 +338,42 @@ def main() -> None:
     elif a.cmd == "print":
         pdf_print_html(a.html, a.out_pdf)
         print(a.out_pdf)
+    elif a.cmd == "extract":
+        entries = pdf_fonts_extract(a.pdf, out_dir=a.out_dir)
+        # Байты в JSON печатать бессмысленно: сводка с размером, файл уже на диске.
+        print(json.dumps([{k: v for k, v in e.items() if k != "bytes"} | {"size": len(e["bytes"])}
+                          for e in entries], ensure_ascii=False, indent=1))
 
+
+
+def _descriptor(font_obj):
+    """FontDescriptor шрифта, разворачивая композитный Type0 к потомку.
+
+    У Type0 дескриптор лежит у потомка (/DescendantFonts[0]), а не в самом
+    объекте шрифта: без разворота вложенный шрифт всегда выглядел бы внешним.
+    """
+    desc = font_obj.get("/FontDescriptor")
+    if desc is None and str(font_obj.get("/Subtype", "")) == "/Type0":
+        kids = font_obj.get("/DescendantFonts") or []
+        if kids:
+            desc = kids[0].get_object().get("/FontDescriptor")
+    return desc.get_object() if desc is not None else None
+
+
+def _font_stream(desc):
+    """Поток вложенного шрифта и его формат; None, если шрифт не вложен.
+
+    FontFile3 — ключ многорольный: по подтипу потока отличается чистый CFF
+    от полноценного OpenType. Поток с нулевой длиной — всё ещё вложение
+    (формальный признак по ключу), байты просто пустые.
+    """
+    for key, fmt in (("/FontFile2", "TrueType"), ("/FontFile3", None), ("/FontFile", "Type1")):
+        if desc is not None and key in desc:
+            stream = desc[key].get_object()
+            if key == "/FontFile3":
+                fmt = "OpenType" if str(stream.get("/Subtype", "")) == "/OpenType" else "CFF"
+            return stream, fmt
+    return None
 
 
 def _stats(img_a, img_b) -> dict:
