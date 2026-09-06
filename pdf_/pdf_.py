@@ -137,16 +137,24 @@ def pdf_render(path: str, out_dir: str, dpi: int = 150, page: int | None = None)
     """
     import pypdfium2 as pdfium
 
-    doc = pdfium.PdfDocument(path)
-    os.makedirs(out_dir, exist_ok=True)  # вызывающий вправе указать свежий путь — CLI так и делает
-    indices = range(len(doc)) if page is None else [page]
     out_paths = []
-    for i in indices:
-        bmp = doc[i].render(scale=dpi / 72.0)
-        img = bmp.to_pil()
-        target = os.path.join(out_dir, f"page-{i}.png")
-        img.convert("RGB").save(target)
-        out_paths.append(target)
+    # Документ закрывается всегда: незакрытый висит до сборки мусора, и на
+    # пакетном прогоне pypdfium2 ругается «objects are still open».
+    with pdfium.PdfDocument(path) as doc:
+        os.makedirs(out_dir, exist_ok=True)  # вызывающий вправе указать свежий путь — CLI так и делает
+        indices = range(len(doc)) if page is None else [page]
+        for i in indices:
+            bmp = doc[i].render(scale=dpi / 72.0)
+            try:
+                # Закрытие документа каскадом закрывает страницы, но не растры —
+                # у растра свой буфер. И `to_pil()` кладёт картинку поверх этого
+                # буфера, поэтому пиксели копируются (`convert`) до освобождения.
+                img = bmp.to_pil().convert("RGB")
+            finally:
+                bmp.close()
+            target = os.path.join(out_dir, f"page-{i}.png")
+            img.save(target)
+            out_paths.append(target)
     return out_paths
 
 
@@ -180,12 +188,15 @@ def pdf_diff(path_a: str, path_b: str, dpi: int = 150, out_dir: str | None = Non
         }
         if not files_a or not files_b:
             raise ValueError("один из документов отрендерился пустым")
-        imgs_a = [Image.open(f) for f in files_a]
+        # Картинки читаются в память сразу: `Image.open` ленив и держит файл
+        # открытым, а страниц столько же, сколько в документе, — на большом
+        # PDF это упирается в лимит дескрипторов.
+        imgs_a = [_image_load(f) for f in files_a]
         # Размеры могут разойтись на пиксели между движками — кандидат
         # приводится к сетке эталона.
         imgs_b = []
         for i in range(min(len(files_a), len(files_b))):
-            ib = Image.open(files_b[i])
+            ib = _image_load(files_b[i])
             if ib.size != imgs_a[i].size:
                 ib = ib.resize(imgs_a[i].size)
             imgs_b.append(ib)
@@ -374,6 +385,20 @@ def _font_stream(desc):
                 fmt = "OpenType" if str(stream.get("/Subtype", "")) == "/OpenType" else "CFF"
             return stream, fmt
     return None
+
+
+def _image_load(path: str):
+    """
+    Прочитать картинку целиком и отпустить файл.
+
+    `Image.open` возвращает ленивый объект, держащий дескриптор до первого
+    обращения к пикселям; копия внутри `with` отвязывает картинку от файла,
+    сохраняя режим и данные.
+    """
+    from PIL import Image
+
+    with Image.open(path) as img:
+        return img.copy()
 
 
 def _stats(img_a, img_b) -> dict:
