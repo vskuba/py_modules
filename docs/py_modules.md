@@ -201,4 +201,5 @@ py_modules/qdrant_/qdrant_.py     ->  qdrant_search()
 | Хранение времени и пояс показа | `datetime_rules.md` |
 | Журнал, трассировка, «сбой журнала не роняет процесс» | `observability_rules.md` |
 | Провайдеры LLM, приоритет и фоллбэк | `llm_rules.md` |
+| Модель, читающая картинку: контракт `data:`-URI, цена кадра | `vision_llm.md` |
 | `.env`, секреты, таблица настроек | `env_config_rules.md` |
