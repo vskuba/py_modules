@@ -111,6 +111,10 @@ def image_audit(path: str, grid: tuple = (3, 3)) -> dict:
     """
     img = _load(path)
     cols, rows = grid
+    # Без проверки нулевая разбивка не падает, а тихо отдаёт аудит без зон:
+    # range(0) просто не крутится, и вердикт выносится по одним кромкам.
+    if cols < 1 or rows < 1:
+        raise ValueError(f'grid: ждём хотя бы 1x1, пришло {cols}x{rows}')
     zones = []
     for r in range(rows):
         for c in range(cols):
@@ -263,11 +267,24 @@ def _split_alpha(image: Image.Image) -> tuple:
 
 
 def _window(img: Image.Image, box: tuple = None) -> list:
-    """Пиксели окна (доли кадра) списком RGB-кортежей."""
+    """
+    Пиксели окна (доли кадра) списком RGB-кортежей.
+
+    Вырожденное окно — отказ, а не пустой список. Пустой уезжает вглубь,
+    к `Counter(...).most_common(1)[0]`, и возвращается оттуда `IndexError:
+    list index out of range` — по нему не видно ни кадра, ни окна. Так
+    ломался `image_audit` на мелкой картинке: доли кромки (0.005–0.035)
+    после `int()` схлопывались в ноль пикселей.
+    """
     if box:
         w, h = img.size
         x0, y0, x1, y1 = box
-        img = img.crop((int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h)))
+        crop = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
+        if crop[2] <= crop[0] or crop[3] <= crop[1]:
+            raise ValueError(
+                f'окно {tuple(round(v, 3) for v in box)} на кадре {w}x{h} — '
+                f'это {crop[2] - crop[0]}x{crop[3] - crop[1]} px: мерить нечего')
+        img = img.crop(crop)
     # Pillow 14 объявил getdata устаревшим в пользу get_flattened_data,
     # а в старых версиях нового имени нет — берём то, что есть.
     if hasattr(img, 'get_flattened_data'):
