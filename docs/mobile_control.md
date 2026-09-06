@@ -195,11 +195,22 @@ python -m adb_.adb_log crash
 | `adb_cdp_navigate('url', url_part='') -> str` | открыть и дождаться загрузки, вернуть итоговый адрес |
 | `adb_cdp_capture_all('package', urls, 'out', serial='') -> list` | пачка: открыть каждый адрес, дождаться дорисовки, снять экран PNG в каталог (имя — из адреса); сбой одного адреса не гонит пачку |
 | `adb_cdp_element_at(x, y, url_part='') -> dict` | элемент под экранными координатами снимка: `{tag, id, cls, text, href, rect, chain}`; деление на `devicePixelRatio` — внутри |
+| `adb_cdp_element_rect('селектор', url_part='', serial='') -> dict` | обратный ход: прямоугольники всех элементов по CSS-селектору — `{count, dpr, origin, items: [{tag, cls, text, css, screen}]}`; `screen` — уже пиксели снимка, с поправкой на начало WebView на экране |
 
 CLI: `python -m adb_.adb_cdp connect com.example.app | pages | eval 'location.href' |
 navigate https://localhost/menu.html | capture com.example.app shots/ <url...> |
-element 540 300`. Транспорт — `adb_ws` (WebSocket на stdlib):
+element 540 300 | element-rect .tab`. Транспорт — `adb_ws` (WebSocket на stdlib):
 фрагментация длинных ответов и ping/pong уже учтены в нём.
+
+`element_rect` нужна, когда элементом надо померить картинку: «где на снимке
+лежит эта крышка/кнопка/поле», чтобы загнать координаты в `image_seam` или
+`image_measure` (`image_tooling.md`, §4–5) — без ручной арифметики vw→px.
+WebView начинается не с верха снимка, а ниже статус-бара, и DOM его высоту не
+знаёт: функция берёт её из списка окон системы (`dumpsys`, на Android 16 это
+строка `ty=STATUS_BAR`), сырой сдвиг лежит в `origin`. Значение
+устройство-зависимое: на эмуляторе 66 px, на телефоне 91 px — промах на эту
+высоту означает «меряю не там». Приложение, рисующее во весь экран включая
+область статуса, поправку сломает: в нём доверять следует только `css`.
 
 Страницы ассетов открываются схемой `https://localhost/<страница>`: на `file://`
 обработчик схемы не реагирует, а `chrome://`-переходы WebView блокирует.

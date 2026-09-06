@@ -239,6 +239,84 @@ def adb_cdp_element_at(x: float, y: float, port: int = ADB_CDP_PORT,
     return adb_cdp_eval(js, port=port, url_part=url_part)
 
 
+def adb_cdp_element_rect(selector: str, port: int = ADB_CDP_PORT,
+                         url_part: str = '', serial: str = '') -> dict:
+    """
+    Прямоугольники элементов по CSS-селектору — и в CSS-пикселях, и в пикселях
+    снимка экрана. Обратный ход к `adb_cdp_element_at`: тот ищет элемент
+    под экранным пикселем, этот говорит, где на снимке лежит элемент.
+
+    Нужен, чтобы проверять картинку по адресу: «замерь фон под этой крышкой
+    текста» без ручной арифметики vw→px и без угадывания, где крышка встала
+    после поворота вёрстки. Экранные координаты считаются по devicePixelRatio
+    с поправкой на начало WebView на экране — сдвиг статус-бара берётся
+    из окон системы (`_status_bar_height`), DOM его не знает. Статус-бар
+    на эмуляторе (Android 16) даёт 66 px, на телефоне — 91 px; один промах
+    на эту высоту и профиль меряет не там.
+
+    Args:
+        selector: CSS-селектор; совпадение ищет `querySelectorAll` —
+            возвращает все элементы, не только первый.
+        port: локальный порт DevTools.
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        serial: устройство для чтения статуса-бара; пусто — единственное.
+
+    Returns:
+        {'selector', 'count', 'dpr', 'origin': {'x','y'} — сдвиг WebView
+         на экране, 'items': [{'tag','cls','text' (первые 40 символов),
+         'css': {'x','y','w','h'}, 'screen': {'x','y','w','h'}}]};
+         items пуст, если селектор ничего не нашёл.
+    """
+    js = _ELEMENT_RECT_JS % json.dumps(selector)
+    result = adb_cdp_eval(js, port=port, url_part=url_part) or {}
+    origin_y = _status_bar_height(serial)
+    dpr = result.get('dpr', 1) or 1
+    for item in result.get('items', []):
+        css = item['css']
+        item['screen'] = {'x': round(css['x'] * dpr), 'y': round((css['y'] + origin_y / dpr) * dpr),
+                          'w': round(css['w'] * dpr), 'h': round(css['h'] * dpr)}
+    result['selector'] = selector
+    result['origin'] = {'x': 0, 'y': origin_y}
+    return result
+
+
+# docstring для eval: прямоугольник считается страницей — dpr и прокрутка
+# берются с неё же. Селектор подставляется через json.dumps: кавычки и
+# скобки селектора не ломают выражение.
+_ELEMENT_RECT_JS = """
+((sel) => {
+  const els = document.querySelectorAll(sel);
+  const d = window.devicePixelRatio || 1;
+  const items = [];
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    items.push({tag: el.tagName.toLowerCase(),
+                cls: typeof el.className === 'string' ? el.className : '',
+                text: (el.textContent || '').trim().slice(0, 40),
+                css: {x: +(r.x + window.scrollX).toFixed(1),
+                      y: +(r.y + window.scrollY).toFixed(1),
+                      w: +r.width.toFixed(1), h: +r.height.toFixed(1)}});
+  }
+  return {count: items.length, dpr: d, items: items};
+})(%s)
+"""
+
+
+# Окно статус-бара в выводе dumpsys: строка вида
+# `mAttrs={(0,0)(fillx66) gr=TOP ... ty=STATUS_BAR` — 66 есть высота бара
+# в физических пикселях, на столько WebView начинается ниже верха снимка.
+# DOM этого сдвига не знает; на эмуляторе (Android 16) бар 66 px, на телефоне —
+# 91 px, и промах на эту высоту означает «профиль мерит не там».
+_STATUS_BAR_RE = re.compile(r'\((\d+),(\d+)\)\((\S+)x(\d+)\).*ty=STATUS_BAR')
+
+
+def _status_bar_height(serial: str) -> int:
+    """Высота статус-бара в физических пикселях по списку окон; 0 — если не нашёлся."""
+    out = adb_run('shell', 'dumpsys window windows | grep -m1 ty=STATUS_BAR', serial=serial)
+    match = _STATUS_BAR_RE.search(out)
+    return int(match.group(4)) if match else 0
+
+
 def _screencap_png_raw(serial: str) -> bytes:
     """Голый PNG со снимка экрана; JPEG-нормализация не нужна — кадры для замеров."""
     png = adb_run_bytes('exec-out', 'screencap', '-p', serial=serial)
@@ -333,9 +411,9 @@ if __name__ == '__main__':
         epilog="connect com.example.app | pages | eval 'location.href' | "
                "navigate https://localhost/menu.html | "
                "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
-               "element 540 300")
+               "element 540 300 | element-rect .card-cover")
     parser.add_argument('command', choices=['connect', 'pages', 'eval', 'navigate',
-                                            'capture', 'element'])
+                                            'capture', 'element', 'element-rect'])
     parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
     parser.add_argument('--serial', default='', help='устройство для connect и снимков')
     parser.add_argument('--port', type=int, default=ADB_CDP_PORT, help='локальный порт DevTools')
@@ -359,6 +437,16 @@ if __name__ == '__main__':
         elif ns.command == 'element':
             print(adb_cdp_element_at(float(ns.args[0]), float(ns.args[1]),
                                      port=ns.port, url_part=ns.url_part))
+        elif ns.command == 'element-rect':
+            r = adb_cdp_element_rect(ns.args[0], port=ns.port,
+                                     url_part=ns.url_part, serial=ns.serial)
+            print(f"{r['selector']}: {r['count']} совпадений, dpr={r.get('dpr')}, "
+                  f"origin y={r['origin']['y']}")
+            for item in r['items']:
+                css, scr = item['css'], item['screen']
+                print(f"  <{item['tag']} .{item['cls']}> «{item['text']}» "
+                      f"css=({css['x']},{css['y']} {css['w']}×{css['h']}) "
+                      f"screen=({scr['x']},{scr['y']} {scr['w']}×{scr['h']})")
         else:
             print(adb_cdp_navigate(ns.args[0], port=ns.port, url_part=ns.url_part))
     except (IndexError, ValueError) as err:

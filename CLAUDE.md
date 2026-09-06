@@ -51,7 +51,7 @@ namespace-папок, которые проекты импортируют на�
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
 | `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
-| `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону |
+| `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона и проверка шва |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
@@ -129,10 +129,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_state` | `read`, `settle`, `last` |
 | `adb_.adb_crop` | `on`, `box`, `part` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
-| `adb_.adb_cdp` | `connect`, `pages`, `eval`, `navigate`, `capture`, `element` |
+| `adb_.adb_cdp` | `connect`, `pages`, `eval`, `navigate`, `capture`, `element`, `element-rect` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `whiteout`, `print`, `extract` |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `textdiff` |
-| `image_.image_` | `measure`, `match` |
+| `image_.image_` | `measure`, `match`, `audit`, `seam` |
 
 Список сверяется командой — таблица устаревает быстрее кода:
 
