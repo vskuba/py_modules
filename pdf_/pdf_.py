@@ -3,12 +3,13 @@ PDF: осмотр, рендер, сверка с эталоном, белени�
 
 Модуль собран вокруг операций, из которых состоит форензика сгенерированного
 PDF: какой размер страницы записан на самом деле (он не всегда A4!), какие
-шрифты вложены, что текстом читается, а что запёклось в растр, и чем
+шрифты вложены, что текстом читается, а что запёкся в растр, и чем
 отрендеренная копия отличается от эталонной.
 
-Единицы: MediaBox и все координаты в API — пункты PDF (1/72 дюйма), начало
-координат — верхний левый угол страницы (ось Y вниз), если в функции не
-сказано иное.
+Единицы: все координаты — пункты PDF (1/72 дюйма). MediaBox из `pdf_info` —
+сырые координаты PDF (начало внизу слева); окна, которые передают в функции
+беления и сверки, — наоборот, с началом в верхнем левом углу, перевод внутри
+функций.
 """
 import os
 import re
@@ -21,7 +22,7 @@ def pdf_info(path: str) -> dict:
     Краткий паспорт документа: страницы, MediaBox (pt, постранично), шрифты,
     размер текстового слоя.
 
-    `text_chars == 0` — текстового слоя нет, всё запёклось в растр;
+    `text_chars == 0` — текстового слоя нет, всё запёкся в растр;
     `subset` — шрифт является подмножеством (префикс `ABCDEF+`), сверять
     такое с мастером по контурам бессмысленно, см. `font_tooling.md`.
     """
@@ -38,15 +39,22 @@ def pdf_info(path: str) -> dict:
         for _key, ref in font_dict.items():
             obj = ref.get_object()
             base = str(obj.get("/BaseFont", "")).lstrip("/")
+            subtype = str(obj.get("/Subtype", "")).lstrip("/")
             desc = obj.get("/FontDescriptor")
+            if desc is None and subtype == "Type0":
+                # У композитного шрифта дескриптор лежит у потомка
+                # (/DescendantFonts[0]), а не в самом объекте Type0.
+                kids = obj.get("/DescendantFonts") or []
+                if kids:
+                    desc = kids[0].get_object().get("/FontDescriptor")
             desc = desc.get_object() if desc is not None else {}
             embedded = any(k in desc for k in ("/FontFile", "/FontFile2", "/FontFile3"))
-            marker = (base, str(obj.get("/Subtype", "")))
+            marker = (base, subtype)
             if marker not in seen:
                 seen.add(marker)
                 fonts.append({
                     "basefont": base,
-                    "subtype": str(obj.get("/Subtype", "")).lstrip("/"),
+                    "subtype": subtype,
                     "embedded": bool(embedded),
                     "subset": bool(SUBSET_RE.match(base)),
                 })
