@@ -207,6 +207,51 @@ def pdf_whiteout(path: str, out_png: str, boxes: list[dict], dpi: int = 300, pag
     return out_png
 
 
+def pdf_chrome() -> str | None:
+    """Путь к бинарю headless-Chrome (первый найденный), None если нет."""
+    import shutil
+
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def pdf_print_html(html_path: str, out_pdf: str, chrome: str | None = None, timeout_s: int = 30) -> None:
+    """
+    Напечатать HTML-страницу в PDF тем же движком (Skia), каким браузер
+    печатает сам: документ векторный, размер страницы задаёт CSS `@page`.
+
+    Набор флагов не случайный, он измерен на живой задаче:
+    `--no-sandbox --disable-dev-shm-usage` — иначе дохнет в контейнере;
+    отдельный `--user-data-dir` — несколько запусков не ловят «профиль
+    заблокирован»; `--no-pdf-header-footer` — иначе штампуются дата и URL;
+    `--virtual-time-budget` — ждать загрузки веб-шрифтов и JS-разметки,
+    иначе PDF выйдет шрифтом-заглушкой.
+
+    Бросает RuntimeError, если файл не появился (страница не отрендерилась).
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    binary = chrome or pdf_chrome()
+    if not binary:
+        raise RuntimeError("chrome not found: поставьте google-chrome или передайте chrome=")
+    profile = tempfile.mkdtemp(prefix="pdfprint-")
+    cmd = [
+        binary, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+        "--disable-gpu", f"--user-data-dir={profile}", "--no-pdf-header-footer",
+        "--virtual-time-budget=15000", f"--print-to-pdf={out_pdf}",
+        "file://" + os.path.abspath(html_path),
+    ]
+    subprocess.run(cmd, check=False, capture_output=True, timeout=timeout_s)
+    shutil.rmtree(profile, ignore_errors=True)
+    if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1024:
+        raise RuntimeError(f"chrome не записал {out_pdf}")
+
+
 def _stats(img_a, img_b) -> dict:
     """Пиксельная статистика разницы: максимум по каналам, среднее по L, доля пикселей выше порога."""
     from PIL import ImageChops
