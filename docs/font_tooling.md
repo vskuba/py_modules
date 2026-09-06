@@ -4,7 +4,9 @@
 > пиксельно (`font_text_diff`: одна строка двумя шрифтами). На вопрос «это
 > тот же шрифт?» отвечают `font_compare` — контуры, нормированные по
 > unitsPerEm, потому что подмножества перекодируются и масштабируются.
-> Инструмент — `py_modules/font_`, CLI: `python -m font_.font_`.
+> Инструмент — `py_modules/font_`, CLI: `python -m font_.font_`;
+> зависимости — `pip install -r py_modules/requirements-doc.txt` (импорт
+> модуля пройдёт и без них, упадёт вызов функции).
 
 ## 1. Анатомия: паспорт через `font_info`
 

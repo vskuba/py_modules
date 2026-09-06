@@ -100,14 +100,16 @@ PYTHONPATH=. .venv/bin/python -m ai.ai_vision describe <файл>  # прого�
 ```bash
 pip install -r requirements.txt          # ядро: Pillow, numpy — картинки и пиксельные замеры
 pip install -r requirements-vision.txt   # + зрение через ai_vision (pydantic-ai)
+pip install -r requirements-doc.txt      # + документы: pdf_ (pypdf, pypdfium2), font_ (fontTools)
 ```
 
-В requirements проекта — одна строка `-r py_modules/requirements.txt`.
+В requirements проекта — одна строка `-r py_modules/requirements.txt`; половину, которая
+нужна этому проекту, он добирает своей строкой.
 
-⚠️ `pdf_` и `font_` тянут `pypdf`, `pypdfium2`, `fontTools` **лениво, внутри функций**, и
-эти пакеты не объявлены ни в одном requirements — в venv их может не быть (в выкачке
-репозитория на сегодня нет). Импорт модуля при этом проходит, падает только вызов
-функции: `ModuleNotFoundError` из `pdf_info`, а не при `from pdf_.pdf_ import pdf_info`.
+⚠️ Тяжёлые пакеты подключаются **лениво, внутри функций**, поэтому **импорт не проверяет
+зависимости**: `from pdf_.pdf_ import pdf_info` пройдёт и там, где `pypdf` не стоит, —
+`ModuleNotFoundError` прилетит из вызова `pdf_info(...)`. Проверка правки в `pdf_`, `font_`
+и vision-половине `ai/` — вызов функции или CLI; одного импорта мало.
 
 CLI есть у модулей, которыми пользуются «руками» (`python -m <пакет>.<модуль> <команда>`):
 

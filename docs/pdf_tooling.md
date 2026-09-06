@@ -3,7 +3,9 @@
 > PDF смотрят структурно (`pdf_info`: MediaBox, шрифты, наличие текстового
 > слоя) и пиксельно (`pdf_diff` против эталона). Генерируют печатью браузера
 > (`pdf_print_html`) — тогда документ векторный и размер страницы задаёт CSS
-> `@page`. Инструмент — `py_modules/pdf_`, CLI: `python -m pdf_.pdf_`.
+> `@page`. Инструмент — `py_modules/pdf_`, CLI: `python -m pdf_.pdf_`;
+> зависимости — `pip install -r py_modules/requirements-doc.txt` (импорт
+> модуля пройдёт и без них, упадёт вызов функции).
 
 ## 1. Структура: смотреть сначала `pdf_info`
 

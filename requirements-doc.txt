@@ -1,0 +1,10 @@
+# Документы: PDF (pdf_) и шрифты (font_). «doc» — про документ, не про документацию.
+# Ставится поверх ядра: рендер и сверка идут через Pillow, он в requirements.txt.
+# Ни adb_, ни ai_ этого не требуют — половина отдельная по той же причине, что и vision.
+# Флоры по проверенному прогону (pdf_info/render/diff/fonts_extract, font_info/compare/
+# text_diff). Набор вызовов узкий и давно стабильный — PdfReader, PdfDocument, TTFont,
+# RecordingPen: проект, у которого версия ниже, вправе опустить флор у себя.
+-r requirements.txt
+pypdf>=6.17
+pypdfium2>=5.13
+fonttools>=4.64
