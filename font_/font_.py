@@ -52,6 +52,34 @@ def font_info(path: str | bytes) -> dict:
     }
 
 
+def font_baseline_top(path: str | bytes, size_pt: float) -> float:
+    """
+    Смещение от верха строки `line-height: 1em` до базовой линии, пункты.
+
+    Chrome/WebView ставит текст не по верху глифов: содержимое строки
+    (ascender − descender) отличается от 1em, разница делится полуинтервалами
+    (half-leading), и baseline уходит на `asc + (1 − asc + desc)/2` =
+    `(1 + asc + desc)/2` em от верха строки (descender со знаком, обычно
+    отрицательный). Это единственный способ руками посадить HTML-текст в
+    baseline, который Skia заняла в исходном документе: офсет в пикселях
+    шаблона — ответ этой функции.
+
+    Флаг USE_TYPO_METRICS (бит 0x80 в OS/2.fsSelection) переключает движок на
+    sTypoAscender/sTypoDescender: у официальных шрифтов hhea-выступы нарочно
+    раздуты, и без учёта флага текст сядет ниже фактической строки.
+    """
+    from fontTools.ttLib import TTFont
+
+    t = TTFont(_stream(path))
+    upem = t["head"].unitsPerEm
+    os2 = t.get("OS/2")
+    if os2 is not None and (os2.fsSelection & 0x80):
+        asc, desc = os2.sTypoAscender, os2.sTypoDescender
+    else:
+        asc, desc = t["hhea"].ascent, t["hhea"].descent
+    return size_pt * (1 + asc / upem + desc / upem) / 2
+
+
 def font_coverage(path: str | bytes, text: str) -> list[str]:
     """
     Символы `text`, отсутствующих в таблице cmap, в порядке появления.
@@ -177,6 +205,7 @@ def main() -> None:
     p = sub.add_parser("compare"); p.add_argument("a"); p.add_argument("b")
     p = sub.add_parser("render"); p.add_argument("font"); p.add_argument("text"); p.add_argument("out_png"); p.add_argument("--size", type=int, default=64)
     p = sub.add_parser("textdiff"); p.add_argument("a"); p.add_argument("b"); p.add_argument("text"); p.add_argument("--size", type=int, default=64); p.add_argument("--out-dir")
+    p = sub.add_parser("baseline-top"); p.add_argument("font"); p.add_argument("size_pt", type=float)
 
     a = parser.parse_args()
     if a.cmd == "info":
@@ -189,6 +218,9 @@ def main() -> None:
         print(font_render_text(a.font, a.text, a.out_png, size=a.size))
     elif a.cmd == "textdiff":
         print(json.dumps(font_text_diff(a.a, a.b, a.text, size=a.size, out_dir=a.out_dir), ensure_ascii=False, indent=1))
+    elif a.cmd == "baseline-top":
+        # Число с плавающей точкой, не JSON: значение подставляют в CSS/шаблон.
+        print(f"{font_baseline_top(a.font, a.size_pt):.3f}")
 
 
 

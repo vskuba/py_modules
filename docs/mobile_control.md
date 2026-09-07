@@ -193,7 +193,8 @@ python -m adb_.adb_log crash
 | `adb_cdp_connect('package', serial='') -> dict` | pid → forward → список страниц; forward переповешивает на свежий pid при каждом вызове |
 | `adb_cdp_pages() -> list` | открытые страницы: `{title, url, ws}` |
 | `adb_cdp_eval('js', url_part='') -> значение` | вычислить и вернуть значение; `returnByValue` — только данные, DOM-объекты так не вернуть |
-| `adb_cdp_navigate('url', url_part='') -> str` | открыть и дождаться загрузки, вернуть итоговый адрес |
+| `adb_cdp_navigate('url', url_part='', waitfor='') -> str` | открыть и дождаться загрузки, вернуть итоговый адрес; игла `url_part` сверяется с итоговым href, точное `href == url` — успех всегда; `waitfor` — JS-условие, которого дождаться после смены адреса |
+| `adb_cdp_waitfor('js', url_part='', timeout=10, poll=0.3) -> значение` | опрашивать выражение до истинности и вернуть значение; навигацию страницы (eval бросает) пережидает, провал — TimeoutError с последним значением |
 | `adb_cdp_capture_all('package', urls, 'out', serial='') -> list` | пачка: открыть каждый адрес, дождаться дорисовки, снять экран PNG в каталог (имя — из адреса); сбой одного адреса не гонит пачку |
 | `adb_cdp_element_at(x, y, url_part='') -> dict` | элемент под экранными координатами снимка: `{tag, id, cls, text, href, rect, chain}`; деление на `devicePixelRatio` — внутри |
 | `adb_cdp_element_rect('селектор', url_part='', serial='') -> dict` | обратный ход: прямоугольники всех элементов по CSS-селектору — `{count, dpr, origin, items: [{tag, cls, text, css, screen}]}`; `screen` — уже пиксели снимка, с поправкой на начало WebView на экране |
@@ -203,8 +204,11 @@ python -m adb_.adb_log crash
 | `adb_cdp_tap(selector, url_part='', serial='') -> tuple` | тап по центру элемента, возвращает экранные пиксели; доставка через CDP Input, см. ниже |
 
 CLI: `python -m adb_.adb_cdp connect com.example.app | pages | target reserve | eval 'location.href' |
-navigate https://localhost/menu.html | capture com.example.app shots/ <url...> |
-element 540 300 | element-rect .tab | element-shot .tab shots/ | viewport | tap <селектор>`.
+waitfor 'window.ready' | navigate https://localhost/menu.html --waitfor 'document.title' |
+capture com.example.app shots/ <url...> | element 540 300 | element-rect .tab |
+element-shot .tab shots/ | viewport | tap <селектор>`. Флаги: `--url-part` (цель), `--timeout`
+(navigate/waitfor), `--json` — вывести значение как JSON (`true`/`null`, а не Python-`True`/`None`:
+вывод едят `jq` и скрипты, без флага идёт читаемый repr).
 Транспорт — `adb_ws` (WebSocket на stdlib): фрагментация длинных ответов и
 ping/pong уже учтены в нём.
 
@@ -223,6 +227,17 @@ WebView начинается не с верха снимка, а ниже ста
 Навигация асинхронна — `Page.navigate` отвечает до смены страницы, — поэтому
 ходят через `adb_cdp_navigate`, иначе следующий шаг отработает по старой странице
 и примет её за новую.
+
+**Завершение навигации — по ИТОГОВОМУ адресу, и адрес ещё не готовность.**
+Игла `url_part` сверяется с итоговым href после редиректов: игла от страницы-
+источника (`auth` при редиректе на `reserve.html`) не сработает никогда, и
+`TimeoutError` в сообщении об этом скажет. Точное совпадение `href == url`
+засчитывается независимо от иглы: возврат на текущую страницу — успех (иначе
+«навигация не работает» оказывалось ложной паузой в 15 с). Когда мало самого
+адреса — данные страница раскладывает после смены href — просят `waitfor`:
+`navigate(..., waitfor='document.readyState === "complete"')` или отдельно
+`adb_cdp_waitfor`. Слепой `sleep` вместо ожидания — источник плавающих
+тестов: либо ждёт лишнего, либо не дожидается.
 
 `element_shot` бережёт от ручного кроя: вместо «снять полный экран и вычесть
 статус-бар» она отдаёт кадр ровно по элементу — его меряют `image_seam`,

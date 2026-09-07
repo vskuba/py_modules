@@ -11,6 +11,7 @@ PDF: какой размер страницы записан на самом д�
 беления и сверки, — наоборот, с началом в верхнем левом углу, перевод внутри
 функций.
 """
+import json
 import os
 import re
 
@@ -311,44 +312,177 @@ def pdf_chrome() -> str | None:
     return None
 
 
+def pdf_crop(src: str, box_mm, out_png: str, dpi: int = 150, page: int = 0,
+             scale: float = 1.0) -> str:
+    """
+    Вырезать окно в миллиметрах из PDF-страницы или растрового файла и спасти PNG.
+
+    Миллиметры — с началом сверху слева, как у `pdf_whiteout`: при сверке
+    сгенерированного документа окна полей приезжают из раскладки именно в mm,
+    и ручной перевод mm→px каждый раз — источник ошибки. Для растра (кадр
+    снимка экрана, отрендеренная страница) `dpi` описывает сам файл — то же
+    окно попадает в то же место макета. `scale` — увеличение для осмотра:
+    край глифа виден на 3–4×.
+    """
+    from PIL import Image
+
+    if src.lower().endswith(".pdf"):
+        import pypdfium2 as pdfium
+
+        with pdfium.PdfDocument(src) as doc:
+            bmp = doc[page].render(scale=dpi / 72.0)
+            try:
+                img = bmp.to_pil().convert("RGB")
+            finally:
+                bmp.close()
+    else:
+        img = Image.open(src).convert("RGB")
+    k = dpi / 25.4
+    img = img.crop(tuple(round(v * k) for v in box_mm))
+    if scale != 1.0:
+        img = img.resize((round(img.width * scale), round(img.height * scale)),
+                         Image.LANCZOS)
+    img.save(out_png)
+    return out_png
+
+
+def _chrome_print(url: str, out_pdf: str | None, binary: str, profile: str,
+                  vtb_ms: int, timeout_s: int):
+    """Один запуск headless Chrome: адрес → PDF (или просто прогрев страницы).
+
+    Флаги измерены на живой задаче: `--no-sandbox --disable-dev-shm-usage` —
+    иначе дохнет в контейнере; отдельный `--user-data-dir` — несколько
+    запусков не ловят «профиль заблокирован»; `--no-pdf-header-footer` —
+    иначе штампуются дата и URL; `--virtual-time-budget` — ждать веб-шрифты
+    и JS-разметку, иначе PDF выйдет шрифтом-заглушкой.
+    """
+    import subprocess
+
+    cmd = [
+        binary, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+        "--disable-gpu", f"--user-data-dir={profile}", "--no-pdf-header-footer",
+        f"--virtual-time-budget={vtb_ms}",
+    ]
+    if out_pdf:
+        cmd.append(f"--print-to-pdf={out_pdf}")
+    return subprocess.run(cmd + [url], check=False, capture_output=True, timeout=timeout_s)
+
+
+def _chrome_fail(out_pdf: str, proc) -> None:
+    """Общий отказ печати: причина живёт в stderr движка, без хвоста провал — гадание."""
+    if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1024:
+        tail = proc.stderr.decode(errors="replace").strip()[-300:]
+        raise RuntimeError(f"chrome не записал {out_pdf}" + (f": {tail}" if tail else ""))
+
+
 def pdf_print_html(html_path: str, out_pdf: str, chrome: str | None = None, timeout_s: int = 30) -> None:
     """
     Напечатать HTML-страницу в PDF тем же движком (Skia), каким браузер
     печатает сам: документ векторный, размер страницы задаёт CSS `@page`.
-
-    Набор флагов не случайный, он измерен на живой задаче:
-    `--no-sandbox --disable-dev-shm-usage` — иначе дохнет в контейнере;
-    отдельный `--user-data-dir` — несколько запусков не ловят «профиль
-    заблокирован»; `--no-pdf-header-footer` — иначе штампуются дата и URL;
-    `--virtual-time-budget` — ждать загрузки веб-шрифтов и JS-разметки,
-    иначе PDF выйдет шрифтом-заглушкой.
+    Странице, читающей `localStorage`, нужен `pdf_print_seeded` — на
+    file:// хранилище другого происхождения недоступно.
 
     Бросает RuntimeError, если файл не появился (страница не отрендерилась).
     """
     import shutil
-    import subprocess
     import tempfile
 
     binary = chrome or pdf_chrome()
     if not binary or not os.path.exists(binary):
         raise RuntimeError("chrome не найден: поставьте google-chrome или передайте chrome=")
     profile = tempfile.mkdtemp(prefix="pdfprint-")
-    cmd = [
-        binary, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
-        "--disable-gpu", f"--user-data-dir={profile}", "--no-pdf-header-footer",
-        "--virtual-time-budget=15000", f"--print-to-pdf={out_pdf}",
-        "file://" + os.path.abspath(html_path),
-    ]
-    proc = subprocess.run(cmd, check=False, capture_output=True, timeout=timeout_s)
-    shutil.rmtree(profile, ignore_errors=True)
-    if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1024:
-        # Причина отказа живёт в stderr движка: без его хвоста провал — гадание.
-        tail = proc.stderr.decode(errors="replace").strip()[-300:]
-        raise RuntimeError(f"chrome не записал {out_pdf}" + (f": {tail}" if tail else ""))
+    try:
+        proc = _chrome_print("file://" + os.path.abspath(html_path), out_pdf, binary,
+                             profile, 15000, timeout_s)
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+    _chrome_fail(out_pdf, proc)
+
+
+def pdf_seed_page(html_name: str, storage: dict) -> str:
+    """
+    Seed-страница: пишет `storage` в `localStorage` и переходит на `html_name`.
+
+    Возвращает ASCII-строку: всё не-ASCII уходит в `\\uXXXX` — страницу,
+    отдаваемую потоком без файла, легко снабдить неверным charset, и Chrome
+    по эвристике выберет windows-1252, положив в хранилище mojibake
+    (проверено на кириллических данных eVOD). Значения сериализуются
+    `json.dumps`: dict/list приезжают как JSON, `str` хранится как есть
+    (строка — законное значение localStorage). Скобки `<`/`>` в литералах
+    экранируются: последовательность `</script>` закрыла бы блок внутри
+    собственной страницы.
+    """
+    def _js(value) -> str:
+        return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e")
+
+    lines = []
+    for key, value in storage.items():
+        payload = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        lines.append(f"localStorage.setItem({_js(key)}, {_js(payload)});")
+    return ('<!doctype html><meta charset="utf-8"><script>'
+            + "\n".join(lines)
+            + f"\nlocation.href = {_js(html_name)};"
+            + "</script>")
+
+
+def pdf_print_seeded(html_path: str, out_pdf: str, storage: dict,
+                     chrome: str | None = None, timeout_s: int = 60) -> None:
+    """
+    Напечатать страницу в состоянии `storage` в `localStorage` страницы.
+
+    Два прохода и http — необходимость, а не перестраховка: localStorage
+    принадлежит origin, страница с `file://` его не видит вовсе. Каталог
+    страницы раздаётся на 127.0.0.1 с эфемерным портом; первый запуск Chrome
+    открывает seed-страницу (виртуальный обработчик, файлов в чужой каталог
+    не пишем), та пишет хранилище и уходит на цель; второй запуск печатает
+    цель. Оба запуска делят один временный профиль — localStorage живёт в
+    нём, без общего профиля засев теряется.
+    """
+    import shutil
+    import tempfile
+    import threading
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import quote
+
+    binary = chrome or pdf_chrome()
+    if not binary or not os.path.exists(binary):
+        raise RuntimeError("chrome не найден: поставьте google-chrome или передайте chrome=")
+    name = os.path.basename(os.path.abspath(html_path))
+    seed = pdf_seed_page(name, storage)
+
+    class _SeedHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/__pdf_seed__.html":
+                raw = seed.encode("ascii")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            else:
+                super().do_GET()
+
+        def log_message(self, *args):
+            pass  # тишина: журнал нужен вызывающему, а не счёт запросов
+
+    directory = os.path.dirname(os.path.abspath(html_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_SeedHandler, directory=directory))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/"
+    profile = tempfile.mkdtemp(prefix="pdfseed-")
+    try:
+        proc = _chrome_print(base + "__pdf_seed__.html", None, binary, profile, 8000, timeout_s)
+        proc = _chrome_print(base + quote(name), out_pdf, binary, profile, 15000, timeout_s)
+    finally:
+        server.shutdown()
+        server.server_close()
+        shutil.rmtree(profile, ignore_errors=True)
+    _chrome_fail(out_pdf, proc)
 
 
 def main() -> None:
-    """CLI: `python -m pdf_.pdf_ info|text|render|diff|whiteout|print|extract …`."""
+    """CLI: `python -m pdf_.pdf_ info|text|render|diff|whiteout|print|extract|crop …`."""
     import argparse
     import json
     import sys
@@ -365,7 +499,10 @@ def main() -> None:
                    help="зона в пикселях --dpi, повторяется для нескольких зон")
     p = sub.add_parser("whiteout"); p.add_argument("pdf"); p.add_argument("out_png"); p.add_argument("--box", action="append", required=True, help="x,y,w,h в пунктах, начало сверху слева"); p.add_argument("--dpi", type=int, default=300)
     p = sub.add_parser("print"); p.add_argument("html"); p.add_argument("out_pdf")
+    p.add_argument("--seed", action="append", metavar="КЛЮЧ=JSON",
+                   help="значение localStorage КЛЮЧ (JSON или @файл); с --seed печать идёт http-раздачей в два прохода")
     p = sub.add_parser("extract"); p.add_argument("pdf"); p.add_argument("--out-dir")
+    p = sub.add_parser("crop"); p.add_argument("src"); p.add_argument("box", help="x0,y0,x1,y1 в mm, начало сверху слева"); p.add_argument("out_png"); p.add_argument("--dpi", type=int, default=150); p.add_argument("--page", type=int, default=0); p.add_argument("--scale", type=float, default=1.0)
 
     a = parser.parse_args()
     if a.cmd == "info":
@@ -389,13 +526,32 @@ def main() -> None:
             boxes.append({"x": x, "y": y, "w": w, "h": h})
         print(pdf_whiteout(a.pdf, a.out_png, boxes, dpi=a.dpi))
     elif a.cmd == "print":
-        pdf_print_html(a.html, a.out_pdf)
+        if a.seed:
+            # Разбор до запуска chrome: ошибка в JSON должна быть видна сразу,
+            # а не после ожидания несостоявшегося рендера.
+            storage = {}
+            for spec in a.seed:
+                key, sep, raw = spec.partition("=")
+                if not sep:
+                    raise SystemExit(f"--seed {spec!r}: ждём КЛЮЧ=JSON")
+                if raw.startswith("@"):
+                    raw = open(raw[1:], encoding="utf-8").read()
+                try:
+                    storage[key] = json.loads(raw)
+                except ValueError as err:
+                    raise SystemExit(f"--seed {key}: значение не JSON ({err})")
+            pdf_print_seeded(a.html, a.out_pdf, storage)
+        else:
+            pdf_print_html(a.html, a.out_pdf)
         print(a.out_pdf)
     elif a.cmd == "extract":
         entries = pdf_fonts_extract(a.pdf, out_dir=a.out_dir)
         # Байты в JSON печатать бессмысленно: сводка с размером, файл уже на диске.
         print(json.dumps([{k: v for k, v in e.items() if k != "bytes"} | {"size": len(e["bytes"])}
                           for e in entries], ensure_ascii=False, indent=1))
+    elif a.cmd == "crop":
+        x0, y0, x1, y1 = (float(v) for v in a.box.split(","))
+        print(pdf_crop(a.src, (x0, y0, x1, y1), a.out_png, dpi=a.dpi, page=a.page, scale=a.scale))
 
 
 

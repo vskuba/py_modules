@@ -48,6 +48,13 @@ ADB_CDP_NAV_TIMEOUT = 15.0
 # Пауза между опросами адреса при ожидании навигации, секунды.
 ADB_CDP_POLL = 0.4
 
+# Ожидание JS-условия по умолчанию, секунды, и шаг опроса. Страница
+# докладывает состояние (анимация, рендер, загрузка) за доли секунды;
+# фиксированный sleep в скриптах либо ждёт лишнего, либо не дожидается —
+# отсюда опрос с условием вместо пауз.
+ADB_CDP_WAIT_TIMEOUT = 10.0
+ADB_CDP_WAIT_POLL = 0.3
+
 # Пауза после загрузки страницы перед снимком, секунды: адрес уже правильный,
 # но шрифты и фоновые картинки дорисовываются ещё мгновение.
 ADB_CDP_SETTLE = 0.7
@@ -131,8 +138,49 @@ def adb_cdp_eval(expr: str, port: int = ADB_CDP_PORT, url_part: str = '',
     return _eval_value(result)
 
 
+def adb_cdp_waitfor(expr: str, port: int = ADB_CDP_PORT, url_part: str = '',
+                    timeout: float = ADB_CDP_WAIT_TIMEOUT, poll: float = ADB_CDP_WAIT_POLL):
+    """
+    Опрашивать `expr`, пока значение не станет истинным, и вернуть его.
+
+    Замена слепому пауза-then-проверка: условие — любое JS-выражение,
+    истинность — по правилам JS (`''`, `0`, `null`, `undefined` — ложь),
+    дождавшееся значение возвращается, чтобы результат можно было проверить
+    сразу тем же вызовом. На время навигации страница исчезает на мгновение —
+    ошибку «страница не найдена» ожидание пережидает, а не считает провалом.
+
+    Args:
+        expr: выражение; как у `adb_cdp_eval`, значение должно сериализоваться.
+        port: локальный порт, подключённый `adb_cdp_connect`.
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        timeout: секунды ожидания условия.
+        poll: шаг опроса, секунды.
+
+    Returns:
+        Первое истинное значение выражения.
+
+    Raises:
+        TimeoutError: за timeout условие не стало истинным; в сообщении
+            последнее значение (или последний диагноз eval).
+        RuntimeError: сокет не поднят (к `port` никто не подключался).
+    """
+    deadline = time.monotonic() + timeout
+    last = None
+    while True:
+        try:
+            last = adb_cdp_eval(expr, port=port, url_part=url_part)
+            if last:
+                return last
+        except RuntimeError as err:
+            last = f'ошибка eval: {err}'
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'waitfor {expr!r}: не дождался за {timeout} c, '
+                               f'последнее значение {last!r}')
+        time.sleep(poll)
+
+
 def adb_cdp_navigate(url: str, port: int = ADB_CDP_PORT, url_part: str = '',
-                     timeout: float = ADB_CDP_NAV_TIMEOUT) -> str:
+                     timeout: float = ADB_CDP_NAV_TIMEOUT, waitfor: str = '') -> str:
     """
     Открыть адрес в странице и дождаться, что он загрузился.
 
@@ -140,19 +188,29 @@ def adb_cdp_navigate(url: str, port: int = ADB_CDP_PORT, url_part: str = '',
     сменилась. Без ожидания следующий шаг уйдёт в старую страницу и примет её
     за новую.
 
+    Завершение узнаётся по игле — подстроке ИТОГОВОГО адреса (после
+    редиректов), а не запрошенного: страница входа может осесть на
+    `reserve.html`, и игла `auth` тут никогда не сработает. При этом точное
+    совпадение href с запрошенным адресом засчитывается всегда, какой бы
+    иглы ни просили: возврат на текущую страницу — успех, а не провал
+    (ложные 15-секундные паузы на этом месте — измеренная цена старого
+    правила).
+
     Args:
         url: адрес; страницы ассетов — `https://localhost/<страница>`, не `file://`.
         port: локальный порт, подключённый `adb_cdp_connect`.
-        url_part: по чему узнавать завершение (часть итогового href);
-            по умолчанию — путь из url.
+        url_part: игла завершения — часть итогового href; по умолчанию путь из url.
         timeout: секунды ожидания.
+        waitfor: JS-условие, которого дождаться после смены адреса (пусто — не
+            ждать). Адрес сам по себе ещё не готовность: данные страница
+            дораскладывает после смены href.
 
     Returns:
         Итоговый адрес страницы.
 
     Raises:
         RuntimeError: страница не найдена.
-        TimeoutError: за timeout адрес не стал ожидаемым.
+        TimeoutError: за timeout адрес не стал ожидаемым (или не истинно waitfor).
     """
     needle = url_part or urlsplit(url).path
     sock = adb_ws_open(_socket_target(port))
@@ -165,10 +223,15 @@ def adb_cdp_navigate(url: str, port: int = ADB_CDP_PORT, url_part: str = '',
             href = _eval_value(_cdp_call(sock, msg_id, 'Runtime.evaluate',
                                          {'expression': 'window.location.href',
                                           'returnByValue': True}, ADB_CDP_TIMEOUT))
-            if needle and needle in (href or ''):
+            if href == url or (needle and needle in (href or '')):
+                if waitfor:
+                    adb_cdp_waitfor(waitfor, port=port, url_part=url_part or needle)
                 return href
             if time.monotonic() > deadline:
-                raise TimeoutError(f'навигация к {url}: href остался {href!r} через {timeout} c')
+                raise TimeoutError(
+                    f'навигация к {url}: href остался {href!r} через {timeout} c — '
+                    f'игла {needle!r} сверяется с ИТОГОВЫМ адресом страницы '
+                    f'(после редиректов), проверь, куда страница легла на самом деле')
             msg_id += 1
             time.sleep(ADB_CDP_POLL)
     finally:
@@ -632,16 +695,29 @@ def _eval_value(result: dict):
     return result.get('result', {}).get('value')
 
 
+def _cli_out(value, as_json: bool) -> str:
+    """
+    Формат вывода значения: без флага — как print, с `--json` — JSON.
+
+    Головой print даёт Python-repr: `True`, `None`, одночные кавычки у
+    строк — `jq` и shell-скрипты это не едят, и каждый дописывал свой
+    постпроцессинг. `--json` отдаёт `true`/`false`/`null` и двойные кавычки;
+    `ensure_ascii=False` — чтобы кириллица оставалась читаемой.
+    """
+    return json.dumps(value, ensure_ascii=False) if as_json else str(value)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='DevTools внутри WebView: читать и двигать страницы приложения.',
         epilog="connect com.example.app | pages | eval 'location.href' | "
-               "navigate https://localhost/menu.html | "
+               "waitfor 'window.ready' | "
+               "navigate https://localhost/menu.html --waitfor 'document.title' | "
                "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
                "element 540 300 | element-rect .card-cover | element-shot .card-cover shots/cover.png | "
                "target reserve | viewport | tap '#download'")
     parser.add_argument('command', choices=['connect', 'pages', 'target', 'eval', 'navigate',
-                                            'capture', 'element', 'element-rect',
+                                            'waitfor', 'capture', 'element', 'element-rect',
                                             'element-shot', 'viewport', 'tap'])
     parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
     parser.add_argument('--serial', default='', help='устройство для connect и снимков')
@@ -649,6 +725,12 @@ if __name__ == '__main__':
     parser.add_argument('--url-part', default='', help='часть адреса целевой страницы')
     parser.add_argument('--settle', type=float, default=ADB_CDP_SETTLE,
                         help='пауза после загрузки перед кадром, capture')
+    parser.add_argument('--timeout', type=float, default=0.0,
+                        help='секунды ожидания (navigate, waitfor); 0 — значение по умолчанию команды')
+    parser.add_argument('--waitfor', default='',
+                        help='для navigate: JS-условие, которого дождаться после смены адреса')
+    parser.add_argument('--json', action='store_true',
+                        help='вывести значение как JSON: true/false/null вместо True/False/None')
     ns = parser.parse_args()
 
     try:
@@ -664,7 +746,11 @@ if __name__ == '__main__':
         elif ns.command == 'tap':
             print(adb_cdp_tap(ns.args[0], url_part=ns.url_part, serial=ns.serial, port=ns.port))
         elif ns.command == 'eval':
-            print(adb_cdp_eval(ns.args[0], port=ns.port, url_part=ns.url_part))
+            print(_cli_out(adb_cdp_eval(ns.args[0], port=ns.port, url_part=ns.url_part), ns.json))
+        elif ns.command == 'waitfor':
+            value = adb_cdp_waitfor(ns.args[0], port=ns.port, url_part=ns.url_part,
+                                    timeout=ns.timeout or ADB_CDP_WAIT_TIMEOUT)
+            print(_cli_out(value, ns.json))
         elif ns.command == 'capture':
             for row in adb_cdp_capture_all(ns.args[0], ns.args[2:], ns.args[1],
                                            serial=ns.serial, port=ns.port, settle=ns.settle):
@@ -687,8 +773,10 @@ if __name__ == '__main__':
                                         url_part=ns.url_part, serial=ns.serial)
             r = shot['rect']
             print(f"{shot['file']}: screen=({r['x']},{r['y']} {r['w']}×{r['h']})")
-        else:
-            print(adb_cdp_navigate(ns.args[0], port=ns.port, url_part=ns.url_part))
+        elif ns.command == 'navigate':
+            print(adb_cdp_navigate(ns.args[0], port=ns.port, url_part=ns.url_part,
+                                   timeout=ns.timeout or ADB_CDP_NAV_TIMEOUT,
+                                   waitfor=ns.waitfor))
     except (IndexError, ValueError) as err:
         raise SystemExit(f'ошибка в аргументах: {err}')
     except (RuntimeError, TimeoutError) as err:
