@@ -10,6 +10,11 @@
 заведомо меньше, чем подложки, а среднее по кадру уезжает вперемешку с белыми
 карточками.
 
+Тонкие линии и разметка — свои вопросы: «где рамка, сколько её пикселей каким
+цветом, какие углы» (`image_stroke`), «каким будет этот цвет на тонированном
+кадре» (`image_expose`), «цел ли тоновый контракт hex-литералов разметки»
+(`image_contract`) и «какая это доля кадра, с вычетом полей» (`image_frac`).
+
 Правка — кусочно-линейные уровни (levels): точка фона переезжает на
 целевую яркость, чёрный закреплён в нуле, белый — в 255. Контраст тёмного
 текста по фону при этом сохраняется, меняется только «прогрев» подложки.
@@ -61,6 +66,35 @@ IMAGE_SEAM_SCAN = 96
 # Именованных цветов и дробных значений тут намеренно нет: контракт тону
 # держится на hex-литералах, снятых с картинки.
 _LITERAL_RE = re.compile(r'#([0-9a-fA-F]{3,8})\b|rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)', re.IGNORECASE)
+
+# Отклонение яркости пикселя от местного фона, с которого он принадлежит
+# тонкой линии: глаз держит 3-px штрих по контрасту десятков ступеней,
+# AA-переход слабее — в ядро штриха он не входит.
+IMAGE_STROKE_CONTRAST = 12
+
+# Сколько пикселей вокруг данной стороны прямоугольника искать линию. Заодно
+# потолок радиуса, который ещё видно: дуга дальше pad'а с экрана не читается,
+# и оценка радиуса выше pad'а не гарантирована.
+IMAGE_STROKE_PAD = 24
+
+# Толщина профилирующей полосы вдоль стороны: сечение линии ищут медианой
+# поперёк полосы — одиночные пиксели текста или шума не должны двигать центр.
+IMAGE_STROKE_BAND = 4
+
+# Отклонение канала литерала от измеренной моды, в котором тон считается
+# совпавшим: JPEG-шум пачки не должен объявлять дрейф на ровном месте.
+IMAGE_CONTRACT_TOL = 3
+
+# Максимальный зазор (в символах) между литералом и комментарием-атрибуцией:
+# атрибуцией признаёт ближайший комментарий, но не первый комментарий файла —
+# иначе одно пояснение в начале CSS оправдало бы все литералы разметки.
+IMAGE_CONTRACT_GAP = 300
+
+# Атрибуция тонового контракта в комментарии: картинка-источник и окно замера
+# (`card_front.jpg (0.05,0.30,0.95,0.62)`). Без окна атрибуции нет: «с картинки»
+# без окна неперепроверяемо.
+_ATTR_FILE_RE = re.compile(r'[\w.\-]*[\w\-]\.(?:png|jpe?g|webp)\b', re.IGNORECASE)
+_ATTR_BOX_RE = re.compile(r'\(\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*\)')
 
 
 def image_measure(path: str, box: tuple = None, top: int = 0) -> dict:
@@ -382,22 +416,320 @@ def image_literals(path: str) -> dict:
     text = Path(path).read_text(encoding='utf-8', errors='replace')
     found = Counter()
     for match in _LITERAL_RE.finditer(text):
-        if match.group(1):
-            body = match.group(1).lower()
-            if len(body) in (3, 4):
-                body = ''.join(c * 2 for c in body[:3])
-            elif len(body) in (6, 8):
-                body = body[:6]
-            else:
-                continue  # не цвет: '#12345' — ни 3, ни 6 знаков
-        else:
-            body = '%02x%02x%02x' % tuple(int(g) for g in match.groups()[1:])
-        found['#' + body] += 1
+        body = _literal_hex(match)
+        if body:
+            found[body] += 1
     colors = [{'color': c,
                'luma': _luma((int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16))),
                'count': n} for c, n in found.items()]
     colors.sort(key=lambda c: (-c['count'], c['luma'], c['color']))
     return {'file': path, 'colors': colors}
+
+
+def image_stroke(path: str, rect=None, pad: int = IMAGE_STROKE_PAD,
+                 contrast: int = IMAGE_STROKE_CONTRAST) -> dict:
+    """
+    Измерить тонкую обводку (рамку) по сторонам прямоугольника: положение,
+    толщину ядра, цвет ядра и радиус скругления углов.
+
+    Это измерительная половина задачи «дорисовать рамку»: seam отвечает на
+    «видно ли стык», а тут — «где линия, сколько её пикселей каким цветом,
+    какие углы». Сечение линии ищут вокруг данной стороны прямоугольника
+    (запись `screen` из `adb_cdp_element_rect` или кортеж `x,y,w,h`; пусто —
+    весь кадр): поперёк стороны — медианный профиль яркости, ядро — подряд
+    идущие пиксели с отклонением от местного фона не меньше `contrast` вокруг
+    самой тёмной точки. AA-переход в ядро не входит: глаз различает штрих
+    ядром, а заплатку подгоняют по ядру.
+
+    Радиус угла — по изгибу линии к углам: вдоль каждой стороны трассируют
+    центр ядра; в дуге центр уходит внутрь прямоугольника. Радиус — не
+    максимальный уход (у самого угла штрих стоит вертикально, медианного
+    сечения там нет, и максимум недооценивает радиус вдвое), а посадка точек
+    дуги обеих сторон угла на окружность (`_corner_radius`). Большие радиусы,
+    упирающиеся в `pad`, видно не будут — потолок оценки равен pad'у.
+
+    Args:
+        path: картинка или снимок экрана (физические пиксели).
+        rect: прямоугольник — словарь {'x','y','w','h'} (запись `screen`),
+            кортеж (x, y, w, h) или None (весь кадр).
+        pad: сколько пикселей вокруг стороны искать линию (и потолок радиуса).
+        contrast: отклонение яркости от местного фона, принадлежащее штриху.
+
+    Returns:
+        {'file': путь, 'rect': нормализованный {'x','y','w','h'},
+         'found': True, если линия нашлась у всех четырёх сторон,
+         'sides': {'left'/'right'/'top'/'bottom':
+            {'pos', 'offset' (pos − данной; у рамок, рисуемых внутрь
+            номинального края — до половины ширины штриха), 'width', 'rgb',
+            'luma'} — или {'none': ...}, если линии у стороны нет},
+         'radius': радиус скругления (int) или None, 'css':
+            {'border_vw', 'radius_vw'} — толщины долями ширины кадра ×100,
+            теми самыми vw, которыми их рисуют в CSS}.
+    """
+    img = _load(path)
+    w, h = img.size
+    if rect is None:
+        x, y, rw, rh = 0, 0, w, h
+    elif isinstance(rect, dict):
+        x, y, rw, rh = int(rect['x']), int(rect['y']), int(rect['w']), int(rect['h'])
+    else:
+        x, y, rw, rh = (int(v) for v in rect)
+    if rw <= 0 or rh <= 0:
+        raise ValueError(f'размер прямоугольника {rw}×{rh}: мерить нечего')
+    sides, traces = {}, {}
+    for name, (pos, axis, lo, hi) in {
+            'left': (x, 'x', y, y + rh), 'right': (x + rw, 'x', y, y + rh),
+            'top': (y, 'y', x, x + rw), 'bottom': (y + rh, 'y', x, x + rw)}.items():
+        trace = []
+        for mid in range(lo, max(lo + 1, hi), IMAGE_STROKE_BAND):
+            got = _stroke_trace(img, pos, mid, axis, pad, contrast)
+            if got:
+                trace.append((mid, *got))
+        sides[name], traces[name] = _stroke_side(pos, trace)
+    found = all('none' not in s for s in sides.values())
+    # inward — уход центра ядра внутрь прямоугольника в дуге; знак зависит от
+    # того, какой стороной смотрит сторона кадра.
+    inward = {}
+    for name in ('left', 'top'):
+        inward[name] = [(mid, center - sides[name].get('pos', 0), width)
+                        for mid, center, width, _ in traces[name]]
+    for name in ('right', 'bottom'):
+        inward[name] = [(mid, sides[name].get('pos', 0) - center, width)
+                        for mid, center, width, _ in traces[name]]
+    # угол = посадка точек дуги на окружность с центром в (r, r) от угла;
+    # места слияния с соседней стороной отфильтрованы по ширине ядра (там
+    # дуга уже не дуга). lead — половина стороны ближе к левому/верхнему
+    # концу её размаха, trail — к правому/нижнему.
+    ranges = {'left': (y, y + rh), 'right': (y, y + rh),
+              'top': (x, x + rw), 'bottom': (x, x + rw)}
+    radius = None
+    if all('width' in s for s in sides.values()):
+        limit = min(s['width'] for s in sides.values()) + 2
+
+        def arc_pts(side, lead):
+            """Точки дуги у угла: (вдоль стороны от угла, inward-уход центра)."""
+            lo, hi = ranges[side]
+            mid_c = (lo + hi) / 2
+            return [((mid - lo if lead else hi - mid), dev) if side in ('top', 'bottom')
+                    else (dev, (mid - lo if lead else hi - mid))
+                    for mid, dev, width in inward[side]
+                    if width <= limit and 1 < dev <= pad and (lead == (mid < mid_c))]
+
+        corner_r = [_corner_radius(arc_pts(side_a, a_lead) + arc_pts(side_b, b_lead), pad)
+                    for side_a, a_lead, side_b, b_lead in (
+                        ('top', True, 'left', True), ('top', False, 'right', True),
+                        ('bottom', True, 'left', False),
+                        ('bottom', False, 'right', False))]
+        if corner_r:
+            radius = round(_median_luma_profile(corner_r))
+    css = None
+    if found:
+        css = {'border_vw': round(min(s['width'] for s in sides.values()) / w * 100, 2),
+               'radius_vw': round(radius / w * 100, 2) if radius is not None else None}
+    return {'file': path, 'rect': {'x': x, 'y': y, 'w': rw, 'h': rh},
+            'found': found, 'sides': sides, 'radius': radius, 'css': css}
+
+
+def image_expose(path_a: str, path_b: str, pairs: list, colors: list = None) -> dict:
+    """
+    Перенести тон между двумя кадрами одного компонента при разном
+    «экспонировании»: цвет из кадра A перевести в тот же цвет кадра B.
+
+    Сырой снимок и тонированная страница показывают одну и ту же деталь по-
+    разному (страница 170 vs 214): снятый с сырого цвета CSS-литерал
+    даёт тёмную рамку на подогнанной странице. `image_match` ровняет фон одного
+    файла; здесь перенос произвольного цвета между двумя: по референсным
+    окнам (одни и те же доли кадра в обоих) строится кусочно-линейная кривая
+    на каждый канал с якорем 0 → 0 — как уровни `image_match`, только между
+    двумя кадрами; по ней переводится всё, что спросят.
+
+    Args:
+        path_a: кадр-источник (например, сырой снимок).
+        path_b: кадр-цель (например, тонированная страница).
+        pairs: окна-референсы `(x0, y0, x1, y1)` долями кадра, одни и те же
+            в обоих кадрах; краски в них должны различаться по яркости.
+        colors: список (r,g,b), которые надо перенести; пусто — только ведомость.
+
+    Returns:
+        {'file_a', 'file_b', 'pairs': [{'box', 'a', 'b', 'a_luma', 'b_luma'}],
+         'gains': (gr, gg, gb) — усиление по самой тёмной паре,
+         'residual': максимальное отклонение пар от этого наклона (нелинейность
+         переноса), 'mapped': [{'from', 'to'}] для запрошенных colors}.
+
+    Raises:
+        ValueError: окна пусты, референсные краски неразличимы или канал
+            немонотонен (перенос не определён).
+    """
+    img_a, img_b = _load(path_a), _load(path_b)
+    if not pairs:
+        raise ValueError('без окон-референсов переносить не на чём')
+    refs = []
+    for box in pairs:
+        a = Counter(_window(img_a, box)).most_common(1)[0][0]
+        b = Counter(_window(img_b, box)).most_common(1)[0][0]
+        refs.append({'box': tuple(box), 'a': a, 'b': b,
+                     'a_luma': _luma(a), 'b_luma': _luma(b)})
+    lumas = [r['a_luma'] for r in refs]
+    if len(set(lumas)) != len(lumas):
+        raise ValueError(f'референсные краски {lumas} неразличимы по яркости — '
+                         'возьми окна разных красок')
+    refs = sorted(refs, key=lambda r: r['a_luma'])
+    luts = []
+    for ch in range(3):
+        xs = [0] + [r['a'][ch] for r in refs] + [255]
+        ys = [0] + [r['b'][ch] for r in refs] + [255]
+        for x, y in zip(xs, xs[1:]):
+            if y <= x:
+                raise ValueError(f'канал {ch}: перенос немонотонен ({xs} → {ys})')
+        luts.append((xs, ys))
+    # усиление — по самой тёмной паре: свет умножается, а яркие к свету B
+    # упираются в потолок, и об этом говорит residual, а не перекос gain'а.
+    base = refs[0]
+    gains = tuple(round(base['b'][ch] / base['a'][ch], 3) if base['a'][ch] else 255.0
+                  for ch in range(3))
+    residual = max(abs(r['b'][ch] - round(gains[ch] * r['a'][ch]))
+                   for r in refs for ch in range(3))
+    mapped = [{'from': tuple(c),
+               'to': tuple(_interp(*luts[ch], v) for ch, v in enumerate(c))}
+              for c in (colors or [])]
+    return {'file_a': path_a, 'file_b': path_b, 'pairs': refs,
+            'gains': gains, 'residual': residual, 'mapped': mapped}
+
+
+def image_contract(path: str, tol: int = IMAGE_CONTRACT_TOL,
+                   gap: int = IMAGE_CONTRACT_GAP) -> dict:
+    """
+    Проверить тоновый контракт разметки: у каждого цветового литерала есть
+    атрибуция «картинка + окно замера» в ближайшем комментарии, и тон
+    литерала совпадает с измеренным по этому окну.
+
+    Контракт («hex в CSS — с картинки, и рядом в комментарии файл и окно
+    замера») до этого проверялся grep'ом и глазами. Инструмент читает HTML/CSS
+    как текст и для каждого литерала (hex и rgb()/rgba(), литералы внутри
+    комментариев не в счёт) ищет ближайший комментарий не дальше `gap`
+    символов, в котором названа картинка с окном (`card_front.jpg
+    (0.05,0.30,0.95,0.62)`), мерит моду этого окна и сверяет с литералом.
+    Картинка ищется рядом с разметкой, в `public/images/` и `public/` под ней:
+    там рукописные страницы держат свои картинки.
+
+    Args:
+        path: HTML- или CSS-файл.
+        tol: максимальное отклонение канала, в котором тон считается совпавшим.
+        gap: максимальный зазор между литералом и комментарием-атрибуцией.
+
+    Returns:
+        {'file': путь, 'tol': tol,
+         'colors': [{'color', 'luma', 'line', 'status', 'file', 'box',
+                     'measured', 'measured_luma'}] по строкам разметки,
+         'summary': {'ok': n, 'drifted': n, 'unattributed': n, 'missing': n},
+         'ok': True, если дрейфа, неатрибутированных и отсутствующих нет}.
+        status: 'ok' | 'drifted' (тон уехал — картинку правили) |
+        'unattributed' (нет комментария с картинкой и окном) | 'missing'
+        (картинка из атрибуции не найдена).
+    """
+    text = Path(path).read_text(encoding='utf-8', errors='replace')
+    here = Path(path).parent
+    comments = []
+    for match in re.finditer(r'/\*.*?\*/', text, re.S):
+        file_m = _ATTR_FILE_RE.search(match.group())
+        box_m = _ATTR_BOX_RE.search(match.group())
+        box = None
+        if box_m:
+            vals = tuple(float(v) for v in box_m.groups())
+            if all(0 <= v <= 1 for v in vals) and vals[0] < vals[2] and vals[1] < vals[3]:
+                box = vals
+        comments.append((match.start(), match.end(),
+                         file_m.group() if file_m else None, box))
+    entries = []
+    for match in _LITERAL_RE.finditer(text):
+        if any(start < match.start() < end for start, end, _, _ in comments):
+            continue  # литерал внутри комментария — цитата, а не заявка
+        color = _literal_hex(match)
+        if not color:
+            continue
+        near = min(comments, default=None,
+                   key=lambda c: (max(c[0] - match.end(), match.start() - c[1], 0),
+                                  abs(c[0] - match.start())))
+        dist = max(near[0] - match.end(), match.start() - near[1], 0) if near else gap + 1
+        line = text[:match.start()].count('\n') + 1
+        rgb = tuple(int(color[1 + i * 2:3 + i * 2], 16) for i in range(3))
+        entry = {'color': color, 'luma': _luma(rgb), 'line': line,
+                 'file': near[2] if dist <= gap else None,
+                 'box': near[3] if dist <= gap else None}
+        if dist > gap or not near[2] or not near[3]:
+            entry['status'] = 'unattributed'
+        else:
+            found = next((c for c in (here / near[2], here / 'public' / 'images' / near[2],
+                                      here / 'public' / near[2], here / 'images' / near[2])
+                          if c.exists()), None)
+            if not found:
+                entry['status'] = 'missing'
+            else:
+                entry['file'] = str(found)
+                mode = Counter(_window(_load(str(found)), near[3])).most_common(1)[0][0]
+                entry['measured'], entry['measured_luma'] = mode, _luma(mode)
+                entry['status'] = 'ok' if all(abs(a - b) <= tol
+                                              for a, b in zip(rgb, mode)) else 'drifted'
+        entries.append(entry)
+    summary = Counter(e['status'] for e in entries)
+    summary = {s: summary.get(s, 0) for s in ('ok', 'drifted', 'unattributed', 'missing')}
+    return {'file': path, 'tol': tol, 'colors': entries, 'summary': summary,
+            'ok': not (summary['drifted'] or summary['unattributed'] or summary['missing'])}
+
+
+def image_frac(path: str, rect: tuple = None, box: tuple = None,
+               crop: tuple = None) -> dict:
+    """
+    Пересчитать координаты хотспотов: пиксели снимка ↔ доли кадра, с вычетом
+    отрезаемых полей (статус-бара, панели навигации).
+
+    Арифметика повторяется в каждой сборке и каждый раз считается вручную:
+    `(y − 91) / 2186`, «hotspot 66 px — это какая доля?», «окно `(0.05,0.30,
+    0.95,0.62)` — это какие пиксели кропнутого кадра?». Инструмент делает перевод
+    в обе стороны: `rect` — прямоугольник (x, y, w, h) в пикселях целого
+    кадра, `box` — `(x0, y0, x1, y1)` долями cropped-кадра; `crop` — PIL-box
+    `(x0, y0, x1, y1)` вырезаемого окна целого кадра, та запись, что держат
+    `.crop(...)` в конвейере и CLAUDE.md проекта (`(0, 91, 1080, 2277)`).
+
+    Args:
+        path: картинка или снимок экрана (физические пиксели).
+        rect: прямоугольник (x, y, w, h) в пикселях целого кадра.
+        box: прямоугольник (x0, y0, x1, y1) долями cropped-кадра.
+        crop: PIL-box вырезаемого окна целого кадра; пусто — весь кадр.
+
+    Returns:
+        {'file', 'frame': {'w','h'} целого кадра, 'crop', 'cropped': {'w','h'},
+         для rect: 'px_cropped' и 'frac' {'x0','y0','x1','y1'};
+         для box: 'px' (в целого кадра) и 'px_cropped'}.
+
+    Raises:
+        ValueError: ни rect, ни box; или crop-box не лежит в кадре.
+    """
+    img = _load(path)
+    w, h = img.size
+    crop = tuple(int(v) for v in crop) if crop else (0, 0, w, h)
+    cx0, cy0, cx1, cy1 = crop
+    if not (0 <= cx0 < cx1 <= w and 0 <= cy0 < cy1 <= h):
+        raise ValueError(f'crop {tuple(crop)} на кадре {w}x{h}: окно не лежит '
+                         'внутри кадра (ждём PIL-box x0,y0,x1,y1)')
+    cw, ch = cx1 - cx0, cy1 - cy0
+    result = {'file': path, 'frame': {'w': w, 'h': h},
+              'crop': tuple(crop), 'cropped': {'w': cw, 'h': ch}}
+    if rect:
+        x, y, rw, rh = (int(v) for v in rect)
+        x, y = x - cx0, y - cy0
+        result['px_cropped'] = {'x': x, 'y': y, 'w': rw, 'h': rh}
+        result['frac'] = {'x0': round(x / cw, 4), 'y0': round(y / ch, 4),
+                          'x1': round((x + rw) / cw, 4), 'y1': round((y + rh) / ch, 4)}
+    elif box:
+        x0, y0, x1, y1 = (float(v) for v in box)
+        result['px'] = {'x': round(x0 * cw) + cx0, 'y': round(y0 * ch) + cy0,
+                        'w': round((x1 - x0) * cw), 'h': round((y1 - y0) * ch)}
+        result['px_cropped'] = {'x': round(x0 * cw), 'y': round(y0 * ch),
+                                'w': round((x1 - x0) * cw), 'h': round((y1 - y0) * ch)}
+    else:
+        raise ValueError('нужен rect (пиксели) или box (доли кадра)')
+    return result
 
 
 def _seam_measure(img: Image.Image, pos: int, mid: int, axis: str, span: int,
@@ -546,15 +878,120 @@ def _tones(samples: list) -> list:
     return tones
 
 
+def _literal_hex(match):
+    """
+    Hex-краска '#rrggbb' из совпадения `_LITERAL_RE`; None — если это не цвет
+    ('#12345' — ни 3, ни 6 знаков). 4- и 8-значные теряют альфу: контракт
+    тону держится по каналу, альфа в рукописных страницах не встречается.
+    """
+    if match.group(1):
+        body = match.group(1).lower()
+        if len(body) in (3, 4):
+            body = ''.join(c * 2 for c in body[:3])
+        elif len(body) in (6, 8):
+            body = body[:6]
+        else:
+            return None
+    else:
+        body = '%02x%02x%02x' % tuple(int(g) for g in match.groups()[1:])
+    return '#' + body
+
+
+def _stroke_trace(img: Image.Image, pos: int, mid: int, axis: str,
+                  pad: int, contrast: int):
+    """
+    Сечение линии в одной точке вдоль стороны: (центр, ширина ядра, цвет ядра)
+    или None. Яркость каждого столбца — медиана поперёк полосы, чтобы текст и
+    шум одного-двух пикселей не сдвигали центр; ядро — подряд идущие столбцы
+    с отклонением от местного фона не меньше `contrast` вокруг точки самого
+    сильного отклонения. Линия ищется и тёмной (рамка на карточке), и светлой
+    (рамка на тёмном фоне) — поэтому отклонение, а не «темнее фона».
+    """
+    px = img.load()
+    w, h = img.size
+    along, across = (w, h) if axis == 'x' else (h, w)
+    r_lo = max(0, mid - IMAGE_STROKE_BAND // 2)
+    r_hi = min(across, mid + IMAGE_STROKE_BAND // 2 + 1)
+    c_lo, c_hi = max(0, pos - pad), min(along, pos + pad + 1)
+    cols = []
+    for c in range(c_lo, c_hi):
+        pix = ([px[c, r] for r in range(r_lo, r_hi)] if axis == 'x'
+               else [px[r, c] for r in range(r_lo, r_hi)])
+        cols.append((_median_luma_profile([_luma(p) for p in pix]), pix))
+    if not cols:
+        return None
+    bg = _median_luma_profile([lum for lum, _ in cols])
+    d = max(range(len(cols)), key=lambda i: abs(cols[i][0] - bg))
+    if abs(cols[d][0] - bg) < contrast:
+        return None
+    left = right = d
+    while left > 0 and abs(cols[left - 1][0] - bg) >= contrast:
+        left -= 1
+    while right < len(cols) - 1 and abs(cols[right + 1][0] - bg) >= contrast:
+        right += 1
+    core = [p for _, pix in cols[left:right + 1] for p in pix]
+    rgb = tuple(_median_luma_profile(list(ch)) for ch in zip(*core))
+    return c_lo + (left + right) / 2.0, right - left + 1, rgb
+
+
+def _stroke_side(pos: int, trace: list):
+    """
+    Вердикт стороны по трассе: {'pos','offset','width','rgb','luma'} и сама
+    трасса. Положение — медиана центров: дуги углов занимают меньше половины
+    стороны и медиану не сдвигают; ширина и цвет считаются по прямому участку
+    (центры в шаге от медианы), иначе места слияния с соседней стороной
+    раздули бы ядро.
+    """
+    if not trace:
+        return {'none': 'линии с заданным контрастом нет в пределах pad'}, []
+    got = round(_median_luma_profile([t[1] for t in trace]))
+    core = [t for t in trace if abs(t[1] - got) <= 1.0] or trace
+    width = Counter(t[2] for t in core).most_common(1)[0][0]
+    rgb = tuple(_median_luma_profile(list(ch)) for ch in zip(*(t[3] for t in core)))
+    return {'pos': got, 'offset': got - pos, 'width': width, 'rgb': rgb,
+            'luma': _luma(rgb)}, trace
+
+
+def _corner_radius(pts: list, pad: int) -> float:
+    """
+    Радиус дуги по точкам (расстояние вдоль стороны от угла, inward-уход
+    центра): у скруглённого угла центр дуги живёт в (r, r) от угла, вот r —
+    единственная степень свободы; перебором минимизируем невязку расстояний
+    точек до окружности. Дуга из точек в паре пикселей плоская, но якоря
+    жёсткие: ошибись центр — и все точки сойдутся только на истинном r.
+    """
+    best_r, best_err = 0.0, None
+    for step in range(int(pad * 4) + 1):
+        r = step / 4
+        err = sum((((x - r) ** 2 + (y - r) ** 2) ** 0.5 - r) ** 2 for x, y in pts)
+        if best_err is None or err < best_err:
+            best_r, best_err = r, err
+    return best_r
+
+
+def _interp(xs: list, ys: list, v: int) -> int:
+    """Кусочно-линейная интерполяция по якорям xs (строго растущие) → ys."""
+    if v <= xs[0]:
+        return ys[0]
+    for hi in range(1, len(xs)):
+        if v <= xs[hi]:
+            lo = hi - 1
+            return round(ys[lo] + (ys[hi] - ys[lo]) * (v - xs[lo]) / (xs[hi] - xs[lo]))
+    return ys[-1]
+
+
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
         description='Замер яркости фона, тоновая подгонка по эталону, аудит окон, '
-                    'проверка швов, сравнение кадров, инвентарь цветов разметки.')
+                    'проверка швов, сравнение кадров, инвентарь цветов разметки, '
+                    'измерение обводки, перенос тона между кадрами, тоновый '
+                    'контракт разметки, координаты хотспотов.')
     parser.add_argument('command',
                         choices=['measure', 'match', 'audit', 'seam',
-                                 'diff', 'rect-seams', 'literals'])
+                                 'diff', 'rect-seams', 'literals',
+                                 'stroke', 'expose', 'contract', 'frac'])
     parser.add_argument('files', nargs='+', help='картинки (для seam/rect-seams — одна, для diff — две)')
     parser.add_argument('--target', default='', help='эталон для match: файл или яркость 0-255')
     parser.add_argument('--out', default='', help='каталог для match; пусто — поверх')
@@ -569,7 +1006,17 @@ if __name__ == '__main__':
     parser.add_argument('--best', action='store_true',
                         help='seam: перебрать полосу и решить по спокойному месту (не верить одному --at)')
     parser.add_argument('--rect', default='',
-                        help='rect-seams: прямоугольник x,y,w,h (запись screen из adb_cdp element-rect)')
+                        help='rect-seams/stroke/frac: прямоугольник x,y,w,h (запись screen из adb_cdp element-rect)')
+    parser.add_argument('--pad', type=int, default=IMAGE_STROKE_PAD,
+                        help='stroke: сколько пикселей вокруг стороны искать линию (и потолок радиуса)')
+    parser.add_argument('--contrast', type=int, default=IMAGE_STROKE_CONTRAST,
+                        help='stroke: отклонение яркости от местного фона, принадлежащее штриху')
+    parser.add_argument('--pair', action='append', default=[],
+                        help='expose: окно-референс x0,y0,x1,y1 долями кадра (повторяемо, один и тот же в обоих кадрах)')
+    parser.add_argument('--color', action='append', default=[],
+                        help='expose: цвет r,g,b для переноса (повторяемо)')
+    parser.add_argument('--crop', default='',
+                        help='frac: PIL-box вырезаемого окна x0,y0,x1,y1 целого кадра, как `.crop((0, 91, 1080, 2277))` в конвейере')
     ns = parser.parse_args()
     box = tuple(float(v) for v in ns.box.split(',')) if ns.box else None
 
@@ -636,6 +1083,64 @@ if __name__ == '__main__':
             for f in ns.files:
                 for c in image_literals(f)['colors']:
                     print(f'{f}: {c["color"]} L={c["luma"]:>3} ×{c["count"]}')
+        elif ns.command == 'stroke':
+            rect = tuple(int(v) for v in ns.rect.split(',')) if ns.rect else None
+            if rect is not None and len(rect) != 4:
+                raise SystemExit('--rect: ждём x,y,w,h')
+            for f in ns.files:
+                s = image_stroke(f, rect=rect, pad=ns.pad, contrast=ns.contrast)
+                head = 'рамка есть' if s['found'] else 'рамки нет'
+                print(f'{f}: rect {s["rect"]} — {head}'
+                      + (f', радиус {s["radius"]}' if s['radius'] is not None else ''))
+                for name, side in s['sides'].items():
+                    if 'none' in side:
+                        print(f'  {name}: {side["none"]}')
+                    else:
+                        print(f'  {name}: pos={side["pos"]} (сдвиг {side["offset"]:+d}), '
+                              f'ширина {side["width"]} px, ядро {side["rgb"]} L={side["luma"]}')
+                if s['css']:
+                    print(f'  в CSS: border {s["css"]["border_vw"]}vw'
+                          + (f', radius {s["css"]["radius_vw"]}vw'
+                             if s['css']['radius_vw'] is not None else ''))
+        elif ns.command == 'expose':
+            if len(ns.files) != 2:
+                raise SystemExit('нужно ровно два кадра: источник и цель')
+            if not ns.pair:
+                raise SystemExit('нужен хотя бы один --pair: окно-референс x0,y0,x1,y1')
+            pairs = [tuple(float(v) for v in p.split(',')) for p in ns.pair]
+            colors = [tuple(int(v) for v in c.split(',')) for c in ns.color] or None
+            r = image_expose(ns.files[0], ns.files[1], pairs, colors=colors)
+            print(f'{ns.files[0]} → {ns.files[1]}:')
+            for ref in r['pairs']:
+                print(f'  окно {tuple(round(v, 3) for v in ref["box"])}: '
+                      f'{ref["a"]} L={ref["a_luma"]} → {ref["b"]} L={ref["b_luma"]}')
+            print(f'  усиление {r["gains"]}, нелинейность {r["residual"]}')
+            for m in r['mapped']:
+                print(f'  {m["from"]} → {m["to"]}')
+        elif ns.command == 'contract':
+            for f in ns.files:
+                c = image_contract(f)
+                print(f'{f}: ' + ', '.join(f'{k} {v}' for k, v in c['summary'].items())
+                      + (' — контракт цел' if c['ok'] else ' — НАРУШЕН'))
+                for e in c['colors']:
+                    if e['status'] == 'ok':
+                        continue
+                    detail = f' ({e["file"]}' if e.get('file') else ''
+                    if e.get('measured'):
+                        detail += f', измерено {e["measured"]} L={e["measured_luma"]}'
+                    detail += ')' if e.get('file') else ''
+                    print(f'  строка {e["line"]}: {e["color"]} L={e["luma"]:>3} — '
+                          f'{e["status"]}{detail}')
+        elif ns.command == 'frac':
+            crop = tuple(int(v) for v in ns.crop.split(',')) if ns.crop else None
+            rect = tuple(int(v) for v in ns.rect.split(',')) if ns.rect else None
+            for f in ns.files:
+                r = image_frac(f, rect=rect, box=box, crop=crop)
+                print(f'{f}: кадр {r["frame"]} −{r["crop"]} → {r["cropped"]}')
+                if 'frac' in r:
+                    print(f'  rect {r["px_cropped"]} → доли {r["frac"]}')
+                else:
+                    print(f'  box {box} → px {r["px"]} (в crop-кадре {r["px_cropped"]})')
         else:
             if not ns.target:
                 raise SystemExit('нужен --target: файл эталона или яркость числом')
