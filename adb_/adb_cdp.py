@@ -225,7 +225,10 @@ def adb_cdp_navigate(url: str, port: int = ADB_CDP_PORT, url_part: str = '',
                                           'returnByValue': True}, ADB_CDP_TIMEOUT))
             if href == url or (needle and needle in (href or '')):
                 if waitfor:
-                    adb_cdp_waitfor(waitfor, port=port, url_part=url_part or needle)
+                    # Ждём на ИТОГОВОМ адресе: до-навигационная выборка и игла
+                    # описывают прошлую страницу — после редиректа подстрока
+                    # 'auth' на новой странице не встретится никогда.
+                    adb_cdp_waitfor(waitfor, port=port, url_part=href or needle or url_part)
                 return href
             if time.monotonic() > deadline:
                 raise TimeoutError(
