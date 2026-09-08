@@ -699,8 +699,12 @@ def image_frac(path: str, rect: tuple = None, box: tuple = None,
 
     Returns:
         {'file', 'frame': {'w','h'} целого кадра, 'crop', 'cropped': {'w','h'},
-         для rect: 'px_cropped' и 'frac' {'x0','y0','x1','y1'};
-         для box: 'px' (в целого кадра) и 'px_cropped'}.
+         для rect: 'px_cropped', 'frac' {'x0','y0','x1','y1'} и 'vw';
+         для box: 'px' (в целого кадра), 'px_cropped' и 'vw'}.
+         'vw' — те же координаты в CSS-единицах: проценты ширины
+         cropped-кадра, {x, y, w, h}; по мобильной конвенции в vw задают и
+         top, и высоту — вёрстка от этого масштабируется пропорционально, а
+         не только по ширине.
 
     Raises:
         ValueError: ни rect, ни box; или crop-box не лежит в кадре.
@@ -721,12 +725,16 @@ def image_frac(path: str, rect: tuple = None, box: tuple = None,
         result['px_cropped'] = {'x': x, 'y': y, 'w': rw, 'h': rh}
         result['frac'] = {'x0': round(x / cw, 4), 'y0': round(y / ch, 4),
                           'x1': round((x + rw) / cw, 4), 'y1': round((y + rh) / ch, 4)}
+        result['vw'] = {'x': round(x / cw * 100, 4), 'y': round(y / cw * 100, 4),
+                        'w': round(rw / cw * 100, 4), 'h': round(rh / cw * 100, 4)}
     elif box:
         x0, y0, x1, y1 = (float(v) for v in box)
         result['px'] = {'x': round(x0 * cw) + cx0, 'y': round(y0 * ch) + cy0,
                         'w': round((x1 - x0) * cw), 'h': round((y1 - y0) * ch)}
         result['px_cropped'] = {'x': round(x0 * cw), 'y': round(y0 * ch),
                                 'w': round((x1 - x0) * cw), 'h': round((y1 - y0) * ch)}
+        px = result['px_cropped']
+        result['vw'] = {k: round(v / cw * 100, 4) for k, v in px.items()}
     else:
         raise ValueError('нужен rect (пиксели) или box (доли кадра)')
     return result
@@ -1138,9 +1146,11 @@ if __name__ == '__main__':
                 r = image_frac(f, rect=rect, box=box, crop=crop)
                 print(f'{f}: кадр {r["frame"]} −{r["crop"]} → {r["cropped"]}')
                 if 'frac' in r:
-                    print(f'  rect {r["px_cropped"]} → доли {r["frac"]}')
+                    print(f'  rect {r["px_cropped"]} → доли {r["frac"]} '
+                          f'→ vw {r["vw"]}')
                 else:
-                    print(f'  box {box} → px {r["px"]} (в crop-кадре {r["px_cropped"]})')
+                    print(f'  box {box} → px {r["px"]} (в crop-кадре '
+                          f'{r["px_cropped"]}, vw {r["vw"]})')
         else:
             if not ns.target:
                 raise SystemExit('нужен --target: файл эталона или яркость числом')

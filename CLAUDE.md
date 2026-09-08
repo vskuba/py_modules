@@ -48,10 +48,15 @@ namespace-папок, которые проекты импортируют на�
 | `adb_/adb_step.py`, `adb_state`, `adb_crop` | `docs/mobile_steps.md` — шаг с проверкой, замер, вырезка |
 | `adb_/adb_cdp.py`, `adb_ws` | `docs/mobile_control.md`, §8 — WebView изнутри через CDP |
 | `adb_/adb_emu.py` | `docs/mobile_emulator.md` — жизненный цикл AVD, сон экрана, пиксельные базы |
+| `adb_/adb_burst.py` | `docs/mobile_device.md` — серия кадров с метками времени, тёмные кадры |
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
+| `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js |
 | `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
 | `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона, проверка шва (поиск спокойной полосы, стороны прямоугольника), сравнение пары кадров, ведомость цветов разметки |
+| `image_/image_scan.py` | `docs/image_scan.md` — полосы тона по разрезу, строки и шаг, габарит глифов |
+| `image_/image_frames.py` | `docs/image_frames.md` — дельта скролла, полотно, drift, сдвиг и скорость полосы |
+| `image_/image_layout.py` | `docs/image_layout.md` — геометрия блоков, точки-индикаторы, SDF-вырез |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
@@ -132,11 +137,15 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_crop` | `on`, `box`, `part` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
 | `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>` |
+| `adb_.adb_burst` | `[-n N --interval S --outdir DIR --serial ...]` |
+| `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `textdiff` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals` |
+| `image_.image_scan` | `runs`, `rows`, `glyph` |
+| `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
 
 Список сверяется командой — таблица устаревает быстрее кода:
 
@@ -206,7 +215,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_` |
 | Утилиты | `project_`, `datetime_`, `json_`, `async_`, `thread_` |
-| Внешнее и файлы | `adb_` (устройство), `pdf_`, `font_`, `translator`, `flux_schnell`, `microphone` |
+| Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `translator`, `flux_schnell`, `microphone` |
 
 Назначение каждого — `docs/py_modules.md`, §3; актуальный список — всегда `ls`, а не эта
 таблица.

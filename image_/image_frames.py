@@ -11,9 +11,13 @@
 позднего кадра — там, где ранний перекрыт тостом), «анимируется ли фон и куда
 плывёт» (`image_frames_drift`: знаковое среднее сдвига по каналам по полосам —
 в отличие от `image_.image_ diff` это не вердикт «тон/не тон», а направление
-и величина: «фон светлеет в жёлтый», «карточка стоит на месте»), и «покажи
-десять кропов одним взглядом» (`image_frames_grid`: монтаж полос с разных
-кадров в одну картинку — глазами десять файлов не сверить).
+и величина: «фон светлеет в жёлтый», «карточка стоит на месте»), «на
+сколько сдвинулась полоса и с какой скоростью» (`image_frames_shift`:
+кросс-корреляция полосы по всему окну поиска — бегущая строка, карусель;
+в отличие от `delta` смещение двустороннее и считается по пикселям полосы,
+а не по ряду строк), и «покажи десять кропов одним взглядом»
+(`image_frames_grid`: монтаж полос с разных кадров в одну картинку —
+глазами десять файлов не сверить).
 
 Грабли серии — `image_frames.md`.
 """
@@ -36,6 +40,14 @@ IMAGE_FRAMES_WINDOW = 400
 # Строки косой альфы на стыке: строки содержимого там и так совпадают,
 # а ступенька градиента фона растягивается на 12 строк вместо одной.
 IMAGE_FRAMES_BLEND = 12
+
+# Полуокно поиска сдвига shift, пиксели. По x — с запасом на полосу, бегущую
+# до ~90 px/s, между снимками в ~4 с (screencap короче ~1.5 с не даёт честного
+# Δt — кадр «зависает» и рапортует ложный покой); по y — только на AA-тряску,
+# горизонтальный контент по вертикали не ездит. Перебор профиля линеен, окно
+# в 400 стоит доли секунды.
+IMAGE_FRAMES_SHIFT_SEARCH = 400
+IMAGE_FRAMES_SHIFT_SEARCH_Y = 4
 
 # Полос поперёк кадра в сетке drift-полос; по умолчанию кадр режется на 8
 # горизонтальных полос: асимметрия анимированного фона по горизонтали ниже,
@@ -140,6 +152,69 @@ def image_frames_drift(a, b, bands=None, rows=IMAGE_FRAMES_DRIFT_ROWS):
     return {'bands': out}
 
 
+def image_frames_shift(a, b, band=None, search=IMAGE_FRAMES_SHIFT_SEARCH,
+                       search_y=IMAGE_FRAMES_SHIFT_SEARCH_Y, dt=None) -> dict:
+    """На сколько пикселей содержимое полосы кадра b уехало относительно a.
+
+    Сравнение по **профилям полосы**, не по пикселям: текст строкой едет на
+    субпиксель, глифы каждый кадр дорисовываются с новым AA, и пиксельная
+    корреляция тонкого текста поверх цветного градиента почти не различает
+    сдвиги (проверено на живом тикере: 2D-корреляция по пикселям дала −34 px
+    при corr 0.37 там, где колоночный профиль находит −175 px при corr 0.91;
+    невязка профилей на верном сдвиге 6% против ~30% вокруг). Профиль
+    темноты колонок (сумма яркости по строкам полосы) сдвигу инвариантен:
+    пик острый, идентичные кадры дают 1.00. Профиль строк — dy.
+
+    Args:
+        a, b: пути, PIL-картины или массивы одного размера; b — поздний кадр.
+        band: rect (x0, y0, x1, y1) в координатах кадра — полоса движения
+            (бегущая строка, карусель). Без неё центральная треть высоты:
+            прилипающий заголовок и панель вкладок не ездят и разбавляют
+            сигнал. Полоса должна быть ШИРЕ шага движения хотя бы вдвое,
+            иначе overlap мал и corr неострая.
+        search: полуокно поиска по x, px.
+        search_y: полуокно поиска по y, px.
+        dt: секунды между кадрами — тогда в ответе есть скорость px/s.
+
+    Returns:
+        {'band', 'dx', 'dy', 'corr', 'dt', 'px_per_s'} — dx > 0 значит,
+        содержимое в b уехало ВПРАВО на dx (бегущая строка даёт dx < 0);
+        'px_per_s': {'x', 'y'} при dt, иначе None; corr — корреляция
+        колоночных профилей на лучшем сдвиге (< 0.7 — пик, скорее всего,
+        алиасинг или сдвиг не влез в --search, см. грабли).
+
+    Грабли честного Δt: `screencap` короткими тиражами «зависает» — соседние
+    кадры байт-в-байт идентичны, corr=1.00 при dx=0 выглядит как «стоит», а
+    на деле это тот же кадр; скорость мерить цепочкой пар с Δt ≥ ~1.5 с
+    (серию снимает `adb_.adb_burst`) и считать сумма(dx)/сумма(Δt) —
+    одиночная пара на длинном шаге даёт алиасинг, а на коротком — зависание.
+    Если corr < 0.7 — за окно поиска сдвиг не влез, увеличивай search.
+    """
+    fa = np.asarray(_to_float(a), dtype=np.float64)
+    fb = np.asarray(_to_float(b), dtype=np.float64)
+    if fa.shape != fb.shape:
+        raise ValueError(f'кадры разного размера: {fa.shape} и {fb.shape}')
+    h, w = fa.shape[:2]
+    if band is None:
+        band = (0, h // 3, w, 2 * h // 3)
+    x0, y0, x1, y1 = (int(v) for v in band)
+    if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
+        raise ValueError(f'полоса {tuple(band)} не лежит в кадре {w}x{h}')
+    # Rec.601, не среднее каналов: подложка тикера цветная (зелёный→голубой),
+    # равные веса уводят профиль и corr падает с 0.99 до 0.89.
+    luma_w = np.array([0.299, 0.587, 0.114])
+    reg = fa[y0:y1, x0:x1] @ luma_w
+    reg_b = fb[y0:y1, x0:x1] @ luma_w
+    corr_x, s_x = _shift_1d(reg.mean(axis=0), reg_b.mean(axis=0), search)
+    corr_y, s_y = _shift_1d(reg.mean(axis=1), reg_b.mean(axis=1), search_y)
+    dx, dy = -int(s_x), -int(s_y)  # профиль совпал со сдвигом вперёд = контент уехал влево
+    result = {'band': (x0, y0, x1, y1), 'dx': dx, 'dy': dy,
+              'corr': round(corr_x, 4), 'dt': dt, 'px_per_s': None}
+    if dt:
+        result['px_per_s'] = {'x': round(dx / dt, 2), 'y': round(dy / dt, 2)}
+    return result
+
+
 def image_frames_grid(items, out, cols=3, scale=1.0, pad=12):
     """Монтаж кропов с разных кадров в одну картинку для визуальной сверки.
 
@@ -204,11 +279,31 @@ def _to_float(img) -> np.ndarray:
     return np.asarray(Image.open(img).convert('RGB'), dtype=np.float32)
 
 
+def _shift_1d(pa: np.ndarray, pb: np.ndarray, search: int) -> tuple:
+    """Лучший целочисленный сдвиг профиля pb относительно pa: (corr, s).
+
+    Перебор −search…+search с нормировкой НА ПЕРЕКРЫТИИ: нормировка целым
+    профилем занижала бы corr на краях окна ровно там, где лежит верный
+    большой сдвиг, и пик уезжал бы к нулю.
+    """
+    best = (-2.0, 0)
+    n = pa.shape[0]
+    for s in range(-search, search + 1):
+        aa, bb = (pa[s:], pb[:n - s]) if s >= 0 else (pa[:n + s], pb[-s:])
+        aa = aa - aa.mean()
+        bb = bb - bb.mean()
+        e = np.sqrt((aa ** 2).sum() * (bb ** 2).sum())
+        c = float((aa * bb).sum() / e) if e else 0.0
+        if c > best[0]:
+            best = (c, s)
+    return best
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='Скролл-кадры и анимация')
-    ap.add_argument('command', choices=['delta', 'stitch', 'drift', 'grid'])
+    ap.add_argument('command', choices=['delta', 'stitch', 'drift', 'shift', 'grid'])
     ap.add_argument('files', nargs='+',
-                    help='delta/drift: два кадра; stitch: серия; '
+                    help='delta/drift/shift: два кадра; stitch: серия; '
                          "grid: path или path@x0,y0,x1,y1 (повторяемо)")
     ap.add_argument('--out', help='stitch/grid: файл результата')
     ap.add_argument('--crop', help='stitch: окно кадра top,bottom')
@@ -217,7 +312,13 @@ def main() -> None:
     ap.add_argument('--prefer-last', action='store_true')
     ap.add_argument('--band', action='append',
                     help='drift: имя:x0,y0,x1,y1 (повторяемо; без него — '
-                         'сетка полос)')
+                         'сетка полос); shift: одна полоса x0,y0,x1,y1')
+    ap.add_argument('--search', type=int, default=IMAGE_FRAMES_SHIFT_SEARCH,
+                    help='shift: полуокно поиска по x, px')
+    ap.add_argument('--search-y', type=int, default=IMAGE_FRAMES_SHIFT_SEARCH_Y,
+                    help='shift: полуокно поиска по y, px')
+    ap.add_argument('--dt', type=float,
+                    help='shift: секунды между кадрами — для скорости px/s')
     ap.add_argument('--rows', type=int, default=IMAGE_FRAMES_DRIFT_ROWS)
     ap.add_argument('--cols', type=int, default=3)
     ap.add_argument('--scale', type=float, default=1.0)
@@ -251,6 +352,24 @@ def main() -> None:
                 s = z['shift']
                 print(f'{z["name"]:>6} {z["box"]}: сдвиг ({s[0]:+d},{s[1]:+d},{s[2]:+d}) '
                       f'|Δ| среднее {z["mean_abs"]:>5}, max {z["max_abs"]}')
+        elif ns.command == 'shift':
+            if len(ns.files) != 2:
+                raise SystemExit('нужно ровно два кадра')
+            band = None
+            if ns.band:
+                spec = ns.band[-1].rpartition(':')[2]
+                band = tuple(int(v) for v in spec.split(','))
+            r = image_frames_shift(ns.files[0], ns.files[1], band=band,
+                                   search=ns.search, search_y=ns.search_y,
+                                   dt=ns.dt)
+            line = (f"смещение b относительно a: dx {r['dx']:+d} px, "
+                    f"dy {r['dy']:+d} px, корреляция {r['corr']}")
+            if r['corr'] < 0.7:
+                line += ' — низкая, возможен алиасинг или мало --search'
+            if r['px_per_s']:
+                line += (f"; скорость {r['px_per_s']['x']:+g} px/с "
+                         f"при dt {r['dt']:g} с")
+            print(line)
         else:
             if not ns.out:
                 raise SystemExit('нужен --out файл монтажа')
