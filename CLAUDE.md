@@ -51,11 +51,11 @@ namespace-папок, которые проекты импортируют на�
 | `adb_/adb_burst.py` | `docs/mobile_device.md` — серия кадров с метками времени, тёмные кадры |
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
-| `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js |
+| `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) |
 | `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
 | `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона, проверка шва (поиск спокойной полосы, стороны прямоугольника), сравнение пары кадров, ведомость цветов разметки |
 | `image_/image_scan.py` | `docs/image_scan.md` — полосы тона по разрезу, строки и шаг, габарит глифов |
-| `image_/image_fix.py` | `docs/image_fix.md` — заплатки линейной интерполяцией с кромок, штрих альфой из яркости |
+| `image_/image_fix.py` | `docs/image_fix.md` — заплатки линейной интерполяцией с кромок, двумерная зачистка со стеклом и зерном (inpaint), штрих альфой из яркости |
 | `image_/image_frames.py` | `docs/image_frames.md` — дельта скролла, полотно, drift, сдвиг и скорость полосы |
 | `image_/image_layout.py` | `docs/image_layout.md` — геометрия блоков, точки-индикаторы, SDF-вырез |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
@@ -174,14 +174,15 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
 | `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>`, `storage КЛЮЧ='{json}' [--reload]` |
 | `adb_.adb_burst` | `[-n N --interval S --outdir DIR --serial ...]` |
-| `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js]` |
+| `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
+| `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `ink`, `fit`, `textdiff`, `baseline-top` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals` |
 | `image_.image_scan` | `runs`, `rows`, `glyph`, `windows`, `diff` |
-| `image_.image_fix` | `erase <файл> --out --box ...`, `strokes <файл> --out --box ...` |
+| `image_.image_fix` | `erase <файл> --out --box ...`, `inpaint <файл> --out --box ... [--sigma]`, `fill <файл> --out --box --color`, `strokes <файл> --out --box ...` |
 | `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 

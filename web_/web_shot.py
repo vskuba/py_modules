@@ -22,6 +22,7 @@ import argparse
 import contextlib
 import http.server
 import os
+import re
 import shutil
 import socketserver
 import subprocess
@@ -43,7 +44,7 @@ WEB_SHOT_ERR_TAIL = 400
 
 
 def web_shot_capture(src, out, size=WEB_SHOT_SIZE, virtual_time_ms=1200,
-                     inject_js='', chrome='') -> dict:
+                     inject_js='', chrome='', crop=None) -> dict:
     """
     Отрендерить страницу в PNG headless Chrome; вернуть путь и кадр.
 
@@ -62,6 +63,10 @@ def web_shot_capture(src, out, size=WEB_SHOT_SIZE, virtual_time_ms=1200,
             диске не правится.
         chrome: путь к бинарю браузера; пусто — поиск по распространённым
             именам (google-chrome, chromium, ...).
+        crop: (x0, y0, x1, y1) — поле кадра после рендера. Для листов ниже
+            вьюпорта: снять длинным (`--size 1080,<scrollHeight>`) и резать;
+            скроллить через inject-js нельзя — вертикальный скролл в headless
+            не дорабатывается до кадра, снимок выходит пустым.
 
     Returns:
         {'file', 'url', 'width', 'height'} — width/height фактически
@@ -85,6 +90,10 @@ def web_shot_capture(src, out, size=WEB_SHOT_SIZE, virtual_time_ms=1200,
             _render(browser, url, out, size, virtual_time_ms)
 
     from PIL import Image
+    if crop:
+        # PNG — lossless и пересохранение в тот же путь не плодит артефактов
+        with Image.open(out) as img:
+            img.crop(tuple(int(v) for v in crop)).save(out)
     with Image.open(out) as img:
         w, h = img.size
     return {'file': out, 'url': src, 'width': w, 'height': h}
@@ -122,12 +131,13 @@ def web_shot_serve(directory, port=0):
 
 
 @contextlib.contextmanager
-def _served_page(path, inject_js=''):
-    """URL локальной страницы: каталог раздат; при inject_js — вариант в
-    каталоге симлинков под тем же именем (ассеты продолжают резолвиться)."""
+def _served_page(path, inject_js='', head_js=''):
+    """URL локальной страницы: каталог раздат; при inject_js/head_js — вариант
+    в каталоге симлинков под тем же именем (ассеты продолжают резолвиться).
+    head_js — скрипт сразу после <head>, он исполнится до скриптов страницы."""
     path = os.path.realpath(path)
     base, name = os.path.split(path)
-    if not inject_js:
+    if not inject_js and not head_js:
         with web_shot_serve(base) as root:
             yield f'{root}/{urllib.parse.quote(name)}'
         return
@@ -136,7 +146,7 @@ def _served_page(path, inject_js=''):
         for entry in os.listdir(base):
             if entry != name:
                 os.symlink(os.path.join(base, entry), os.path.join(tmp, entry))
-        _write_variant(path, os.path.join(tmp, name), inject_js)
+        _write_variant(path, os.path.join(tmp, name), inject_js, head_js)
         with web_shot_serve(tmp) as root:
             yield f'{root}/{urllib.parse.quote(name)}'
     finally:
@@ -166,14 +176,24 @@ def _render(browser, url, out, size, virtual_time_ms):
                                 f'{done.stderr.strip()[-WEB_SHOT_ERR_TAIL:]}')
 
 
-def _write_variant(src, dst, inject_js):
-    """Копия HTML со скриптом перед последним `</body>` (без него — в конец)."""
+def _write_variant(src, dst, inject_js, head_js=''):
+    """Копия HTML: head_js — скрипт сразу после открывающего <head> (посев
+    localStorage до скриптов страницы), inject_js — перед последним `</body>`
+    (открытие попапов, остановка таймеров; без `</body>` — в конец)."""
     with open(src, encoding='utf-8', errors='replace') as fh:
         html = fh.read()
-    snippet = f'<script>{inject_js}</script>'
-    at = html.lower().rfind('</body>')
-    html = (html[:at] + snippet + html[at:] if at != -1
-            else html + snippet)
+    if head_js:
+        snippet = f'<script>{head_js}</script>'
+        at = re.search(r'<head[^>]*>', html, re.IGNORECASE)
+        # html[at.end():] — срез; скобки «html[at.end()]» молча дали бы один
+        # символ и обрезали документ до <head>
+        html = (html[:at.end()] + snippet + html[at.end():] if at
+                else snippet + html)
+    if inject_js:
+        snippet = f'<script>{inject_js}</script>'
+        at = html.lower().rfind('</body>')
+        html = (html[:at] + snippet + html[at:] if at != -1
+                else html + snippet)
     with open(dst, 'w', encoding='utf-8') as fh:
         fh.write(html)
 
@@ -200,13 +220,22 @@ if __name__ == '__main__':
                     help='virtual-time-budget мс, 0 — снять сразу')
     ap.add_argument('--inject-js', default='',
                     help='JS перед </body> копии страницы (открыть попап и т.п.)')
+    ap.add_argument('--crop', default='', metavar='x0,y0,x1,y1',
+                    help='подрезать кадр после рендера (длинный снимок + резка)')
     ap.add_argument('--chrome', default='', help='путь к бинарю браузера')
     ns = ap.parse_args()
     try:
         w, h = (int(v) for v in ns.size.split(',', 1))
+        crop = None
+        if ns.crop:
+            parts = tuple(int(v) for v in ns.crop.split(',', 3))
+            if len(parts) != 4:
+                raise ValueError('crop: x0,y0,x1,y1')
+            crop = parts
         res = web_shot_capture(ns.src, ns.out, size=(w, h),
                                virtual_time_ms=ns.budget,
-                               inject_js=ns.inject_js, chrome=ns.chrome)
+                               inject_js=ns.inject_js, chrome=ns.chrome,
+                               crop=crop)
         print(f"{res['file']} ({res['width']}x{res['height']})")
     except (RuntimeError, FileNotFoundError, ValueError) as err:
         raise SystemExit(f'ошибка: {err}')

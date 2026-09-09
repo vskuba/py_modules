@@ -1,12 +1,14 @@
-# Скриншот веб-страницы: headless Chrome с раздачей, бюджетом времени и состоянием
+# Скриншот и зонд веб-страницы: headless Chrome с раздачей, бюджетом времени и состоянием
 
-> Страница → PNG делается `web_shot_capture`: каталог раздаётся HTTP сам, кадр
-> ждёт досчёта CSS-переходов (`virtual-time-budget`), а попап открывается
-> `inject_js` без правки оригинала. Страницу под управлением (`FileReader`,
-> `localStorage`, консоль) гоняет `web_drive_eval` по CDP, а логику её
-> обработчиков — `web_unit_run` на node без браузера. Инструмент —
-> `py_modules/web_` (модули `web_shot`, `web_drive`, `web_unit`), CLI:
-> `python -m web_.web_shot`.
+> Страница → PNG делается `web_shot_capture` (с кропом `crop`): каталог
+> раздаётся HTTP сам, кадр ждёт досчёта CSS-переходов
+> (`virtual-time-budget`), а попап открывается `inject_js` без правки
+> оригинала. Куда страница поставила элементы — числами, без снимка и без CDP, —
+> `web_probe`/`web_probe_rects` через `--dump-dom`. Страницу под управлением
+> (`FileReader`, `localStorage`, консоль) гоняет `web_drive_eval` по CDP, а
+> логику её обработчиков — `web_unit_run` на node без браузера. Инструмент —
+> `py_modules/web_` (модули `web_shot`, `web_probe`, `web_drive`, `web_unit`),
+> CLI: `python -m web_.web_shot`, `python -m web_.web_probe`.
 
 ## 1. Раздача, а не `file://`
 
@@ -57,7 +59,54 @@ python -m web_.web_shot www/documents.html --out /tmp/menu.png --size 1080,2265 
 `1080×2265` покрывает целые кадры `y 91..2356`, координаты со снимка пересчитываются
 `+91` — та же арифметика, что для кроя статус-бара.
 
-## 5. Страница под управлением: `web_drive` по CDP
+## 5. Зонд страницы: `web_probe` — числа вместо снимка
+
+«Где страница поставила элемент» проще спросить числами, чем искать рамку по
+пикселям и не поднимая CDP-сессии `web_drive`: `web_probe` врезает в страницу
+(function(){…})()-зонд, тот пишет результат `JSON.stringify` в скрытый
+`<pre id="__probe__">`, а Chrome с `--dump-dom` сериализует DOM после
+виртуального времени — функция вынимает узел, распрямляет сущности
+(`html.unescape`: Chrome экранирует кавычки, `json.loads` на сыром тексте
+падает) и отдаёт объект Python. `--virtual-time-budget` тут 2000 мс по
+умолчанию — зонду нужны досчитанные шрифты (метрики строк), снимочных 1200
+бывает мало.
+
+```python
+from web_.web_probe import web_probe, web_probe_rects
+
+rects = web_probe_rects('www/documents.html', ['#tax-num', '.ticker.tax'])
+# {'#tax-num': {'x': 1212.9, 'y': 1451.6, 'width': 446.6, 'height': 78.1}, ...}
+# не найден — None, тоже ответ; rect'ы viewport-относительные, слайд карусели
+# за правым краем даёт честный x > 1080
+
+num = web_probe('www/documents.html',
+                "return document.getElementById('tax-num').textContent",
+                seed_js="localStorage.setItem('diaData', JSON.stringify("
+                        "{rnokpp: '1234567890'}))")
+```
+
+`seed_js` вставляется сразу после открывающего `<head>` — до скриптов
+страницы: посев в `inject_js` (перед `</body>`) страница прочитала бы уже
+после своего рендера. Зонд исполняется в конце `<body>`, то есть видит
+домашнее состояние всех скриптов страницы, но измеряет момент своего запуска:
+анимированный `transform` в значения не попадает, это снимок состояния, а не
+запись (для записей — `web_drive`). Падение зонда прилетает `RuntimeError` с
+текстом JS-ошибки; нет узла в дампе — страница упала раньше зонда.
+
+## 6. Длинный кадр: снять с запасом, резать `crop`
+
+Вьюпорт конечен, страница — нет; вертикальный скролл headless не доигрывает
+(`scrollTop` из `inject_js` даёт белую половину кадра), поэтому «весь кадр»
+снимают высоким вьюпортом и режут:
+`web_shot_capture(src, out, size=(1080, scrollH + 120), crop=(0, 1400, 1080, 2400))`
+— кроп применяется к готовому рендеру, пиксели до него не трогаются. Высоту
+содержимого перед этим мерят тем же `web_probe`
+(`document.body.scrollHeight`), а геометрию окон листа — `web_probe_rects`, и
+уж с готовыми числами ставят `crop` и сравнивают с эталоном. Сшивка
+прокрутки (`image_frames_stitch`) остаётся для телефонов, где высота кадра
+задана железом.
+
+## 7. Страница под управлением: `web_drive` по CDP
 
 Скриншот — одно действие; когда страницу надо **прогнать** (подать файл в
 input, дождаться асинхронной цепочки, почитать `localStorage`, собрать
@@ -87,7 +136,7 @@ storage, shot}`; консоль собирается из `Runtime.consoleAPICal
 молчит. Локальный HTML раздаётся тем же `web_shot_serve`, порт ждём через
 `DevToolsActivePort` профиля.
 
-## 6. Страница как юнит: `web_unit` без браузера
+## 8. Страница как юнит: `web_unit` без браузера
 
 Проверять логику обработчиков (дефолты, мосты `window.X_SET`, проценты)
 быстрее без Chrome: `web_unit_run` вытаскивает последний инлайн-`<script>`
@@ -104,6 +153,11 @@ DOM/`FileReader`/`Image` — вытаскивать скрипт в отдель
 python -m web_.web_shot https://example.com --out /tmp/shot.png
 python -m web_.web_shot www/page.html --out /tmp/s.png --size 390,844
 python -m web_.web_shot www/page.html --out /tmp/s.png --budget 0   # снять сразу
+python -m web_.web_shot www/page.html --out /tmp/cut.png \
+    --size 1080,2520 --crop 0,1400,1080,2400                       # длинный кадр + рез
+python -m web_.web_probe www/page.html --rect '#tax-num' --rect '.ticker.tax'
+python -m web_.web_probe www/page.html --probe-js "return document.title" \
+    --seed-js "localStorage.setItem('diaData', JSON.stringify({…}))"
 python -m web_.web_drive www/page.html --js-file probe.js --storage diaData --shot /tmp/a.png
 python -m web_.web_unit www/page.html tests.js      # код возврата 1 — есть провалы
 ```
@@ -121,7 +175,19 @@ python -m web_.web_unit www/page.html tests.js      # код возврата 1 
    (`image_frames_stitch`).
 5. **Виртуальное время ест асинхронию** — под `virtual-time-budget`
    `FileReader`/`Image` не стреляют никогда; гонять страницу надо `web_drive`
-   (§ 5), а чистую логику — `web_unit` (§ 6).
+   (§ 7), а чистую логику — `web_unit` (§ 8).
 6. **`web_unit` заглушки повторяют браузерные сигнатуры** — `File(parts,
    name, opts)`, колбэки через `setTimeout`, `navigator` в node ≥ 21 только
    геттер; упростить их «по-своему» значит проверить не страницу, а заглушку.
+7. **JSON из дампа — после `html.unescape`** — сериализация Chrome превращает
+   кавычки и `&` в сущности, `json.loads` на сыром тексте узла падает на
+   первой же строчной цене.
+8. **Посев — в `<head>`, замер — в конце `<body>`** — страница читает
+   `localStorage` на старте: посеянное поздно она не увидит; зато зонд,
+   наоборот, обязан идти после её скриптов, иначе измерит разметку до
+   рендера. И то и другое — два разных слота `_served_page` (`head_js`,
+   `inject_js`).
+9. **Зонд мерит момент запуска, не момент дампа** — анимированный `transform`
+   в числа не попадает (бюджет времени двигает анимацию, но читается
+   состояние на t запуска зонда); для динамики — `web_drive` с явными
+   `setTimeout`-паузами.

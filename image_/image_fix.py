@@ -1,6 +1,6 @@
 """
-Правка кадров-скриншотов: стирание запечённого текста, плоская заливка окна,
-выделение штриха в альфу.
+Правка кадров-скриншотов: стирание запечённого текста, двумерная зачистка
+со стеклом (inpaint), плоская заливка окна, выделение штриха в альфу.
 
 Операции, которые нужны всякий раз, когда скриншот становится подложкой
 клона: текст на подложке менять нельзя — его надо стереть и наложить живой
@@ -16,6 +16,10 @@
 опечатками соседнего текста внутри полосы, интерполяция продолжает градиент.
 Когда же тон окна известен точнее доноров (слот цвета подложки, заглушка
 поля) — плоская заливка честнее интерполяции, для неё `image_fix_fill`.
+Если же фон окна меняется по обеим осям (косой градиент стеклянной карточки),
+одномерного продолжения мало — `image_fix_inpaint` продолжает его по всем
+четырём сторонам (Coon-патч) и докладывает гауссова зерна: вычищенное окно
+не должно выглядеть мутным стеклом на живом шуме подложки.
 
 Альфа — сквозная сквозь любую правку: стирание и заливка живут в RGB,
 прозрачность кадра возвращается нетронутой. Потерять альфу молча — почерневшая
@@ -51,6 +55,12 @@ IMAGE_FIX_STROKE_SPAN = 120
 # замеренным цветом подложки), фейд нужен только чтобы спрятать ±1 px сдвига
 # края lossy-сжатием — большая кромка сама стала бы видимой полосой.
 IMAGE_FIX_FILL_FEATHER = 2.0
+
+# Зерно заплатки, σ в каналах 0-255: стекло скриншота не плоское — lossy-
+# сжатие и шум матрицы оставляют в ровных зонах живое зерно; плоский патч
+# поверх него выглядит мутным стеклом. σ 2.8 измерено по остаточному
+# разбросу ровных зон карточек ua.gov.diia.app; 0 — без шума.
+IMAGE_FIX_INPAINT_SIGMA = 2.8
 
 
 def image_fix_erase(path, out, boxes, edge=IMAGE_FIX_EDGE, axis='h',
@@ -129,6 +139,80 @@ def image_fix_erase(path, out, boxes, edge=IMAGE_FIX_EDGE, axis='h',
                                       Image.fromarray(alpha, 'L')))
     result.save(out, **_save_kwargs(out, quality))
     return {'file': path, 'out': out, 'boxes': len(boxes)}
+
+
+def image_fix_inpaint(path, out, boxes, edge=IMAGE_FIX_EDGE,
+                      sigma=IMAGE_FIX_INPAINT_SIGMA,
+                      quality=IMAGE_FIX_QUALITY) -> dict:
+    """
+    Стереть прямоугольники двумерным продолжением фона (Coon-патч) с зерном.
+
+    Когда erase с одним направлением несправедлив: фон окна меняется по обеим
+    осям (стеклянные карточки с косым градиентом, тикерные полосы), и заплата,
+    интерполированная вдоль одной оси, тянет градиент гребнем. Здесь каждая
+    из четырёх сторон окна даёт свою скалярную медиану из прилегающей донорской
+    полосы шириной `edge` (скаляр на канал: np.median по axis=-1 на RGBA свалил
+    бы каналы в одно число, потому reshape в (-1, ch)), углы — из диагональных
+    квадратиков, нутро — билинейный Coon (угловые слагаемые снимают скачок там,
+    где стороны набегают друг на друга). Шум — гауссов σ по RGB-каналам, альфу
+    не трогает никогда: стекло не плоское, заплатка без зерна выглядит мутным
+    стеклом. Донор стороны отсутствует (окно у края кадра) — сторона берётся
+    средним доступных; нет ни одной стороны — ValueError. Зерно детерминировано
+    (seed 0): та же картинка и окна дают тот же байт за байтом выход.
+    """
+    img = Image.open(path)
+    has_alpha = 'A' in img.mode or (img.mode == 'P'
+                                    and 'transparency' in img.info)
+    alpha = np.asarray(img.convert('RGBA'))[:, :, 3] if has_alpha else None
+    arr = np.asarray(img.convert('RGB'), dtype=np.float64)
+    h, w = arr.shape[:2]
+    rng = np.random.default_rng(0)
+    for box in boxes:
+        x0, y0 = max(int(box[0]), 0), max(int(box[1]), 0)
+        x1, y1 = min(int(box[2]), w), min(int(box[3]), h)
+        if x0 >= x1 or y0 >= y1:
+            continue
+        sides = [arr[y0:y1, max(x0 - edge, 0):x0],      # левая
+                 arr[y0:y1, x1:min(x1 + edge, w)],      # правая
+                 arr[max(y0 - edge, 0):y0, x0:x1],      # верхняя
+                 arr[y1:min(y1 + edge, h), x0:x1]]      # нижняя
+        vals = [_med3(s) if s.size else None for s in sides]
+        got = [v for v in vals if v is not None]
+        if not got:
+            raise ValueError(f'окно {tuple(box)} занимает кадр целиком — '
+                             f'краев фона нет, продолжать нечем')
+        base = np.mean(got, axis=0)
+        l, r, t, b = (v if v is not None else base for v in vals)
+
+        def _corner(region, a, c):
+            # угол — из диагонального квадратика; у края кадра его нет,
+            # берём средним двух прилежащих сторон (уже с подстановкой)
+            reg = np.asarray(region)
+            return _med3(reg) if reg.size else (a + c) / 2.0
+
+        c_tl = _corner(arr[max(y0 - edge, 0):y0, max(x0 - edge, 0):x0], l, t)
+        c_tr = _corner(arr[max(y0 - edge, 0):y0, x1:min(x1 + edge, w)], r, t)
+        c_bl = _corner(arr[y1:min(y1 + edge, h), max(x0 - edge, 0):x0], l, b)
+        c_br = _corner(arr[y1:min(y1 + edge, h), x1:min(x1 + edge, w)], r, b)
+        bh, bw = y1 - y0, x1 - x0
+        # середины пикселей в 0..1: уровень стороны отвечает за центр донорской
+        # полосы, но стороны здесь скаляры и продолжение фона — линейное,
+        # сдвиг на полпикселя на широких окнах заметнее экономии точности
+        u = ((np.arange(bw) + 0.5) / bw).reshape(1, bw, 1)
+        v = ((np.arange(bh) + 0.5) / bh).reshape(bh, 1, 1)
+        patch = ((1 - u) * l + u * r + (1 - v) * t + v * b
+                 - ((1 - u) * (1 - v) * c_tl + (1 - u) * v * c_bl
+                    + u * (1 - v) * c_tr + u * v * c_br))
+        if sigma > 0:
+            patch = patch + rng.normal(0.0, sigma, patch.shape)
+        arr[y0:y1, x0:x1] = patch
+    result = Image.fromarray(
+        np.clip(np.round(arr), 0, 255).astype('uint8'), 'RGB')
+    if alpha is not None:
+        result = Image.merge('RGBA', (*result.split(),
+                                      Image.fromarray(alpha, 'L')))
+    result.save(out, **_save_kwargs(out, quality))
+    return {'file': path, 'out': out, 'boxes': len(boxes), 'sigma': sigma}
 
 
 def image_fix_fill(path, out, boxes, color, radius=0,
@@ -222,6 +306,11 @@ def image_fix_strokes(path, out, box, hi=IMAGE_FIX_STROKE_HI,
             'alpha_max': int(alpha.max()) if alpha.size else 0}
 
 
+def _med3(region):
+    """Скалярная медиана области по каналам: flatten в (-1, ch) на канал."""
+    return np.median(region.reshape(-1, region.shape[-1]), axis=0)
+
+
 def _fill_rgb(color) -> tuple:
     """Цвет заливки в (r, g, b): '#rrggbb' / '#rgb' или тройка чисел 0-255."""
     if isinstance(color, str):
@@ -250,12 +339,15 @@ def _save_kwargs(out, quality):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Правка кадров-скриншотов')
-    ap.add_argument('command', choices=['erase', 'fill', 'strokes'])
+    ap.add_argument('command', choices=['erase', 'inpaint', 'fill', 'strokes'])
     ap.add_argument('path', help='картинка')
     ap.add_argument('--out', required=True, help='куда сохранить')
     ap.add_argument('--box', action='append', metavar='x0,y0,x1,y1',
                     help='окно, повторять по числу заплаток; strokes — одно')
-    ap.add_argument('--edge', type=int, default=IMAGE_FIX_EDGE, help='erase')
+    ap.add_argument('--edge', type=int, default=IMAGE_FIX_EDGE,
+                    help='erase/inpaint: ширина донорской полосы, px')
+    ap.add_argument('--sigma', type=float, default=IMAGE_FIX_INPAINT_SIGMA,
+                    help='inpaint: зерно по RGB, 0 — без шума')
     ap.add_argument('--axis', default='h', choices=['h', 'v'], help='erase')
     ap.add_argument('--color', help='fill: "#rrggbb"')
     ap.add_argument('--radius', type=int, default=0, help='fill: скругление, px')
@@ -274,6 +366,11 @@ if __name__ == '__main__':
             r = image_fix_erase(ns.path, ns.out, boxes, edge=ns.edge,
                                 axis=ns.axis, quality=ns.quality)
             print(f"стёрто {r['boxes']} окон → {r['out']}")
+        elif ns.command == 'inpaint':
+            r = image_fix_inpaint(ns.path, ns.out, boxes, edge=ns.edge,
+                                  sigma=ns.sigma, quality=ns.quality)
+            print(f"зачищено {r['boxes']} окон (зерно σ={r['sigma']}) "
+                  f"→ {r['out']}")
         elif ns.command == 'fill':
             if not ns.color:
                 raise SystemExit('fill требует --color "#rrggbb"')
