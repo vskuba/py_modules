@@ -1,16 +1,25 @@
 """
-Правка кадров-скриншотов: стирание запечённого текста, выделение штриха в альфу.
+Правка кадров-скриншотов: стирание запечённого текста, плоская заливка окна,
+выделение штриха в альфу.
 
-Две операции, которые нужны всякий раз, когда скриншот становится подложкой
+Операции, которые нужны всякий раз, когда скриншот становится подложкой
 клона: текст на подложке менять нельзя — его надо стереть и наложить живой
-(`image_fix_erase`), а рукописную подпись со светлого фона надо вырвать в
-PNG с альфой, чтобы CSS клал её поверх живой подложки (`image_fix_strokes`).
+(`image_fix_erase`), окно слота с запечённым фото — залить цветом подложки,
+когда он замерен (`image_fix_fill`), а рукописную подпись со светлого фона
+надо вырвать в PNG с альфой, чтобы CSS клал её поверх живой подложки
+(`image_fix_strokes`).
 
 Стирание — не «закрасить средним»: фон страниц и карточек имеет медленный
 градиент, плоская заплата на широком окне видна краем. Строка окна
 заполняется линейной интерполяцией между медианами узких краёвых полос слева
 и справа (или сверху/снизу при `axis='v'`): медиана не тянется в тёмное
 опечатками соседнего текста внутри полосы, интерполяция продолжает градиент.
+Когда же тон окна известен точнее доноров (слот цвета подложки, заглушка
+поля) — плоская заливка честнее интерполяции, для неё `image_fix_fill`.
+
+Альфа — сквозная сквозь любую правку: стирание и заливка живут в RGB,
+прозрачность кадра возвращается нетронутой. Потерять альфу молча — почерневшая
+матовая подложка на живом CSS-фоне вместо прозрачных областей.
 
 Замеры окон — по правилам `image_scan`: окно обязано оставлять снаружи
 полосу чистого фона шириной хотя бы `edge`, иначе интерполировать нечего.
@@ -20,6 +29,9 @@ import os
 
 import numpy as np
 from PIL import Image
+
+from image_.image_layout import image_layout_alpha
+
 
 # Ширина краевой полосы, из которой берётся медиана: 4-8 px достаточно для
 # тона фона и уже достаточно узко, чтобы не захватить соседний текст.
@@ -34,6 +46,11 @@ IMAGE_FIX_QUALITY = 92
 # альфы (для подписи шариковой ручкой на белой бумаге ~150/120).
 IMAGE_FIX_STROKE_HI = 150
 IMAGE_FIX_STROKE_SPAN = 120
+
+# Кромка заливки, px: тон заливки непрерывен с окружением (окно залито
+# замеренным цветом подложки), фейд нужен только чтобы спрятать ±1 px сдвига
+# края lossy-сжатием — большая кромка сама стала бы видимой полосой.
+IMAGE_FIX_FILL_FEATHER = 2.0
 
 
 def image_fix_erase(path, out, boxes, edge=IMAGE_FIX_EDGE, axis='h',
@@ -59,7 +76,13 @@ def image_fix_erase(path, out, boxes, edge=IMAGE_FIX_EDGE, axis='h',
             — продолжения фона не существует, стирать нечем.
     """
     img = Image.open(path)
-    mode = img.mode
+    # Альфа живёт отдельно от правки и любого режима-источника (RGBA, LA,
+    # P с прозрачностью): erase трогает только RGB. LA и P на выходе становятся
+    # RGBA — иначе Pillow молча вернёт RGB и прозрачность сгорит в матовую
+    # подложку.
+    has_alpha = 'A' in img.mode or (img.mode == 'P'
+                                    and 'transparency' in img.info)
+    alpha = np.asarray(img.convert('RGBA'))[:, :, 3] if has_alpha else None
     arr = np.asarray(img.convert('RGB'), dtype=np.int32)
     h, w = arr.shape[:2]
     for box in boxes:
@@ -101,14 +124,67 @@ def image_fix_erase(path, out, boxes, edge=IMAGE_FIX_EDGE, axis='h',
             continue
         arr[y0:y1, x0:x1] = np.round(l_a + (r_a - l_a) * u).astype(np.int32)
     result = Image.fromarray(arr.astype('uint8'), 'RGB')
-    if mode == 'RGBA':
-        # скриншот с альфой: стирание живёт в RGB, прозрачность остаётся
-        # прежней — вызывающий вправе стирать на полупрозрачном PNG
-        alpha = np.asarray(img)[:, :, 3]
+    if alpha is not None:
         result = Image.merge('RGBA', (*result.split(),
                                       Image.fromarray(alpha, 'L')))
     result.save(out, **_save_kwargs(out, quality))
     return {'file': path, 'out': out, 'boxes': len(boxes)}
+
+
+def image_fix_fill(path, out, boxes, color, radius=0,
+                   feather=IMAGE_FIX_FILL_FEATHER,
+                   quality=IMAGE_FIX_QUALITY) -> dict:
+    """
+    Залить окна плоским замеренным цветом; скругление — дугой `radius`.
+
+    Между erase и закрашиванием «на глаз» middle ground, когда тон окна
+    известен точнее доноров erase: слот фотографии цвета подложки, заглушка
+    поля формы. Маска — знаковое расстояние до скруглённого прямоугольника
+    (`image_layout_alpha`): без дуги на скруглённом окне плоская заплата
+    выдаёт белый ореол по углам наружу и полосу цвета под низом. Альфа
+    источника проходит насквозь, как у erase.
+
+    Args:
+        path: картинка-источник.
+        out: куда сохранить (формат по расширению; для webp/jpeg — quality).
+        boxes: [(x0, y0, x1, y1)] — окна в конвенции PIL (x1, y1 исключая).
+        color: '#rrggbb' или (r, g, b) 0-255.
+        radius: радиус скругления окна, px; больше половины короткой стороны
+            не бывает — ограничивается.
+        feather: ширина мягкого края маски, px.
+        quality: качество lossy-форматов.
+
+    Returns:
+        {'file', 'out', 'boxes': сколько окон залито, 'color': (r, g, b)}.
+
+    Raises:
+        ValueError: цвет не '#rrggbb' и не тройка чисел.
+    """
+    img = Image.open(path)
+    has_alpha = 'A' in img.mode or (img.mode == 'P'
+                                    and 'transparency' in img.info)
+    alpha = np.asarray(img.convert('RGBA'))[:, :, 3] if has_alpha else None
+    rgb = np.asarray(img.convert('RGB'), dtype=np.float32)
+    h, w = rgb.shape[:2]
+    col = np.array(_fill_rgb(color), dtype=np.float32)
+    for box in boxes:
+        x0, y0 = max(int(box[0]), 0), max(int(box[1]), 0)
+        x1, y1 = min(int(box[2]), w), min(int(box[3]), h)
+        if x0 >= x1 or y0 >= y1:
+            continue
+        # радиус за пределы короткой стороны уходит в вырожденную маску
+        r = min(float(radius), (x1 - x0) / 2.0, (y1 - y0) / 2.0)
+        m = image_layout_alpha(h, w, (x0, y0, x1, y1), r,
+                               float(feather))[:, :, None] / 255.0
+        rgb = rgb * (1 - m) + col * m
+    result = Image.fromarray(
+        np.clip(np.round(rgb), 0, 255).astype('uint8'), 'RGB')
+    if alpha is not None:
+        result = Image.merge('RGBA', (*result.split(),
+                                      Image.fromarray(alpha, 'L')))
+    result.save(out, **_save_kwargs(out, quality))
+    return {'file': path, 'out': out, 'boxes': len(boxes),
+            'color': tuple(int(v) for v in col)}
 
 
 def image_fix_strokes(path, out, box, hi=IMAGE_FIX_STROKE_HI,
@@ -146,6 +222,27 @@ def image_fix_strokes(path, out, box, hi=IMAGE_FIX_STROKE_HI,
             'alpha_max': int(alpha.max()) if alpha.size else 0}
 
 
+def _fill_rgb(color) -> tuple:
+    """Цвет заливки в (r, g, b): '#rrggbb' / '#rgb' или тройка чисел 0-255."""
+    if isinstance(color, str):
+        t = color.strip().lstrip('#')
+        if len(t) == 3:
+            t = ''.join(c * 2 for c in t)
+        if len(t) == 6:
+            try:
+                return tuple(int(t[i:i + 2], 16) for i in (0, 2, 4))
+            except ValueError:
+                pass
+        raise ValueError(f'цвет {color!r}: ждём "#rrggbb" или тройку (r, g, b)')
+    try:
+        r, g, b = (int(v) for v in color)
+    except (TypeError, ValueError):
+        raise ValueError(f'цвет {color!r}: ждём "#rrggbb" или тройку (r, g, b)') from None
+    if not all(0 <= v <= 255 for v in (r, g, b)):
+        raise ValueError(f'цвет {color!r}: каналы вне 0-255')
+    return (r, g, b)
+
+
 def _save_kwargs(out, quality):
     ext = os.path.splitext(out)[1].lower()
     return {'quality': quality} if ext in {'.jpg', '.jpeg', '.webp'} else {}
@@ -153,13 +250,17 @@ def _save_kwargs(out, quality):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Правка кадров-скриншотов')
-    ap.add_argument('command', choices=['erase', 'strokes'])
+    ap.add_argument('command', choices=['erase', 'fill', 'strokes'])
     ap.add_argument('path', help='картинка')
     ap.add_argument('--out', required=True, help='куда сохранить')
     ap.add_argument('--box', action='append', metavar='x0,y0,x1,y1',
                     help='окно, повторять по числу заплаток; strokes — одно')
     ap.add_argument('--edge', type=int, default=IMAGE_FIX_EDGE, help='erase')
     ap.add_argument('--axis', default='h', choices=['h', 'v'], help='erase')
+    ap.add_argument('--color', help='fill: "#rrggbb"')
+    ap.add_argument('--radius', type=int, default=0, help='fill: скругление, px')
+    ap.add_argument('--feather', type=float, default=IMAGE_FIX_FILL_FEATHER,
+                    help='fill: ширина мягкого края маски, px')
     ap.add_argument('--quality', type=int, default=IMAGE_FIX_QUALITY)
     ap.add_argument('--hi', type=int, default=IMAGE_FIX_STROKE_HI, help='strokes')
     ap.add_argument('--span', type=int, default=IMAGE_FIX_STROKE_SPAN,
@@ -173,6 +274,14 @@ if __name__ == '__main__':
             r = image_fix_erase(ns.path, ns.out, boxes, edge=ns.edge,
                                 axis=ns.axis, quality=ns.quality)
             print(f"стёрто {r['boxes']} окон → {r['out']}")
+        elif ns.command == 'fill':
+            if not ns.color:
+                raise SystemExit('fill требует --color "#rrggbb"')
+            r = image_fix_fill(ns.path, ns.out, boxes, ns.color,
+                               radius=ns.radius, feather=ns.feather,
+                               quality=ns.quality)
+            print(f"залито {r['boxes']} окон "
+                  f"{'#%02x%02x%02x' % r['color']} → {r['out']}")
         else:
             r = image_fix_strokes(ns.path, ns.out, boxes[0], hi=ns.hi,
                                   span=ns.span)

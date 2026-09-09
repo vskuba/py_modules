@@ -10,7 +10,9 @@
 глифы в окне (`image_scan_glyph` — капитель/ascender, по нему подбирают
 `font-size` под замер с телефона: «капитель 38 px — это 4.81 vw»). Список
 контрольных точек мерится разом (`image_scan_windows`), а сверка кадра-клона
-с оригиналом, сдвинутым на константу, — `image_scan_windows_diff`.
+с оригиналом, сдвинутым на константу, — `image_scan_windows_diff`. Габарит
+пикселей заданного тона по всему кадру — `image_scan_bbox`: куда влезла
+тестовая картинка в слот, дотянуто ли стирание до фона.
 
 Чем эти замеры отличаются от `image_.image_measure`: тот отвечает «какой тон
 в окне» (модальная медиана), эти — «где идут границы вдоль линии». Окно
@@ -53,15 +55,15 @@ def image_scan_runs(path, axis='y', pos=None, tone='white',
     Однотонные отрезки вдоль вертикального или горизонтального разреза кадра.
 
     Так ищут края панелей по одной линии: «белый лист начинается тут,
-    кончается там, ниже — щель, потом пилюля». `tone` — 'white', 'black'
-    или hex («#EDEDED») с допуском `tol` по каждому каналу.
+    кончается там, ниже — щель, потом пилюля». `tone` — 'white', 'black',
+    'chroma' или hex («#EDEDED») с допуском `tol` по каждому каналу.
 
     Args:
         path: картинка.
         axis: 'y' — разрез-колонка (отрезки по вертикали), 'x' — разрез-строка.
         pos: координата разреза поперёк (для 'y' — x колонки);
             пусто — центр кадра (у краёв врут скруглённые углы панелей).
-        tone: 'white' | 'black' | '#rrggbb'.
+        tone: 'white' | 'black' | 'chroma' (любой цветной) | '#rrggbb'.
         tol: допуск по каналу, 0-255.
         min_len: минимальная длина отрезка, пиксели.
         rect: (x0, y0, x1, y1) — ограничить зону поиска вдоль оси разреза.
@@ -95,6 +97,41 @@ def image_scan_runs(path, axis='y', pos=None, tone='white',
         runs.append((start, hi - 1))
     return {'file': path, 'axis': axis, 'pos': pos, 'tone': tone,
             'runs': runs, 'count': len(runs)}
+
+
+def image_scan_bbox(path, tone='chroma', tol=IMAGE_SCAN_TOL, rect=None) -> dict:
+    """
+    Габарит пикселей заданного тона по всему кадру (или по окну `rect`).
+
+    Ответ на «где в кадре цветное», когда координаты неизвестны: залили слот
+    тестовой картинкой — bbox покажет, куда она реально легла; стёрли
+    запечённый объект — bbox остатков скажет, дотянуто ли до фона. Тон по
+    умолчанию 'chroma': фон карточек серый, у серого хроматика нулевая, так
+    что находится именно содержимое, а не тонкая вариация подложки. Окном
+    отсекают цветные оверлеи интерфейса (кнопки, баннеры).
+
+    Args:
+        path: картинка.
+        tone: 'white' | 'black' | 'chroma' | '#rrggbb' (см. `_tone_mask`).
+        tol: допуск по каналу, 0-255.
+        rect: (x0, y0, x1, y1) — зона поиска в координатах кадра.
+
+    Returns:
+        {'file', 'tone', 'box': (x0, y0, x1, y1)|None, 'count'}; концы
+        включительно; box None, если пикселей тона нет вовсе.
+    """
+    img = np.asarray(Image.open(path).convert('RGB'), dtype=np.int32)
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = (int(v) for v in rect) if rect else (0, 0, w, h)
+    x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, w), min(y1, h)
+    mask = _tone_mask(img[y0:y1, x0:x1], tone, tol)
+    ys, xs = np.nonzero(mask)
+    if ys.size == 0:
+        return {'file': path, 'tone': tone, 'box': None, 'count': 0}
+    return {'file': path, 'tone': tone,
+            'box': (x0 + int(xs.min()), y0 + int(ys.min()),
+                    x0 + int(xs.max()), y0 + int(ys.max())),
+            'count': int(ys.size)}
 
 
 def image_scan_rows(path, rect=None, thresh=IMAGE_SCAN_THRESH,
@@ -270,15 +307,27 @@ def image_scan_windows_diff(path_a, path_b, windows, offset='auto',
 
 
 def _tone_mask(line, tone, tol):
-    """Булева «линия попадает в тон» по всем пикселям строки/колонки."""
+    """Булева «линия попадает в тон» по всем пикселям строки/колонки.
+
+    'chroma' — «цветной»: размах каналов больше допуска. Серый фон кадра
+    (страница, карточка, заглушка) даёт нулевую хроматику, поэтому chroma
+    находит на нём именно цветное содержимое, не подвязываясь под конкретный
+    hex — замер тон-в-тон для этого и есть, что цвет неизвестен заранее.
+
+    Канал — последняя ось, редукции по axis=-1: функцию вызывают и линией
+    (n, 3), и полем кадра (h, w, 3) — image_scan_bbox.
+    """
     if tone == 'white':
-        return line.min(axis=1) >= 255 - tol
+        return line.min(axis=-1) >= 255 - tol
     if tone == 'black':
-        return line.max(axis=1) <= tol
+        return line.max(axis=-1) <= tol
+    if tone == 'chroma':
+        return line.max(axis=-1) - line.min(axis=-1) > tol
     if len(tone) == 7 and tone[0] == '#':
         rgb = np.array([int(tone[i:i + 2], 16) for i in (1, 3, 5)], dtype=np.int32)
-        return (np.abs(line - rgb) <= tol).all(axis=1)
-    raise ValueError(f"tone — 'white', 'black' или '#rrggbb', получено {tone!r}")
+        return (np.abs(line - rgb) <= tol).all(axis=-1)
+    raise ValueError(
+        f"tone — 'white', 'black', 'chroma' или '#rrggbb', получено {tone!r}")
 
 
 def _merge_gaps(mask, gap):
@@ -365,11 +414,14 @@ def _offset(spec):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Линейные замеры кадра')
-    ap.add_argument('command', choices=['runs', 'rows', 'glyph', 'windows', 'diff'])
+    ap.add_argument('command',
+                    choices=['runs', 'bbox', 'rows', 'glyph', 'windows', 'diff'])
     ap.add_argument('path', nargs='+', help='картинка (diff — две: a b)')
     ap.add_argument('--axis', default='y', choices=['x', 'y'], help='runs')
     ap.add_argument('--pos', type=int, help='разрез поперёк; по центру')
-    ap.add_argument('--tone', default='white', help="runs: white|black|#hex")
+    ap.add_argument('--tone',
+                    help="white|black|chroma|#hex (runs по умолчанию white, "
+                         "bbox — chroma)")
     ap.add_argument('--tol', type=int, help='допуск тона (runs) / остаток px (diff)')
     ap.add_argument('--min', type=int, default=IMAGE_SCAN_MIN_RUN, help='runs')
     ap.add_argument('--rect', help='x0,y0,x1,y1 зона поиска')
@@ -383,11 +435,22 @@ if __name__ == '__main__':
         rect = _rect(ns.rect) if ns.rect else None
         if ns.command == 'runs':
             tol = ns.tol if ns.tol is not None else IMAGE_SCAN_TOL
-            r = image_scan_runs(ns.path[0], axis=ns.axis, pos=ns.pos, tone=ns.tone,
+            r = image_scan_runs(ns.path[0], axis=ns.axis, pos=ns.pos,
+                                tone=ns.tone or 'white',
                                 tol=tol, min_len=ns.min, rect=rect)
             print(f"разрез {ns.axis}={r['pos']}, тон {r['tone']}: {r['count']}")
             for a, b in r['runs']:
                 print(f'  {a}..{b}  (len {b - a + 1})')
+        elif ns.command == 'bbox':
+            tol = ns.tol if ns.tol is not None else IMAGE_SCAN_TOL
+            r = image_scan_bbox(ns.path[0], tone=ns.tone or 'chroma',
+                                tol=tol, rect=rect)
+            if r['box'] is None:
+                print(f"тон {r['tone']}: чисто, пикселей 0")
+            else:
+                x0, y0, x1, y1 = r['box']
+                print(f"габарит {x0},{y0} — {x1},{y1} "
+                      f"(тон {r['tone']}, пикселей {r['count']})")
         elif ns.command == 'rows':
             r = image_scan_rows(ns.path[0], rect=rect, thresh=ns.thresh)
             print(f"строк {len(r['rows'])}, шаг {r['pitch']}")

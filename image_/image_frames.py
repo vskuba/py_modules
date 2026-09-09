@@ -17,7 +17,9 @@
 в отличие от `delta` смещение двустороннее и считается по пикселям полосы,
 а не по ряду строк), и «покажи десять кропов одним взглядом»
 (`image_frames_grid`: монтаж полос с разных кадров в одну картинку —
-глазами десять файлов не сверить).
+глазами десять файлов не сверить), и «за какой период анимации кадр
+возвращается к первому» (`image_frames_cycle`: первый повтор первого кадра
+по среднему по каналам — дыхание обоев, webp-луп, экран после тоста).
 
 Грабли серии — `image_frames.md`.
 """
@@ -53,6 +55,11 @@ IMAGE_FRAMES_SHIFT_SEARCH_Y = 4
 # горизонтальных полос: асимметрия анимированного фона по горизонтали ниже,
 # чем по вертикали.
 IMAGE_FRAMES_DRIFT_ROWS = 8
+
+# Допуск совпадения средних по каналу при поиске периода цикла, единицы
+# канала: крупнее ±1 — шум повторного lossy-квантования не выдаётся за ход
+# анимации; мельче — «повтор» не сойдётся даже на одном и том же кадре.
+IMAGE_FRAMES_CYCLE_TOL = 2.0
 
 
 def image_frames_delta(a, b, max_delta=None, window=IMAGE_FRAMES_WINDOW):
@@ -254,6 +261,50 @@ def image_frames_grid(items, out, cols=3, scale=1.0, pad=12):
             'size': (canvas.width, canvas.height)}
 
 
+def image_frames_cycle(paths, interval=None, tol=IMAGE_FRAMES_CYCLE_TOL,
+                       rect=None) -> dict:
+    """
+    Период цикла анимации по серии кадров — первый повтор первого кадра.
+
+    Кадры снимают с равным шагом, период — первый кадр после нулевого, чей
+    средний по каналам совпал с нулевым в допуске `tol`: «дыхание» обоев,
+    webp-луп, возврат экрана после тоста. Среднее по окну вместо попиксельного
+    сравнения — осознанный компромисс: вернувшийся кадр совпадает и в среднем,
+    а среднее не сходит с ума от шума сжатия живых скриншотов. `period_frames`
+    1 — соседние кадры уже одинаковы: покой или шаг выборки мельче хода
+    анимации. None честнее нуля: за эту серию повтор не наступил, период
+    длиннее серии — а не «цикла нет». Окном `rect` вырезают движущиеся
+    оверлеи (часы, счётчик), которые портят среднее и прячут возврат фона.
+
+    Args:
+        paths: упорядоченные кадры серии, минимум два.
+        interval: шаг съёмки, секунды; с ним приходит `period_s`.
+        tol: допуск совпадения средних по каналу, 0-255.
+        rect: (x0, y0, x1, y1) — окно кадра без движущихся оверлеев.
+
+    Returns:
+        {'frames', 'period_frames': int|None, 'period_s': float|None,
+         'means': [(r, g, b)] — средние по кадру, ряд видно глазами}.
+
+    Raises:
+        ValueError: кадров меньше двух — период по одному кадру не считается.
+    """
+    if len(paths) < 2:
+        raise ValueError('нужны хотя бы два кадра серии')
+    means = []
+    for p in paths:
+        a = _to_float(p)
+        if rect:
+            a = a[int(rect[1]):int(rect[3]), int(rect[0]):int(rect[2])]
+        means.append(a.mean(axis=(0, 1)))
+    period = next((k for k in range(1, len(means))
+                   if float(np.abs(means[k] - means[0]).max()) <= tol), None)
+    return {'frames': len(means), 'period_frames': period,
+            'period_s': (round(period * interval, 2)
+                         if period is not None and interval else None),
+            'means': [tuple(round(float(v), 2) for v in m) for m in means]}
+
+
 def _profile(img) -> np.ndarray:
     """Профиль яркости строк: среднее по ширине, float32."""
     a = np.asarray(_to_float(img), dtype=np.float32)
@@ -301,9 +352,10 @@ def _shift_1d(pa: np.ndarray, pb: np.ndarray, search: int) -> tuple:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description='Скролл-кадры и анимация')
-    ap.add_argument('command', choices=['delta', 'stitch', 'drift', 'shift', 'grid'])
+    ap.add_argument('command',
+                    choices=['delta', 'stitch', 'drift', 'shift', 'grid', 'cycle'])
     ap.add_argument('files', nargs='+',
-                    help='delta/drift/shift: два кадра; stitch: серия; '
+                    help='delta/drift/shift: два кадра; stitch/cycle: серия; '
                          "grid: path или path@x0,y0,x1,y1 (повторяемо)")
     ap.add_argument('--out', help='stitch/grid: файл результата')
     ap.add_argument('--crop', help='stitch: окно кадра top,bottom')
@@ -322,6 +374,11 @@ def main() -> None:
     ap.add_argument('--rows', type=int, default=IMAGE_FRAMES_DRIFT_ROWS)
     ap.add_argument('--cols', type=int, default=3)
     ap.add_argument('--scale', type=float, default=1.0)
+    ap.add_argument('--interval', type=float,
+                    help='cycle: секунды между кадрами съёмки — для периода в секундах')
+    ap.add_argument('--tol', type=float, default=IMAGE_FRAMES_CYCLE_TOL,
+                    help='cycle: допуск совпадения средних по каналу')
+    ap.add_argument('--rect', help='cycle: x0,y0,x1,y1 окно без движущихся оверлеев')
     ns = ap.parse_args()
     try:
         if ns.command == 'delta':
@@ -370,6 +427,17 @@ def main() -> None:
                 line += (f"; скорость {r['px_per_s']['x']:+g} px/с "
                          f"при dt {r['dt']:g} с")
             print(line)
+        elif ns.command == 'cycle':
+            rect = tuple(int(v) for v in ns.rect.split(',')) if ns.rect else None
+            r = image_frames_cycle(ns.files, interval=ns.interval,
+                                   tol=ns.tol, rect=rect)
+            if r['period_frames'] is None:
+                print(f"цикла не видно за серию из {r['frames']} кадров")
+            else:
+                line = f"период {r['period_frames']} кадров"
+                if r['period_s'] is not None:
+                    line += f" = {r['period_s']} с"
+                print(line)
         else:
             if not ns.out:
                 raise SystemExit('нужен --out файл монтажа')
