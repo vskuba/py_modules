@@ -55,6 +55,7 @@ namespace-папок, которые проекты импортируют на�
 | `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
 | `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона, проверка шва (поиск спокойной полосы, стороны прямоугольника), сравнение пары кадров, ведомость цветов разметки |
 | `image_/image_scan.py` | `docs/image_scan.md` — полосы тона по разрезу, строки и шаг, габарит глифов |
+| `image_/image_fix.py` | `docs/image_fix.md` — заплатки линейной интерполяцией с кромок, штрих альфой из яркости |
 | `image_/image_frames.py` | `docs/image_frames.md` — дельта скролла, полотно, drift, сдвиг и скорость полосы |
 | `image_/image_layout.py` | `docs/image_layout.md` — геометрия блоков, точки-индикаторы, SDF-вырез |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
@@ -136,16 +137,18 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_state` | `read`, `settle`, `last` |
 | `adb_.adb_crop` | `on`, `box`, `part` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
-| `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>` |
+| `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>`, `storage КЛЮЧ='{json}' [--reload]` |
 | `adb_.adb_burst` | `[-n N --interval S --outdir DIR --serial ...]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
-| `font_.font_` | `info`, `coverage`, `compare`, `render`, `textdiff` |
+| `font_.font_` | `info`, `coverage`, `compare`, `render`, `ink`, `fit`, `textdiff`, `baseline-top` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals` |
-| `image_.image_scan` | `runs`, `rows`, `glyph` |
+| `image_.image_scan` | `runs`, `rows`, `glyph`, `windows`, `diff` |
+| `image_.image_fix` | `erase <файл> --out --box ...`, `strokes <файл> --out --box ...` |
 | `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
+| `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 
 Список сверяется командой — таблица устаревает быстрее кода:
 

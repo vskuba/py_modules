@@ -1,6 +1,6 @@
 """
 Линейные замеры кадра: однотонные отрезки по разрезу, строки текста с шагом,
-габарит глифов в окне.
+габарит глифов в окне, батч контрольных точек и сверка клона с оригиналом.
 
 Инструменты «где граница» для сверки свёрстанного со снимком. По одиночной
 вертикали/горизонтали кадра: где начинается и заканчивается белая панель
@@ -8,7 +8,9 @@
 идут строки текста и где их центры (`image_scan_rows` — профиль тёмных
 строк, по нему же сверяют pitch меню), какой высоты реально отрисовались
 глифы в окне (`image_scan_glyph` — капитель/ascender, по нему подбирают
-`font-size` под замер с телефона: «капитель 38 px — это 4.81 vw»).
+`font-size` под замер с телефона: «капитель 38 px — это 4.81 vw»). Список
+контрольных точек мерится разом (`image_scan_windows`), а сверка кадра-клона
+с оригиналом, сдвинутым на константу, — `image_scan_windows_diff`.
 
 Чем эти замеры отличаются от `image_.image_measure`: тот отвечает «какой тон
 в окне» (модальная медиана), эти — «где идут границы вдоль линии». Окно
@@ -37,6 +39,11 @@ IMAGE_SCAN_THRESH = 120
 # Разрывы между тёмными строками, объединяемые в одну строку: антиалиасинг
 # и межстрочные лигатуры рвут профиль на 1-2 пиксельные щели.
 IMAGE_SCAN_ROW_GAP = 2
+
+# Допуск остатка в сверке окон, px: размытый снимок телефона и чистый рендер
+# дают ink-рамку, разъезжающуюся на 1-2 px при одинаковой вёрстке; больше —
+# реальное расхождение.
+IMAGE_SCAN_DIFF_TOL = 2
 
 
 def image_scan_runs(path, axis='y', pos=None, tone='white',
@@ -170,6 +177,98 @@ def image_scan_glyph(path, rect, thresh=IMAGE_SCAN_THRESH - 10) -> dict:
             'w': gx1 - gx0 + 1, 'h': gy1 - gy0 + 1, 'count': int(ys.size)}
 
 
+def image_scan_windows(path, windows, thresh=IMAGE_SCAN_THRESH) -> dict:
+    """
+    Батч габаритов тёмного инка по именованным окнам — за один проход по кадру.
+
+    Сверка свёрстанного со снимком всегда идёт по списку контрольных точек
+    (заголовок, номер, строки таблицы), а не по одному окну: `image_scan_glyph`
+    на пустом окне бросает ValueError, и проверка из десятка окон рассыпается
+    на десять вызовов с обёртками. Здесь пустое окно — `None` в ответе:
+    «инка нет» — это результат проверки, а не исключение.
+
+    Args:
+        path: картинка.
+        windows: {имя: (x0, y0, x1, y1)} — окна в координатах кадра.
+        thresh: порог тёмного, как в `image_scan_glyph`.
+
+    Returns:
+        {'file', 'windows': {имя: {'x0','y0','x1','y1','w','h','count'} | None}}
+    """
+    img = np.asarray(Image.open(path).convert('RGB'), dtype=np.int32)
+    out = {}
+    for name, rect in windows.items():
+        out[name] = _ink_bbox(img, rect, thresh)
+    return {'file': path, 'windows': out}
+
+
+def image_scan_windows_diff(path_a, path_b, windows, offset='auto',
+                            thresh=IMAGE_SCAN_THRESH,
+                            tol=IMAGE_SCAN_DIFF_TOL) -> dict:
+    """
+    Сверка двух кадров по именованным окнам с константным смещением.
+
+    Кадры одного экрана часто лежат сдвинуто (скриншот телефона со статус-баром
+    против headless-рендера, кадр до и после правки разметки): сверяют не
+    пиксели, а ink-рамку каждой контрольной точки после снятия константы.
+    Смещение берут медианой разностей верхних левых углов по окнам с инком на
+    обеих сторонах — медиана не портится одним съехавшим окном; его же видно
+    по большому `resid` в отчёте.
+
+    Args:
+        path_a, path_b: картинки; b — сверяемый кадр (рендер к оригиналу).
+        windows: {имя: (x0, y0, x1, y1)} — окна в координатах кадра a; для b
+            окно сдвигается на offset.
+        offset: 'auto' — медианное смещение (с перезамером по сдвинутому
+            окну, пока не сойдётся); None — считать нулевым; (dx, dy) —
+            задано вручную (например, снято с одного замера).
+        thresh: порог тёмного для обоих кадров.
+        tol: допустимый остаток по каждой оси, пиксели.
+
+    Returns:
+        {'file_a', 'file_b', 'offset': (dx, dy) | None, 'tol',
+         'ok': bool, 'bad': [имена],
+         'windows': {имя: {'a', 'b',            # габариты или None
+                           'delta': (dx, dy) | None,   # b − a как есть
+                           'resid': (dx, dy) | None,   # delta − offset
+                           'ok': bool}}}
+        Пустое окно с обеих сторон ok (согласованное отсутствие); пустое с
+        одной — не ok, это пропажа или лишнее содержимое.
+    """
+    img_a = np.asarray(Image.open(path_a).convert('RGB'), dtype=np.int32)
+    img_b = np.asarray(Image.open(path_b).convert('RGB'), dtype=np.int32)
+    base = (0, 0) if offset in ('auto', None) else offset
+    boxes = _pair_boxes(img_a, img_b, windows, thresh, base)
+    if offset == 'auto':
+        # Сдвинутое содержимое может оказаться обрезано краем несдвинутого
+        # окна (замер покажет край окна вместо края инка): медиану пересчитывают
+        # по сдвинутым окнам, пока не сойдётся. Сходится за один-два прохода.
+        for _ in range(3):
+            new = _median_offset(boxes) or (0, 0)
+            if new == base:
+                break
+            base = new
+            boxes = _pair_boxes(img_a, img_b, windows, thresh, base)
+        offset = base
+
+    result, bad = {}, []
+    for name, (a, b) in boxes.items():
+        if a is None or b is None:
+            entry = {'a': a, 'b': b, 'delta': None, 'resid': None,
+                     'ok': a is None and b is None}
+        else:
+            delta = (b['x0'] - a['x0'], b['y0'] - a['y0'])
+            resid = (delta[0] - base[0], delta[1] - base[1])
+            entry = {'a': a, 'b': b, 'delta': delta, 'resid': resid,
+                     'ok': abs(resid[0]) <= tol and abs(resid[1]) <= tol}
+        result[name] = entry
+        if not entry['ok']:
+            bad.append(name)
+    return {'file_a': path_a, 'file_b': path_b,
+            'offset': tuple(offset) if offset else None, 'tol': tol,
+            'ok': not bad, 'bad': bad, 'windows': result}
+
+
 def _tone_mask(line, tone, tol):
     """Булева «линия попадает в тон» по всем пикселям строки/колонки."""
     if tone == 'white':
@@ -196,40 +295,132 @@ def _merge_gaps(mask, gap):
     return out
 
 
+def _ink_bbox(img, rect, thresh):
+    """Габарит тёмного в окне или None; окно ограничивается кадром молча —
+    при смещённой сверке окно легитимно вылезает за край."""
+    h, w = img.shape[:2]
+    x0 = max(int(rect[0]), 0)
+    y0 = max(int(rect[1]), 0)
+    x1 = min(int(rect[2]), w)
+    y1 = min(int(rect[3]), h)
+    if x0 >= x1 or y0 >= y1:
+        return None
+    reg = img[y0:y1, x0:x1]
+    ys, xs = np.where(reg.mean(axis=2) < thresh)
+    if ys.size == 0:
+        return None
+    gx0, gy0 = x0 + int(xs.min()), y0 + int(ys.min())
+    gx1, gy1 = x0 + int(xs.max()), y0 + int(ys.max())
+    return {'x0': gx0, 'y0': gy0, 'x1': gx1, 'y1': gy1,
+            'w': gx1 - gx0 + 1, 'h': gy1 - gy0 + 1, 'count': int(ys.size)}
+
+
+def _shifted(rect, offset):
+    dx, dy = (int(v) for v in offset)
+    return (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy)
+
+
+def _median_offset(boxes):
+    """Медиана разностей левых верхних углов по окнам с инком с двух сторон."""
+    deltas = [(b['x0'] - a['x0'], b['y0'] - a['y0'])
+              for a, b in boxes.values() if a is not None and b is not None]
+    if not deltas:
+        return None
+    return (int(np.median([d[0] for d in deltas])),
+            int(np.median([d[1] for d in deltas])))
+
+
+def _pair_boxes(img_a, img_b, windows, thresh, base):
+    """Пары габаритов (a, b): окно a как задано, окно b сдвинуто на base."""
+    return {name: (_ink_bbox(img_a, rect, thresh),
+                   _ink_bbox(img_b, _shifted(rect, base), thresh))
+            for name, rect in windows.items()}
+
+
 def _rect(spec):
     return tuple(int(v) for v in spec.split(','))
 
 
+def _windows(specs):
+    """Список `--window ИМЯ=x0,y0,x1,y1` в dict; имена сохраняют порядок."""
+    if not specs:
+        raise SystemExit('нужен хотя бы один --window ИМЯ=x0,y0,x1,y1')
+    out = {}
+    for spec in specs:
+        name, sep, box = spec.partition('=')
+        if not sep or not name or ',' not in box:
+            raise SystemExit(f'--window {spec!r}: ждём ИМЯ=x0,y0,x1,y1')
+        out[name] = _rect(box)
+    return out
+
+
+def _offset(spec):
+    if spec in ('auto', 'none'):
+        return 'auto' if spec == 'auto' else None
+    parts = spec.split(',')
+    if len(parts) != 2:
+        raise SystemExit('--offset: auto | none | dx,dy')
+    return tuple(int(v) for v in parts)
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Линейные замеры кадра')
-    ap.add_argument('command', choices=['runs', 'rows', 'glyph'])
-    ap.add_argument('path', help='картинка')
+    ap.add_argument('command', choices=['runs', 'rows', 'glyph', 'windows', 'diff'])
+    ap.add_argument('path', nargs='+', help='картинка (diff — две: a b)')
     ap.add_argument('--axis', default='y', choices=['x', 'y'], help='runs')
     ap.add_argument('--pos', type=int, help='разрез поперёк; по центру')
     ap.add_argument('--tone', default='white', help="runs: white|black|#hex")
-    ap.add_argument('--tol', type=int, default=IMAGE_SCAN_TOL)
+    ap.add_argument('--tol', type=int, help='допуск тона (runs) / остаток px (diff)')
     ap.add_argument('--min', type=int, default=IMAGE_SCAN_MIN_RUN, help='runs')
     ap.add_argument('--rect', help='x0,y0,x1,y1 зона поиска')
     ap.add_argument('--thresh', type=int, default=IMAGE_SCAN_THRESH)
+    ap.add_argument('--window', action='append', metavar='ИМЯ=x0,y0,x1,y1',
+                    help='окно для windows/diff, повторять по числу точек')
+    ap.add_argument('--offset', default='auto',
+                    help="diff: auto — медиана смещения, none — без, либо dx,dy")
     ns = ap.parse_args()
     try:
         rect = _rect(ns.rect) if ns.rect else None
         if ns.command == 'runs':
-            r = image_scan_runs(ns.path, axis=ns.axis, pos=ns.pos, tone=ns.tone,
-                                tol=ns.tol, min_len=ns.min, rect=rect)
+            tol = ns.tol if ns.tol is not None else IMAGE_SCAN_TOL
+            r = image_scan_runs(ns.path[0], axis=ns.axis, pos=ns.pos, tone=ns.tone,
+                                tol=tol, min_len=ns.min, rect=rect)
             print(f"разрез {ns.axis}={r['pos']}, тон {r['tone']}: {r['count']}")
             for a, b in r['runs']:
                 print(f'  {a}..{b}  (len {b - a + 1})')
         elif ns.command == 'rows':
-            r = image_scan_rows(ns.path, rect=rect, thresh=ns.thresh)
+            r = image_scan_rows(ns.path[0], rect=rect, thresh=ns.thresh)
             print(f"строк {len(r['rows'])}, шаг {r['pitch']}")
             for (a, b), c in zip(r['rows'], r['centers']):
                 print(f'  {a}..{b}  центр {c}')
-        else:
+        elif ns.command == 'glyph':
             if not rect:
                 raise SystemExit('glyph требует --rect x0,y0,x1,y1')
-            r = image_scan_glyph(ns.path, rect, thresh=ns.thresh)
+            r = image_scan_glyph(ns.path[0], rect, thresh=ns.thresh)
             print(f"габарит {r['x0']},{r['y0']} — {r['x1']},{r['y1']} "
                   f"(w {r['w']} h {r['h']}, пикселей {r['count']})")
+        elif ns.command == 'windows':
+            r = image_scan_windows(ns.path[0], _windows(ns.window),
+                                   thresh=ns.thresh)
+            for name, box in r['windows'].items():
+                if box is None:
+                    print(f'{name}\tпусто')
+                else:
+                    print(f"{name}\t{box['x0']},{box['y0']} — {box['x1']},{box['y1']}"
+                          f"  (w {box['w']} h {box['h']}, пикселей {box['count']})")
+        else:
+            if len(ns.path) != 2:
+                raise SystemExit('diff требует две картинки: a и b')
+            tol = ns.tol if ns.tol is not None else IMAGE_SCAN_DIFF_TOL
+            r = image_scan_windows_diff(ns.path[0], ns.path[1], _windows(ns.window),
+                                        offset=_offset(ns.offset),
+                                        thresh=ns.thresh, tol=tol)
+            off = 'не найдено' if r['offset'] is None else tuple(r['offset'])
+            verdict = ('сходится' if r['ok']
+                       else 'расходится — ' + ', '.join(r['bad']))
+            print(f"смещение {off}, допуск {r['tol']} px, вердикт: {verdict}")
+            for name, e in r['windows'].items():
+                resid = '—' if e['resid'] is None else tuple(e['resid'])
+                print(f"{name}\tостаток {resid}\t{'ok' if e['ok'] else 'БОЛЬНО'}")
     except (ValueError, FileNotFoundError) as err:
         raise SystemExit(f'ошибка: {err}')

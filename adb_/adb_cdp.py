@@ -138,6 +138,43 @@ def adb_cdp_eval(expr: str, port: int = ADB_CDP_PORT, url_part: str = '',
     return _eval_value(result)
 
 
+def adb_cdp_storage(items: dict, url_part: str = '', reload: bool = False,
+                    port: int = ADB_CDP_PORT) -> dict:
+    """
+    Залить `items` в localStorage целевой страницы и прочитать обратно.
+
+    Сценарии сверки начинаются с шины: персона в `diaData`, режимы, флаги.
+    Настраивать их тапами по секретному редактору — дольше и менее
+    воспроизводимо, чем писать в то же место, откуда приложение читает.
+    Значения кладутся как `JSON.stringify` (контракт шины: читают
+    `JSON.parse`), поэтому число возвращается числом, а строка с кавычками
+    не ломается. `reload` перезагружает страницу — приложение читает шину
+    на старте; чтение обратно делается до перезагрузки, после неё гонка.
+
+    Args:
+        items: {ключ: значение} — сериализуемое в JSON.
+        url_part: часть адреса целевой страницы; пусто — первая страница.
+        reload: перезагрузить страницу после записи (с settle-паузой).
+        port: локальный порт, подключённый `adb_cdp_connect`.
+
+    Returns:
+        {'seeded': [ключи], 'values': {ключ: строка из хранилища}} —
+        значения обратного чтения сырые, распаковывает вызывающий.
+    """
+    adb_cdp_eval(_storage_js(items), port=port, url_part=url_part)
+    keys = [str(k) for k in items]
+    got = adb_cdp_eval(
+        'JSON.stringify(Object.fromEntries(' + json.dumps(keys, ensure_ascii=False) +
+        '.map(k => [k, localStorage.getItem(k)])))', port=port, url_part=url_part)
+    values = json.loads(got) if isinstance(got, str) else dict(got)
+    if reload:
+        # reload асинхронен: выражение вернётся до выгрузки документа,
+        # осесть даём settle-паузой, чтобы следующий вызов не поймал разгрузку
+        adb_cdp_eval('location.reload()', port=port, url_part=url_part)
+        time.sleep(ADB_CDP_SETTLE)
+    return {'seeded': keys, 'values': values}
+
+
 def adb_cdp_waitfor(expr: str, port: int = ADB_CDP_PORT, url_part: str = '',
                     timeout: float = ADB_CDP_WAIT_TIMEOUT, poll: float = ADB_CDP_WAIT_POLL):
     """
@@ -689,6 +726,20 @@ def _pick_target(pages: list, url_part: str) -> dict:
     return hits[0]
 
 
+def _storage_js(items: dict) -> str:
+    """
+    JS записи items в localStorage.
+
+    Двойное json.dumps: внешнее превращает JSON значения в строковый
+    литерал JS — в хранилище кладётся ровно то, что вернул бы
+    JSON.stringify в самой странице (кириллица остаётся читаемой).
+    """
+    return ';'.join(
+        f'localStorage.setItem({json.dumps(str(k))}, '
+        f'{json.dumps(json.dumps(v, ensure_ascii=False), ensure_ascii=False)})'
+        for k, v in items.items())
+
+
 def _eval_value(result: dict):
     """Значение из ответа Runtime.evaluate; исключение страницы — наше исключение."""
     details = result.get('exceptionDetails')
@@ -718,10 +769,11 @@ if __name__ == '__main__':
                "navigate https://localhost/menu.html --waitfor 'document.title' | "
                "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
                "element 540 300 | element-rect .card-cover | element-shot .card-cover shots/cover.png | "
-               "target reserve | viewport | tap '#download'")
+               "target reserve | viewport | tap '#download' | "
+               "storage diaData='{\"name\":\"СКУБА\"}' --reload")
     parser.add_argument('command', choices=['connect', 'pages', 'target', 'eval', 'navigate',
                                             'waitfor', 'capture', 'element', 'element-rect',
-                                            'element-shot', 'viewport', 'tap'])
+                                            'element-shot', 'viewport', 'tap', 'storage'])
     parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
     parser.add_argument('--serial', default='', help='устройство для connect и снимков')
     parser.add_argument('--port', type=int, default=ADB_CDP_PORT, help='локальный порт DevTools')
@@ -734,6 +786,8 @@ if __name__ == '__main__':
                         help='для navigate: JS-условие, которого дождаться после смены адреса')
     parser.add_argument('--json', action='store_true',
                         help='вывести значение как JSON: true/false/null вместо True/False/None')
+    parser.add_argument('--reload', action='store_true',
+                        help='для storage: перезагрузить страницу после записи')
     ns = parser.parse_args()
 
     try:
@@ -750,6 +804,17 @@ if __name__ == '__main__':
             print(adb_cdp_tap(ns.args[0], url_part=ns.url_part, serial=ns.serial, port=ns.port))
         elif ns.command == 'eval':
             print(_cli_out(adb_cdp_eval(ns.args[0], port=ns.port, url_part=ns.url_part), ns.json))
+        elif ns.command == 'storage':
+            items = {}
+            for pair in ns.args:
+                key, sep, raw = pair.partition('=')
+                if not sep or not key:
+                    raise SystemExit(f'storage: ждём КЛЮЧ=ЗНАЧЕНИЕ-в-JSON, получил {pair!r}')
+                items[key] = json.loads(raw)
+            out = adb_cdp_storage(items, url_part=ns.url_part, reload=ns.reload,
+                                  port=ns.port)
+            print('записано:', ', '.join(out['seeded']),
+                  '— страница перезагружена' if ns.reload else '')
         elif ns.command == 'waitfor':
             value = adb_cdp_waitfor(ns.args[0], port=ns.port, url_part=ns.url_part,
                                     timeout=ns.timeout or ADB_CDP_WAIT_TIMEOUT)

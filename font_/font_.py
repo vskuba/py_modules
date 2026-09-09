@@ -1,11 +1,14 @@
 """
-Шрифты: паспорт, покрытие символов, сверка мастера и подмножества.
+Шрифты: паспорт, покрытие символов, сверка мастера и подмножества,
+подбор кегля по чернилам.
 
 Модуль заточен под главный вопрос форензики шрифта — «это тот же шрифт?».
 Прямое сравнение таблиц лжёт: движки печати перекодируют CFF в glyf и
 меняют unitsPerEm, поэтому контуры сравниваются нормированными по upem
 (`font_compare`), а когда форматы разные — растром одинакового текста по
-базовой линии (`font_text_diff`). Подробности и грабли — `font_tooling.md`.
+базовой линии (`font_text_diff`). Метрическая сторона сборки: чернильная
+рамка строки (`font_text_ink`) и наибольший влезающий кегль
+(`font_fit_size`). Подробности и грабли — `font_tooling.md`.
 """
 import re
 
@@ -157,6 +160,66 @@ def font_render_text(path: str | bytes, text: str, out_png: str, size: int = 64)
     return out_png
 
 
+def font_text_ink(path: str | bytes, text: str, size: int = 64) -> dict:
+    """
+    Чернильная рамка строки в заданном кегле, относительно базовой линии.
+
+    Метрики шрифта (hhea/OS2) описывают em-ящик, а не то, что реально
+    отрисовалось: капитель сверяют с телефоном по чернилам, отступы
+    подписей — тоже. Поэтому растр: строка рисуется на чёрном холсте с
+    запасом (выносные глифы не должны обрезать краем), берётся габарит
+    непустых пикселей — антиалиасинг считается чернилом, как он считается
+    на снимке. `font.getbbox` для этого не годится: он отдаёт ящик по
+    метрике advance, а не чернила (проверено на синтетике: 0..advance
+    вместо 0.1..0.9 контура).
+
+    y отрицателен над базовой линией (ascent = -y0), x — от левого края
+    строки. Пустая строка и строка без чернил (пробелы) — ValueError.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    if not text:
+        raise ValueError('порожня рядка — вимірювати чернила нічого')
+    font = ImageFont.truetype(_stream(path), size)
+    ox, oy = size, size * 2          # левый край строки, базовая линия
+    canvas = Image.new("L", (size * (len(text) + 2), size * 4), 0)
+    ImageDraw.Draw(canvas).text((ox, oy), text, font=font, fill=255, anchor="ls")
+    bbox = canvas.getbbox()
+    if bbox is None:
+        raise ValueError(f'текст {text!r} не лишив чорнила (самі пробіли?)')
+    x0, y0, x1, y1 = bbox
+    return {"x0": x0 - ox, "y0": y0 - oy, "x1": x1 - ox, "y1": y1 - oy,
+            "w": x1 - x0, "h": y1 - y0, "ascent": oy - y0, "size": size}
+
+
+def font_fit_size(path: str | bytes, text: str, target_w: int,
+                  min_size: int = 1, max_size: int = 2000) -> int:
+    """
+    Наибольший кегль, при котором чернила строки шире `target_w` пикселя не станут.
+
+    Заголовок вмеряют в колонку с телефона: ширина цели известна из
+    `image_scan`-окнаoriginalа, кегль подбирают под неё. Двоичный поиск по
+    чернильной ширине (`font_text_ink`) — она неубывающая по кеглю;
+    растровая, то есть с учётом хантинга, ±1 px по краям — норма.
+    """
+    def ink_w(size):
+        return font_text_ink(path, text, size)["w"]
+
+    if ink_w(min_size) > target_w:
+        raise ValueError(f'навіть кегль {min_size} лишає {ink_w(min_size)} px — '
+                         f'ціль {target_w} px недосяжна')
+    lo, hi = min_size, max_size
+    if ink_w(hi) <= target_w:
+        return hi
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if ink_w(mid) <= target_w:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 def font_text_diff(path_a: str | bytes, path_b: str | bytes, text: str, size: int = 64,
                    out_dir: str | None = None) -> dict:
     """
@@ -193,7 +256,7 @@ def font_text_diff(path_a: str | bytes, path_b: str | bytes, text: str, size: in
 
 
 def main() -> None:
-    """CLI: `python -m font_.font_ info|coverage|compare|render|textdiff …`."""
+    """CLI: `python -m font_.font_ info|coverage|compare|render|ink|fit|textdiff|baseline-top …`."""
     import argparse
     import json
 
@@ -204,6 +267,8 @@ def main() -> None:
     p = sub.add_parser("coverage"); p.add_argument("font"); p.add_argument("text")
     p = sub.add_parser("compare"); p.add_argument("a"); p.add_argument("b")
     p = sub.add_parser("render"); p.add_argument("font"); p.add_argument("text"); p.add_argument("out_png"); p.add_argument("--size", type=int, default=64)
+    p = sub.add_parser("ink"); p.add_argument("font"); p.add_argument("text"); p.add_argument("--size", type=int, default=64)
+    p = sub.add_parser("fit"); p.add_argument("font"); p.add_argument("text"); p.add_argument("--target-w", type=int, required=True); p.add_argument("--max-size", type=int, default=2000)
     p = sub.add_parser("textdiff"); p.add_argument("a"); p.add_argument("b"); p.add_argument("text"); p.add_argument("--size", type=int, default=64); p.add_argument("--out-dir")
     p = sub.add_parser("baseline-top"); p.add_argument("font"); p.add_argument("size_pt", type=float)
 
@@ -216,6 +281,11 @@ def main() -> None:
         print(json.dumps(font_compare(a.a, a.b), ensure_ascii=False, indent=1))
     elif a.cmd == "render":
         print(font_render_text(a.font, a.text, a.out_png, size=a.size))
+    elif a.cmd == "ink":
+        print(json.dumps(font_text_ink(a.font, a.text, size=a.size), ensure_ascii=False))
+    elif a.cmd == "fit":
+        # Целое число, не JSON: значение подставляют в CSS/шаблон.
+        print(font_fit_size(a.font, a.text, a.target_w, max_size=a.max_size))
     elif a.cmd == "textdiff":
         print(json.dumps(font_text_diff(a.a, a.b, a.text, size=a.size, out_dir=a.out_dir), ensure_ascii=False, indent=1))
     elif a.cmd == "baseline-top":

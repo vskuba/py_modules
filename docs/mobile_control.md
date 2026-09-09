@@ -202,11 +202,13 @@ python -m adb_.adb_log crash
 | `adb_cdp_target_pick('substr', port=9222) -> dict` | целевая страница по части адреса: `{title, url, ws}`; не найдено или неоднозначно — ошибка со списком всех страниц |
 | `adb_cdp_viewport(url_part='', serial='') -> dict` | геометрия страницы на экране: `{x0, y0, dpr, css_w, css_h}`; начало координат — из окна WebView в дампе uiautomator |
 | `adb_cdp_tap(selector, url_part='', serial='') -> tuple` | тап по центру элемента, возвращает экранные пиксели; доставка через CDP Input, см. ниже |
+| `adb_cdp_storage(items, url_part='', reload=False) -> dict` | залить `{ключ: значение}` в localStorage страницы и прочитать обратно: `{seeded, values}`; значения кладутся как `JSON.stringify` (контракт шины — читают `JSON.parse`), `reload` перезагружает страницу после записи |
 
 CLI: `python -m adb_.adb_cdp connect com.example.app | pages | target reserve | eval 'location.href' |
 waitfor 'window.ready' | navigate https://localhost/menu.html --waitfor 'document.title' |
 capture com.example.app shots/ <url...> | element 540 300 | element-rect .tab |
-element-shot .tab shots/ | viewport | tap <селектор>`. Флаги: `--url-part` (цель), `--timeout`
+element-shot .tab shots/ | viewport | tap <селектор> | storage diaData='{"name":"СКУБА"}' --reload`.
+Флаги: `--url-part` (цель), `--timeout`
 (navigate/waitfor), `--json` — вывести значение как JSON (`true`/`null`, а не Python-`True`/`None`:
 вывод едят `jq` и скрипты, без флага идёт читаемый repr).
 Транспорт — `adb_ws` (WebSocket на stdlib): фрагментация длинных ответов и
@@ -244,6 +246,17 @@ WebView начинается не с верха снимка, а ниже ста
 `image_rect_seams` и `image_audit` (`image_tooling.md`, §5–6). Chrome берёт
 целые пиксели с округлением вниз, поэтому `rect` в ответе описывает записанный
 кадр (IHDR png), а не теоретический `css×dpr` — мерить надо по нему.
+
+**Состояние страницы — писать прямо в шину, а не тапать по редактору.**
+Приложения держат персональные данные и режимы в localStorage (у dia — ключ
+`diaData`), и настроить их тапами через секрет-редактор дольше и менее
+воспроизводимо, чем написать в то же место, откуда приложение читает.
+`adb_cdp_storage` кладёт значения как `JSON.stringify` — класть надо dict, а
+не готовую строку: ручное экранирование кавычек и кириллицы в JS-выражении —
+типовое место поломки. Обратное чтение возвращает сырые строки до всякой
+перезагрузки: `reload` асинхронен и читал бы гонку. После `reload` приложение
+перечитывает шину на старте — следующий шаг (снимок, diff) должен дать
+странице дорисоваться.
 
 **Цель выбирается адресом, а не порядком.** После цикла печати в приложении живёт
 второй, оффскрин WebView (у Reserve — `evod_pdf.html`), и он тоже виден `pages()`;
