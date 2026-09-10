@@ -49,6 +49,7 @@ namespace-папок, которые проекты импортируют на�
 | `adb_/adb_cdp.py`, `adb_ws` | `docs/mobile_control.md`, §8 — WebView изнутри через CDP |
 | `adb_/adb_emu.py` | `docs/mobile_emulator.md` — жизненный цикл AVD, сон экрана, пиксельные базы |
 | `adb_/adb_burst.py` | `docs/mobile_device.md` — серия кадров с метками времени, тёмные кадры |
+| `adb_/adb_rec.py` | `docs/mobile_rec.md` — запись экрана, разбор на кадры, обзорный лист, сверка двух записей |
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) |
@@ -58,6 +59,8 @@ namespace-папок, которые проекты импортируют на�
 | `image_/image_fix.py` | `docs/image_fix.md` — заплатки линейной интерполяцией с кромок, двумерная зачистка со стеклом и зерном (inpaint), штрих альфой из яркости |
 | `image_/image_frames.py` | `docs/image_frames.md` — дельта скролла, полотно, drift, сдвиг и скорость полосы |
 | `image_/image_layout.py` | `docs/image_layout.md` — геометрия блоков, точки-индикаторы, SDF-вырез |
+| `image_/image_svg.py` | `docs/image_svg.md` — SVG в растр точного размера, суперсэмплинг, `magick`/`convert` |
+| `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
@@ -164,7 +167,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake` |
-| `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait`, `install <apk> [-d]` |
+| `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait`, `install <apk> [-d]`, `pull-apk <пакет> [--out каталог]` |
 | `adb_.adb_log` | `read`, `crash`, `clear`, `pid` |
 | `adb_.adb_file` | `push <local> <remote>`, `pull <remote> [каталог]`, `ls <dir> [--pattern glob]`, `latest <dir> [--pattern glob]` |
 | `adb_.adb_doc` | `save [--dir Download]` |
@@ -174,6 +177,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
 | `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>`, `storage КЛЮЧ='{json}' [--reload]` |
 | `adb_.adb_burst` | `[-n N --interval S --outdir DIR --serial ...]` |
+| `adb_.adb_rec` | `record [out] [--seconds N --during «shell» --serial S]`, `frames [mp4] [--times 0.5,1.2 │ --fps 2 --out-dir DIR]`, `sheet [mp4] [--out --fps --cols --width]`, `compare <a> <b> --times 0.3,1.4 [--labels A,B --cell-width --out]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
@@ -181,9 +185,11 @@ CLI есть у модулей, которыми пользуются «рука
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `ink`, `fit`, `textdiff`, `baseline-top` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals` |
-| `image_.image_scan` | `runs`, `rows`, `glyph`, `windows`, `diff` |
+| `image_.image_scan` | `runs`, `bbox [--tone --tol --rect --alpha-thresh]`, `rows`, `glyph`, `windows`, `diff` |
+| `image_.image_svg` | `<svg> [-o out] [--size 512 --supersample 3]` |
 | `image_.image_fix` | `erase <файл> --out --box ...`, `inpaint <файл> --out --box ... [--sigma]`, `fill <файл> --out --box --color`, `strokes <файл> --out --box ...` |
 | `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
+| `apk_.apk_` | `entries <apk> [glob]`, `dump <apk> [подстрока] [--config default│'']`, `xml <apk> <запись>`, `pathdata <apk> <запись>`, `extract <apk> <запись> [--out-dir --png]` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 
 Список сверяется командой — таблица устаревает быстрее кода:
@@ -254,7 +260,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_` |
 | Утилиты | `project_`, `datetime_`, `json_`, `async_`, `thread_` |
-| Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `translator`, `flux_schnell`, `microphone` |
+| Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `apk_` (разбор APK на машине), `translator`, `flux_schnell`, `microphone` |
 
 Назначение каждого — `docs/py_modules.md`, §3; актуальный список — всегда `ls`, а не эта
 таблица.

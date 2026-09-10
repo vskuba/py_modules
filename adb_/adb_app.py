@@ -7,13 +7,18 @@
 поверх нашего от нашего же.
 
 Имя пакета — единственное надёжное имя приложения: заголовок на экране
-переводится, меняется от версии и повторяется у разных программ.
+переводится, меняется от версии и повторяется у разных программ. Установленное
+приложение можно и снять с устройства целиком (`adb_app_pull_apk`) — дальше его
+разбирает `apk_.apk_`, не подключая телефона.
 """
 import argparse
+import os
 import re
+import shlex
 import time
 
 from adb_.adb_ import adb_run
+from adb_.adb_file import adb_file_pull
 
 # Ожидание приложения на переднем плане: холодный старт тяжёлого приложения —
 # это секунды, а опрашивать чаще, чем идёт `dumpsys`, бессмысленно.
@@ -192,8 +197,6 @@ def adb_app_install(apk: str, serial: str = '', downgrade: bool = False,
         ValueError: файла нет на машине.
         RuntimeError: установка отклонена — в тексте подсказка, что делать.
     """
-    import os
-
     if not os.path.exists(apk):
         raise ValueError(f"APK {apk} на машине не найден")
     args = ['install', '-r', '-t'] + (['-d'] if downgrade else []) + [apk]
@@ -208,6 +211,41 @@ def adb_app_install(apk: str, serial: str = '', downgrade: bool = False,
     if why:
         raise RuntimeError(f'установка {os.path.basename(apk)}: {why}')
     return out
+
+
+def adb_app_pull_apk(package: str, out_dir: str = '/tmp/apk', serial: str = '') -> list:
+    """
+    Снять APK установленного приложения с устройства на машину.
+
+    `pm path` перечисляет все файлы пакета: современное приложение приходит
+    base.apk-ом с хвостом `split_config.*.apk`, и ресурсы — иконки, drawable
+    плотности экрана — лежат не в base, а в сплитах. Поэтому снимают весь
+    набор, а не первый файл: осмотр «как оригинал собран» по одному base
+    оставляет дыры, которые выглядят как «ресурса нет».
+
+    Args:
+        package: имя пакета.
+        out_dir: каталог на машине, создаётся.
+        serial: устройство; пусто — единственное подключённое.
+
+    Returns:
+        Пути снятых APK на хосте; base.apk первым, сплиты за ним.
+
+    Raises:
+        RuntimeError: пакета на устройстве нет или передача не удалась.
+    """
+    # `pm path` несуществующего пакета выходит с ненулевым кодом, и adb_run
+    # бросился бы ошибкой без текста (причину pm пишет не в stdout). Гасим код
+    # хвостовым `true`, чтобы пустой ответ стал штатным путём к внятной ошибке.
+    out = adb_run('shell', f'pm path {shlex.quote(package)} || true', serial=serial)
+    remote = [line.partition(':')[2].strip() for line in out.splitlines()]
+    remote = [p for p in remote if p.endswith('.apk')]
+    if not remote:
+        raise RuntimeError(f'пакет «{package}» на устройстве не найден (pm path пуст)')
+    # Сплиты называются split_*; сортировка ставит главный APK ответа первым.
+    remote.sort(key=lambda p: (os.path.basename(p) != 'base.apk', p))
+    return [adb_file_pull(p, out_dir, serial=serial, timeout=ADB_APP_INSTALL_TIMEOUT)
+            for p in remote]
 
 
 def _component_parse(line: str) -> dict:
@@ -262,10 +300,12 @@ def _install_error(out: str) -> str:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Приложения устройства: текущее, список, запуск, остановка, версия, установка.',
-        epilog='list --query telegram | start com.example | install app-debug.apk [-d]')
+        description='Приложения устройства: текущее, список, запуск, остановка, '
+                    'версия, установка, снятие APK.',
+        epilog='list --query telegram | start com.example | install app-debug.apk [-d] | '
+               'pull-apk ua.gov.diia.app --out /tmp/apk')
     parser.add_argument('command', choices=['current', 'list', 'start', 'stop', 'version', 'wait',
-                                            'install'])
+                                            'install', 'pull-apk'])
     parser.add_argument('package', nargs='?', default='', help='имя пакета (путь к APK для install)')
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
     parser.add_argument('--activity', default='', help='активность для start')
@@ -273,6 +313,7 @@ if __name__ == '__main__':
     parser.add_argument('--system', action='store_true', help='включить системные пакеты в list')
     parser.add_argument('--downgrade', action='store_true',
                         help='разрешить понижение версии (install -d)')
+    parser.add_argument('--out', default='/tmp/apk', help='каталог для pull-apk')
     ns = parser.parse_args()
 
     try:
@@ -289,6 +330,8 @@ if __name__ == '__main__':
             print('{package} / {activity}'.format(**adb_app_wait(ns.package, serial=ns.serial)))
         elif ns.command == 'install':
             print(adb_app_install(ns.package, serial=ns.serial, downgrade=ns.downgrade))
+        elif ns.command == 'pull-apk':
+            print('\n'.join(adb_app_pull_apk(ns.package, ns.out, serial=ns.serial)))
         else:
             print('{package} {version} ({code}), обновлено {updated}'.format(
                 **adb_app_version(ns.package, serial=ns.serial)))

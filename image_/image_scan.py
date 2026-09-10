@@ -99,7 +99,8 @@ def image_scan_runs(path, axis='y', pos=None, tone='white',
             'runs': runs, 'count': len(runs)}
 
 
-def image_scan_bbox(path, tone='chroma', tol=IMAGE_SCAN_TOL, rect=None) -> dict:
+def image_scan_bbox(path, tone='chroma', tol=IMAGE_SCAN_TOL, rect=None,
+                    alpha_thresh=0) -> dict:
     """
     Габарит пикселей заданного тона по всему кадру (или по окну `rect`).
 
@@ -110,28 +111,50 @@ def image_scan_bbox(path, tone='chroma', tol=IMAGE_SCAN_TOL, rect=None) -> dict:
     что находится именно содержимое, а не тонкая вариация подложки. Окном
     отсекают цветные оверлеи интерфейса (кнопки, баннеры).
 
+    Конвертация в RGB, которую делает эта функция, оставляет под полностью
+    прозрачными пикселями их погребённый RGB: тон 'black' на RGBA-иконке
+    считает чёрными и невидимые прозрачные углы. Для иконок и вырезок зовут с
+    `alpha_thresh` — маска тона скрещивается с альфой. Порог берут серединой
+    (128): антиалиасинг даёт краям дробную альфу, и без порога AA-ореол
+    раздувает габарит на процент — ровно на тот, на котором сверяют иконку.
+
     Args:
         path: картинка.
         tone: 'white' | 'black' | 'chroma' | '#rrggbb' (см. `_tone_mask`).
         tol: допуск по каналу, 0-255.
         rect: (x0, y0, x1, y1) — зона поиска в координатах кадра.
+        alpha_thresh: 0 — альфу не смотреть (прежнее поведение); 1-255 —
+            считать тональными только пиксели с альфой строго выше порога.
 
     Returns:
-        {'file', 'tone', 'box': (x0, y0, x1, y1)|None, 'count'}; концы
-        включительно; box None, если пикселей тона нет вовсе.
+        {'file', 'tone', 'box': (x0, y0, x1, y1)|None, 'count',
+         'share_w', 'share_h'}; концы включительно; box None, если пикселей
+        тона нет вовсе; share — доля габарита по ширине и высоте канвы (0 без
+        box): им проверяют иконку — «плашка 0.79 канвы».
     """
-    img = np.asarray(Image.open(path).convert('RGB'), dtype=np.int32)
+    pil = Image.open(path)
+    solid = None
+    if alpha_thresh:
+        rgba = np.asarray(pil.convert('RGBA'), dtype=np.int32)
+        img = rgba[..., :3]
+        solid = rgba[..., 3] > int(alpha_thresh)
+    else:
+        img = np.asarray(pil.convert('RGB'), dtype=np.int32)
     h, w = img.shape[:2]
     x0, y0, x1, y1 = (int(v) for v in rect) if rect else (0, 0, w, h)
     x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, w), min(y1, h)
     mask = _tone_mask(img[y0:y1, x0:x1], tone, tol)
+    if solid is not None:
+        mask &= solid[y0:y1, x0:x1]
     ys, xs = np.nonzero(mask)
     if ys.size == 0:
-        return {'file': path, 'tone': tone, 'box': None, 'count': 0}
-    return {'file': path, 'tone': tone,
-            'box': (x0 + int(xs.min()), y0 + int(ys.min()),
-                    x0 + int(xs.max()), y0 + int(ys.max())),
-            'count': int(ys.size)}
+        return {'file': path, 'tone': tone, 'box': None, 'count': 0,
+                'share_w': 0.0, 'share_h': 0.0}
+    box = (x0 + int(xs.min()), y0 + int(ys.min()),
+           x0 + int(xs.max()), y0 + int(ys.max()))
+    return {'file': path, 'tone': tone, 'box': box, 'count': int(ys.size),
+            'share_w': round((box[2] - box[0] + 1) / w, 4),
+            'share_h': round((box[3] - box[1] + 1) / h, 4)}
 
 
 def image_scan_rows(path, rect=None, thresh=IMAGE_SCAN_THRESH,
@@ -426,6 +449,9 @@ if __name__ == '__main__':
     ap.add_argument('--min', type=int, default=IMAGE_SCAN_MIN_RUN, help='runs')
     ap.add_argument('--rect', help='x0,y0,x1,y1 зона поиска')
     ap.add_argument('--thresh', type=int, default=IMAGE_SCAN_THRESH)
+    ap.add_argument('--alpha-thresh', type=int, default=0,
+                    help='bbox: учитывать только пиксели с альфой выше порога '
+                         '(128 — для RGBA-иконок)')
     ap.add_argument('--window', action='append', metavar='ИМЯ=x0,y0,x1,y1',
                     help='окно для windows/diff, повторять по числу точек')
     ap.add_argument('--offset', default='auto',
@@ -444,13 +470,14 @@ if __name__ == '__main__':
         elif ns.command == 'bbox':
             tol = ns.tol if ns.tol is not None else IMAGE_SCAN_TOL
             r = image_scan_bbox(ns.path[0], tone=ns.tone or 'chroma',
-                                tol=tol, rect=rect)
+                                tol=tol, rect=rect, alpha_thresh=ns.alpha_thresh)
             if r['box'] is None:
                 print(f"тон {r['tone']}: чисто, пикселей 0")
             else:
                 x0, y0, x1, y1 = r['box']
                 print(f"габарит {x0},{y0} — {x1},{y1} "
-                      f"(тон {r['tone']}, пикселей {r['count']})")
+                      f"(тон {r['tone']}, пикселей {r['count']}, доля канвы "
+                      f"ш {r['share_w']:.3f} в {r['share_h']:.3f})")
         elif ns.command == 'rows':
             r = image_scan_rows(ns.path[0], rect=rect, thresh=ns.thresh)
             print(f"строк {len(r['rows'])}, шаг {r['pitch']}")

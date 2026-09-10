@@ -104,6 +104,7 @@ com.example.app
 | `adb_app_stop(package, serial='')` | `force-stop`: данные на месте, теряется несохранённое |
 | `adb_app_version(package, serial='') -> dict` | версия и даты установки/обновления |
 | `adb_app_install(apk, serial='', downgrade=False, timeout=120) -> str` | поставить APK; провал расшифрован в подсказку (понижение — `downgrade=True`, чужая подпись — снять пакет, отмена — ставьте без пальца пользователя рядом) |
+| `adb_app_pull_apk(package, out_dir='/tmp/apk', serial='') -> list` | стянуть APK приложения на машину: `pm path` + pull base и split-ов (base первым); пакета нет — `RuntimeError` |
 
 `adb_app_current()` отвечает на вопрос «нужный экран вообще открылся?» без снимка и без
 модели. Ни зрение, ни карта на него не отвечают: они видят, что нарисовано, но не
@@ -111,6 +112,14 @@ com.example.app
 
 Имя пакета — **единственное надёжное имя приложения**: заголовок на экране переводится,
 меняется от версии и повторяется у разных программ.
+
+`adb_app_pull_apk` — мостик к разбору чужого APK на машине: устанавливаемое
+приложение часто есть только на устройстве (Play-маркет руками не распаковываешь),
+а смотреть содержимое удобнее не на телефоне. Ставится на то, что у приложения
+бывают **split-пакеты** (`config.arm64_v8a.apk` и подобные): ресурсы и код лежат
+не только в `base.apk`, поэтому `pm path` отдают список целиком и тянут все
+файлы, а голый `base.apk` с половины приложений даёт неполную картину. Дальше —
+`apk_inspect.md`: бинарный XML и таблицы ресурсов читаются с машины.
 
 ## 5. Журнал — `adb_/adb_log.py`
 
@@ -165,6 +174,7 @@ python -m adb_.adb_input tap-on <надпись>
 python -m adb_.adb_input scroll down
 python -m adb_.adb_app current
 python -m adb_.adb_app list --query <часть имени>
+python -m adb_.adb_app pull-apk <пакет> --out /tmp/apk   # base и сплиты на машину
 python -m adb_.adb_log crash
 ```
 
