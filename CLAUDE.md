@@ -60,6 +60,8 @@ namespace-папок, которые проекты импортируют на�
 | `image_/image_frames.py` | `docs/image_frames.md` — дельта скролла, полотно, drift, сдвиг и скорость полосы |
 | `image_/image_layout.py` | `docs/image_layout.md` — геометрия блоков, точки-индикаторы, SDF-вырез |
 | `image_/image_svg.py` | `docs/image_svg.md` — SVG в растр точного размера, суперсэмплинг, `magick`/`convert` |
+| `image_/image_tone.py` | `docs/image_tone.md` — построчный профиль оттенка (медиана `g-b` по ярким), вердикт «полоса» |
+| `image_/image_pair.py` | `docs/image_pair.md` — построчная сверка пары кадров (островки ручных правок), вшивка полосы без перегенерации |
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
@@ -189,6 +191,8 @@ CLI есть у модулей, которыми пользуются «рука
 | `image_.image_svg` | `<svg> [-o out] [--size 512 --supersample 3]` |
 | `image_.image_fix` | `erase <файл> --out --box ...`, `inpaint <файл> --out --box ... [--sigma]`, `fill <файл> --out --box --color`, `strokes <файл> --out --box ...` |
 | `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
+| `image_.image_tone` | `rows <файл> [--rect --chan --min-luma --step]`, `band <файл> [... --min-jump]` |
+| `image_.image_pair` | `diff-rows <a> <b> [--thresh --axis --rect]`, `splice <base> <patch> --out --pos [--axis --quality --method]` |
 | `apk_.apk_` | `entries <apk> [glob]`, `dump <apk> [подстрока] [--config default│'']`, `xml <apk> <запись>`, `pathdata <apk> <запись>`, `extract <apk> <запись> [--out-dir --png]` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 
