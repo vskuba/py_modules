@@ -116,6 +116,7 @@ assert a is b, 'модуль загружен дважды — разное со
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
 | `adb_` | андроид-устройство через adb. Смотреть — `adb_.adb_`: `adb_devices`, `adb_capture` (снимок сразу RGB-JPEG), `adb_screen_size`, `adb_screen_describe`, см. `mobile_device.md`. Управлять — `adb_ui` (карта экрана с координатами), `adb_input` (нажатия, жесты, ввод), `adb_app` (что открыто, запуск), `adb_log` (журнал и падения), см. `mobile_control.md`. У каждого модуля свой CLI: `python -m adb_.adb_ui map` |
+| `browser_` | **сервис целиком, а не набор функций**: Chromium с сессиями-контекстами (`browser_pool`), его HTTP-ручки одним роутером (`browser_router`), живое окно, запись действий, инспектор. Сценарии — `browser_scenario*`, вопросы к странице — `browser_read` / `browser_capture` / `browser_watch` / `browser_console` / `browser_cookie` / `browser_file` / `browser_wait`. Проект подключает поднятие пула и роутер, см. `browser_control.md`, `browser_scenario.md`, `browser_page.md`. Разовое действие руками — `python -m browser_.browser_ read <url>` |
 
 ### Документация
 
