@@ -53,6 +53,9 @@ namespace-папок, которые проекты импортируют на�
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) |
+| `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
+| `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
+| `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
 | `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
 | `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона, проверка шва (поиск спокойной полосы, стороны прямоугольника), сравнение пары кадров, ведомость цветов разметки |
 | `image_/image_scan.py` | `docs/image_scan.md` — полосы тона по разрезу, строки и шаг, габарит глифов |
@@ -182,6 +185,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_rec` | `record [out] [--seconds N --during «shell» --serial S]`, `frames [mp4] [--times 0.5,1.2 │ --fps 2 --out-dir DIR]`, `sheet [mp4] [--out --fps --cols --width]`, `compare <a> <b> --times 0.3,1.4 [--labels A,B --cell-width --out]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
+| `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
@@ -300,6 +304,24 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 `AbstractAiFrameworkManager`, `AiFrameworkModel`. Конкретный движок сценариев знает таблицы и
 шаги проекта и живёт в проекте, наследуясь отсюда. Та же граница у
 `mysql_/repository/abstract_repository.py`: базовый CRUD здесь, `table_name_get()` — в проекте.
+
+### `browser_/` — сервис целиком, а не набор функций
+
+Единственный пакет здесь, который проект не «зовёт», а **поднимает**: Chromium живёт в
+своём процессе, сессия — это `BrowserContext`, реестр лежит в памяти. Проекту остаётся
+точка входа (`browser_pool_start` в lifespan) и один роутер (`browser_router`).
+
+Отсюда два следствия, которых нет у остальных пакетов:
+
+- **правка здесь требует рестарта браузерного сервиса и убивает все его сессии** — код
+  живёт дольше, чем страницы, которые на нём открыты;
+- **новая ручка появляется сразу у всех проектов**, потому что состав роутера — дело
+  этого пакета, а не их точек входа.
+
+Схема шагов сценария (`browser_scenario.py`) не тянет ни Playwright, ни базу намеренно:
+её читают обе стороны — тот, кто шаги выполняет, и тот, кто их хранит и проверяет при
+сохранении. Правила — `docs/browser_control.md`, `docs/browser_scenario.md`,
+`docs/browser_page.md`.
 
 ### Разовое действие в проекте
 
