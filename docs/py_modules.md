@@ -66,7 +66,7 @@ assert a is b, 'модуль загружен дважды — разное со
 
 | Модуль | Что даёт |
 |--------|----------|
-| `mysql_` | `mysql_get_db_async` (контекст-менеджер соединения), пул (`mysql_pool_get`/`mysql_pool_close`), `AbstractRepository` — база для репозиториев проекта, дамп и восстановление (`backup_engine`), выгрузка таблиц в SQL (`sql_export`), прогон миграций (`mysql_migration_up`); разовый запрос мимо приложения — `mysql_host_address` (рабочий адрес: изнутри сети контейнеров и снаружи он разный) и `mysql_query_run` с CLI, см. `project_runtime.md` |
+| `mysql_` | `mysql_get_db_async` (контекст-менеджер соединения), пул (`mysql_pool_get`/`mysql_pool_close`), `AbstractRepository` — база для репозиториев проекта, дамп и восстановление (`backup_engine`), выгрузка таблиц в SQL (`sql_export`), прогон миграций (`mysql_migration_up`), стартовые данные на пустую базу (`mysql_seed_up` — применяет последний seed-файл; чем проверять пустоту, знает проект и передаёт `probe_table`); разовый запрос мимо приложения — `mysql_host_address` (рабочий адрес: изнутри сети контейнеров и снаружи он разный) и `mysql_query_run` с CLI, см. `project_runtime.md`. **Три пути доставки SQL и три разных вопроса:** миграции двигают схему и помнят применённое, бэкап переносит состояние целиком, seed кладёт стартовые справочники один раз |
 | `qdrant_` | векторное хранилище: `qdrant_save`, `qdrant_search`, `qdrant_remove_by` |
 | `redis_`, `redis_queue` | соединение с Redis и очередь поверх него |
 | `sqllite3` | локальная короткая память LLM: `sqllite3_llm_short_memory_*` |
@@ -113,6 +113,7 @@ assert a is b, 'модуль загружен дважды — разное со
 
 | Модуль | Что даёт |
 |--------|----------|
+| `cronicle_` | планировщик Cronicle со стороны диска: `cronicle_log_prune` сносит архивы суточной ротации старше N суток (сам Cronicle их не удаляет никогда — набегают сотни файлов), `cronicle_log_sizes` и `cronicle_log_report` показывают обе кучи. Историю прогонов не трогает: её чистит сам Cronicle по `job_data_expire_days`, и её размер в отчёте — единственный способ увидеть, доехала ли эта настройка. Каталог приходит параметром |
 | `translator` | `translate_text` |
 | `flux_schnell` | `add_text_to_image` — генерация изображений |
 | `microphone` | захват звука |
