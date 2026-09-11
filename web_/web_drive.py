@@ -44,6 +44,18 @@ WEB_DRIVE_TIMEOUT = 15.0
 WEB_DRIVE_PORT_TRIES = 80
 WEB_DRIVE_PORT_STEP = 0.25
 
+# Сколько ждать, пока запрошенная страница станет текущим документом.
+#
+# ⚠ **Ждать обязательно, и вот почему.** Chrome открывает вкладку на `about:blank`
+# и только потом идёт по адресу. `/json/list` при этом уже показывает **целевой**
+# URL — цель находится, сокет открывается, — а `Runtime.evaluate` попадает ещё в
+# контекст `about:blank`. У него опорного адреса нет, и относительный
+# `fetch('/auth/login')` падает «Failed to parse URL», а `location.href` отвечает
+# `about:blank`. На локальном файле этого не видно: раздача с той же машины
+# успевает за миллисекунды, а живой сайт с редиректом — нет.
+WEB_DRIVE_LOAD_SEC = 20.0
+WEB_DRIVE_LOAD_STEP = 0.2
+
 # Обёртка пользовательского JS: код — тело async-функции; результат — return
 # или вызов done(value). Токены подставляются replace'ом: в JS встречается и
 # %, и {}, форматирование строкой тут небезопасно.
@@ -120,6 +132,7 @@ def _drive(browser, url, script, wait_ms, storage, shot, size) -> dict:
             console: list = []
             _cdp(sock, 1, 'Runtime.enable', {}, console)
             _cdp(sock, 2, 'Log.enable', {}, console)
+            _wait_document(sock, url, console)
             js = _WEB_DRIVE_WRAPPER.replace('__USER__', script)
             js = js.replace('__WAIT__', str(int(wait_ms)))
             answer = _cdp(sock, 3, 'Runtime.evaluate',
@@ -148,6 +161,32 @@ def _drive(browser, url, script, wait_ms, storage, shot, size) -> dict:
     finally:
         _terminate(proc)
         shutil.rmtree(profile, ignore_errors=True)
+
+
+def _wait_document(sock, url: str, console: list) -> None:
+    """Ждёт, пока запрошенная страница станет текущим документом вкладки.
+
+    Chrome открывает вкладку на `about:blank`, и до перехода скрипт выполняется
+    там: относительные адреса не разрешаются, `localStorage` принадлежит чужому
+    origin, а снимок вышел бы белым. Проверяем **документ**, а не список целей:
+    `/json/list` показывает целевой URL раньше, чем тот стал текущим.
+
+    Не дождались — не падаем: страница могла и правда остаться пустой (сайт
+    ответил 204, файл не нашёлся). Пусть об этом скажет сам скрипт — его ошибка
+    объяснит причину лучше, чем таймаут отсюда.
+    """
+    deadline = time.monotonic() + WEB_DRIVE_LOAD_SEC
+    while time.monotonic() < deadline:
+        got = _cdp(sock, 90, 'Runtime.evaluate',
+                   {'expression': 'location.href + "|" + document.readyState',
+                    'returnByValue': True}, console)
+        where, _, state = str(got.get('result', {}).get('value') or '').rpartition('|')
+        # ⚠ Сверяем по хвосту адреса, а не целиком: сервер вправе увести
+        # редиректом (`/admin` → `/login?next=…`), и это законная загрузка.
+        if where and not where.startswith('about:') and state in ('interactive', 'complete'):
+            return
+
+        time.sleep(WEB_DRIVE_LOAD_STEP)
 
 
 def _wait_port(profile: str) -> int:
