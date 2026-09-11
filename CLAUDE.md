@@ -63,7 +63,8 @@ namespace-папок, которые проекты импортируют на�
 | `image_/image_frames.py` | `docs/image_frames.md` — дельта скролла, полотно, drift, сдвиг и скорость полосы |
 | `image_/image_layout.py` | `docs/image_layout.md` — геометрия блоков, точки-индикаторы, SDF-вырез |
 | `image_/image_svg.py` | `docs/image_svg.md` — SVG в растр точного размера, суперсэмплинг, `magick`/`convert` |
-| `image_/image_tone.py` | `docs/image_tone.md` — построчный профиль оттенка (медиана `g-b` по ярким), вердикт «полоса» |
+| `image_/image_tone.py` | `docs/image_tone.md` — построчный профиль оттенка (медиана `g-b` по ярким), вердикт «полоса», дельта карточки одной строкой и стеклянный контракт `delta = a·(F − bg)` |
+| `image_/image_glass.py` | `docs/image_glass.md` — стеклянная плитка: прозрачный webp с полупрозрачной пластиной, кольцевой кромкой и глифами из дампа; lossless+exact |
 | `image_/image_pair.py` | `docs/image_pair.md` — построчная сверка пары кадров (островки ручных правок), вшивка полосы без перегенерации |
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |

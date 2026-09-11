@@ -3,7 +3,9 @@
 > Тон плывёт по кадру ступенькой или плавно? `image_tone_rows` считает по
 > каждой строке медиану разности каналов по ярким пикселям, `image_tone_band`
 > отвечает одним числом: где ступенька и какая. Моды и средние по окну полосу
-> мажут — здесь профиль построчный.
+> мажут — здесь профиль построчный. На градиентной странице дельта берут
+> одной строкой (`image_tone_row_delta`), а полупрозрачность стекла решают
+> контрактом `delta = a·(F − bg)` (`image_tone_glass_*`).
 
 ## 1. Интерфейс
 
@@ -14,6 +16,17 @@ image_tone_rows(path, rect=None, chan='g-b', min_luma=150, step=7)
 image_tone_band(path, rect=None, chan='g-b', min_luma=150, step=7, min_jump=6)
 # -> {'band': bool, 'band_y': первая строка нового тона, 'jump': со знаком,
 #     'before', 'after', 'max_jump'}
+
+image_tone_row_delta(path, y, bg, card, height=1)
+# -> {'file', 'y', 'height', 'bg', 'card', 'bg_rgb', 'card_rgb', 'delta'}
+
+image_tone_edge(path, y, x, w=3, probe=None, height=1)
+# -> {'file', 'y', 'x', 'w', 'before_rgb', 'edge_rgb', 'after_rgb', 'delta'}
+
+image_tone_glass_contract(bg, fill, alpha)     # -> {'alpha_share', 'delta'}
+image_tone_glass_solve(bg, delta, alpha)       # -> {'fill', 'clipped', 'delta_check'}
+image_tone_glass_verify(path, y, bg, card, fill, alpha, tol=1.0, height=1)
+# -> {'measured', 'expected', 'residual', 'ok'}
 ```
 
 `chan` — разность каналов: `g-b` (жёлтизна/синьва), `r-b`, `r-g`. В медиану
@@ -23,7 +36,41 @@ image_tone_band(path, rect=None, chan='g-b', min_luma=150, step=7, min_jump=6)
 ```bash
 python -m image_.image_tone band slide.webp --rect 120,1550,970,1616 --min-luma 90
 python -m image_.image_tone rows a.webp --rect 120,1620,970,1980   # профиль для сверки
+python -m image_.image_tone delta shot.png --y 942 --bg 60,84 --card 120,160
+python -m image_.image_tone edge shot.png --y 942 --x 86 --w 3 --probe 120,160
+python -m image_.image_tone glass --bg 190,190,190 --fill 190,218,190,69      # контракт
+python -m image_.image_tone glass --bg 190,190,190 --fill 0,0,0,12 --delta=-7,-7,-7  # решить обратную
+python -m image_.image_tone glass shot.png --y 942 --bg 60,84 --card 120,160 --fill 190,218,190,69  # верификация
 ```
+
+## 3. Дельта одной строкой и стеклянный контракт
+
+Среднее «карточка минус фон», взятое по **разным строкам**, врёт на 5–10
+единиц: фон страницы залит вертикальным градиентом, и окна приходятся на
+разные высоты. `image_tone_row_delta` берёт фон сбоку и карточку из одной
+строки `y` (полоса `height` строк) — это единственная честная метрика
+стеклянной карточки на градиентной странице. `image_tone_edge` тем же манером
+меряет контур: три зоны по `w` пикселей до/на/после границы `x`; с `probe`
+дельта считается против удалённой зоны поля (кромка против своей панели), без
+него — против «после».
+
+Стеклянный контракт (`image_glass.md`): полупрозрачная заливка `F` с альфой
+`alpha` (0..255, как в webp) поверх фона `bg` даёт
+`delta = (alpha/255)·(F − bg)`. Отсюда три функции:
+
+- `contract(bg, fill, alpha)` — прямая задача: какая дельта выйдет;
+- `solve(bg, delta, alpha)` — обратная: какой fill взять под меренную
+  дельту; влезает ли — скажет `clipped` (`('r','g','b')` по каналам, залезшим
+  за 0..255) и `delta_check` — фактическая дельта решённого fill;
+- `verify(path, y, bg, card, fill, alpha, tol)` — живой замер клона: `bg` и
+  `card` окна одной строки, ожидаемая дельта считается от **замеренного**
+  фона этого же снимка, `ok` — если максимум `residual` в пределах `tol`
+  (по умолчанию 1.0; ±0.5 — плотная сверка ручной работы).
+
+Калибровка альфы на живом стекле идёт лестницей: чем темнее нужен обвод при
+малой альфе, тем больше почернение — на пачке «Дії» кромка −29 вышла при
+α=70, −21 при α=40 и −7.2 при α=12 (2 px), и выбор α — это ещё и компромисс
+с читаемостью глифов под ней.
 
 ## 2. Полоса — это ступенька; дрейф меряют профилем
 

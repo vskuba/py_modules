@@ -29,6 +29,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from adb_.adb_ import adb_run, adb_run_bytes, adb_screen_size
+from adb_.adb_app import adb_app_start, adb_app_stop, adb_app_wait
 from adb_.adb_ui import adb_ui_nodes
 from adb_.adb_ws import adb_ws_open, adb_ws_recv, adb_ws_send
 
@@ -59,6 +60,13 @@ ADB_CDP_WAIT_POLL = 0.3
 # но шрифты и фоновые картинки дорисовываются ещё мгновение.
 ADB_CDP_SETTLE = 0.7
 
+# Ожидание живого DevTools после перезапуска, секунды, и шаг опроса. Сокет
+# оживает с новым pid, и первый /json/list на молодом процессе часто
+# отказывается в соединении — отсюда повторы connect, а не однократное долгое
+# ожидание. Шаг в секунду: сокет либо есть, либо нет, чаще незачем.
+ADB_CDP_RESTART_TIMEOUT = 30.0
+ADB_CDP_RESTART_POLL = 1.0
+
 
 def adb_cdp_connect(package: str, serial: str = '', port: int = ADB_CDP_PORT) -> dict:
     """
@@ -88,6 +96,51 @@ def adb_cdp_connect(package: str, serial: str = '', port: int = ADB_CDP_PORT) ->
             f'DevTools {package} (pid {pid}) не отвечает: отладка WebView бывает только '
             f'в debuggable-сборке; {err}') from err
     return {'pid': pid, 'port': port, 'pages': pages}
+
+
+def adb_cdp_restart(package: str, serial: str = '', activity: str = '',
+                    port: int = ADB_CDP_PORT,
+                    timeout: float = ADB_CDP_RESTART_TIMEOUT) -> dict:
+    """
+    Перезапустить приложение и дождаться живого DevTools — весь ритуал разом.
+
+    Нужен после переустановки APK или `pm clear`: HTTP-кэш WebView `install -r`
+    не сбрасывает (старый webp переживает обновление, и тон замеры сверяют не
+    те байты), а `pm clear` приложение умерщвляет и поднимает сокет с новым
+    pid. Однократный `adb_cdp_connect` в этот момент обычно отказывается —
+    процесс молод, и «DevTools не отвечает» с первой попытки ничего не значит.
+    Потому: stop → start → ожидание переднего плана → connect с повторами до
+    ответа сокета; forward переповешивается на каждой попытке (висячий forward
+    на старый pid — типовая грабля).
+
+    Args:
+        package: пакет приложения.
+        serial: устройство; пусто — единственное подключённое.
+        activity: запускаемая активность; пусто — по умолчанию системы.
+        port: локальный порт DevTools.
+        timeout: сколько секунд после старта ждать ответа сокета.
+
+    Returns:
+        Как `adb_cdp_connect`: {'pid', 'port', 'pages'} уже живого процесса.
+
+    Raises:
+        RuntimeError: приложение не поднялось или DevTools не ответил за
+            `timeout`. TimeoutError: передний план не дождался (`adb_app_wait`).
+    """
+    adb_app_stop(package, serial=serial)
+    adb_app_start(package, serial=serial, activity=activity)
+    adb_app_wait(package, serial=serial)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return adb_cdp_connect(package, serial=serial, port=port)
+        except RuntimeError as err:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f'DevTools {package} не отозвался за {timeout} с после перезапуска: '
+                    f'{err} — проверь debuggable-сборку; если только что был pm clear, '
+                    f'страницы поднимаются медленнее обычного') from err
+            time.sleep(ADB_CDP_RESTART_POLL)
 
 
 def adb_cdp_pages(port: int = ADB_CDP_PORT) -> list[dict]:
@@ -779,24 +832,27 @@ def _cli_out(value, as_json: bool) -> str:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='DevTools внутри WebView: читать и двигать страницы приложения.',
-        epilog="connect com.example.app | pages | eval 'location.href' | "
+        epilog="connect com.example.app | restart com.example.app | pages | eval 'location.href' | "
                "waitfor 'window.ready' | "
                "navigate https://localhost/menu.html --waitfor 'document.title' | "
                "capture com.example.app shots/ https://localhost/a.html https://localhost/b.html | "
                "element 540 300 | element-rect .card-cover | element-shot .card-cover shots/cover.png | "
                "target reserve | viewport | tap '#download' | "
                "storage diaData='{\"name\":\"СКУБА\"}' --reload")
-    parser.add_argument('command', choices=['connect', 'pages', 'target', 'eval', 'navigate',
+    parser.add_argument('command', choices=['connect', 'restart', 'pages', 'target', 'eval',
+                                            'navigate',
                                             'waitfor', 'capture', 'element', 'element-rect',
                                             'element-shot', 'viewport', 'tap', 'storage'])
     parser.add_argument('args', nargs='*', help='пакет / JS / адрес / снимки / координаты')
     parser.add_argument('--serial', default='', help='устройство для connect и снимков')
+    parser.add_argument('--activity', default='', help='активность для restart')
     parser.add_argument('--port', type=int, default=ADB_CDP_PORT, help='локальный порт DevTools')
     parser.add_argument('--url-part', default='', help='часть адреса целевой страницы')
     parser.add_argument('--settle', type=float, default=ADB_CDP_SETTLE,
                         help='пауза после загрузки перед кадром, capture')
     parser.add_argument('--timeout', type=float, default=0.0,
-                        help='секунды ожидания (navigate, waitfor); 0 — значение по умолчанию команды')
+                        help='секунды ожидания (navigate, waitfor, restart); '
+                             '0 — значение по умолчанию команды')
     parser.add_argument('--waitfor', default='',
                         help='для navigate: JS-условие, которого дождаться после смены адреса')
     parser.add_argument('--json', action='store_true',
@@ -808,6 +864,10 @@ if __name__ == '__main__':
     try:
         if ns.command == 'connect':
             print(adb_cdp_connect(ns.args[0], serial=ns.serial, port=ns.port))
+        elif ns.command == 'restart':
+            print(adb_cdp_restart(ns.args[0], serial=ns.serial, activity=ns.activity,
+                                  port=ns.port,
+                                  timeout=ns.timeout or ADB_CDP_RESTART_TIMEOUT))
         elif ns.command == 'pages':
             for page in adb_cdp_pages(port=ns.port):
                 print(page['url'], '—', page['title'])

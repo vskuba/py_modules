@@ -119,6 +119,41 @@ def adb_app_stop(package: str, serial: str = '') -> None:
     adb_run('shell', 'am', 'force-stop', package, serial=serial)
 
 
+def adb_app_clear(package: str, serial: str = '', confirm: bool = False) -> str:
+    """
+    Сбросить данные приложения (`pm clear`) — безвозвратно, до состояния свежего установщика.
+
+    Нужна редко и в одном месте: HTTP-кэш WebView переживает `install -r`, и
+    после переустановки APK страница продолжает показывать старый webp — тон
+    замеры сверяют не с теми байтами, что лежат в новом пакете. `pm clear`
+    вычищает кэш вместе со всем остальным; поднимать всё потом одним
+    `adb_cdp_restart`. На телефоне пользователя — не запускать никогда: вместе
+    с кэшем стираются аккаунты, настройки и локальные данные, отката нет.
+    Поэтому вызов без `confirm=True` отказывается — промах глазами сюда не должен
+    долетать даже через CLI.
+
+    Args:
+        package: имя пакета.
+        serial: устройство; пусто — единственное подключённое.
+        confirm: подтверждение, что данных на устройстве не жалко.
+
+    Returns:
+        Вывод команды (`Success`).
+
+    Raises:
+        ValueError: без confirm=True — функция не для случайных вызовов.
+        RuntimeError: пакет не найден или сброс не удался (в выводе не Success).
+    """
+    if not confirm:
+        raise ValueError(
+            f'pm clear {package} сотрёт все данные приложения безвозвратно — '
+            'повтори вызов с confirm=True, а на телефоне пользователя не делай этого вовсе')
+    out = adb_run('shell', 'pm', 'clear', package, serial=serial)
+    if 'Success' not in out:
+        raise RuntimeError(f'pm clear {package} не вышел в Success: {out.strip()[:200]}')
+    return out
+
+
 def adb_app_wait(package: str, serial: str = '', timeout: float = ADB_APP_WAIT_TIMEOUT) -> dict:
     """
     Дождаться, пока приложение окажется на переднем плане.
@@ -303,9 +338,9 @@ if __name__ == '__main__':
         description='Приложения устройства: текущее, список, запуск, остановка, '
                     'версия, установка, снятие APK.',
         epilog='list --query telegram | start com.example | install app-debug.apk [-d] | '
-               'pull-apk ua.gov.diia.app --out /tmp/apk')
-    parser.add_argument('command', choices=['current', 'list', 'start', 'stop', 'version', 'wait',
-                                            'install', 'pull-apk'])
+               'pull-apk ua.gov.diia.app --out /tmp/apk | clear com.example --confirm')
+    parser.add_argument('command', choices=['current', 'list', 'start', 'stop', 'wait',
+                                            'version', 'install', 'pull-apk', 'clear'])
     parser.add_argument('package', nargs='?', default='', help='имя пакета (путь к APK для install)')
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
     parser.add_argument('--activity', default='', help='активность для start')
@@ -313,6 +348,8 @@ if __name__ == '__main__':
     parser.add_argument('--system', action='store_true', help='включить системные пакеты в list')
     parser.add_argument('--downgrade', action='store_true',
                         help='разрешить понижение версии (install -d)')
+    parser.add_argument('--confirm', action='store_true',
+                        help='для clear: подтверждение, что данные приложения стирать не жалко')
     parser.add_argument('--out', default='/tmp/apk', help='каталог для pull-apk')
     ns = parser.parse_args()
 
@@ -332,6 +369,8 @@ if __name__ == '__main__':
             print(adb_app_install(ns.package, serial=ns.serial, downgrade=ns.downgrade))
         elif ns.command == 'pull-apk':
             print('\n'.join(adb_app_pull_apk(ns.package, ns.out, serial=ns.serial)))
+        elif ns.command == 'clear':
+            print(adb_app_clear(ns.package, serial=ns.serial, confirm=ns.confirm).strip())
         else:
             print('{package} {version} ({code}), обновлено {updated}'.format(
                 **adb_app_version(ns.package, serial=ns.serial)))

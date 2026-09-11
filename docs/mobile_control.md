@@ -116,6 +116,7 @@ AOD); сон между действиями съедает половину с�
 | `adb_app_start(package, serial='', activity='')` | запустить (или вынести вперёд); без `activity` — стартовый экран приложения |
 | `adb_app_wait(package, serial='', timeout=20) -> dict` | дождаться приложения на переднем плане |
 | `adb_app_stop(package, serial='')` | `force-stop`: данные на месте, теряется несохранённое |
+| `adb_app_clear(package, serial='', confirm=False) -> str` | `pm clear`: стереть данные безвозвратно; без `confirm=True` — `ValueError` и ни одного вызова adb; на телефоне пользователя — никогда (стираются аккаунты и локальные данные). Нужен, чтобы сбросить HTTP-кэш WebView после переустановки APK: `install -r` кэш не трогает, страница отдаёт старый webp |
 | `adb_app_version(package, serial='') -> dict` | версия и даты установки/обновления |
 | `adb_app_install(apk, serial='', downgrade=False, timeout=120) -> str` | поставить APK; провал расшифрован в подсказку (понижение — `downgrade=True`, чужая подпись — снять пакет, отмена — ставьте без пальца пользователя рядом) |
 | `adb_app_pull_apk(package, out_dir='/tmp/apk', serial='') -> list` | стянуть APK приложения на машину: `pm path` + pull base и split-ов (base первым); пакета нет — `RuntimeError` |
@@ -189,6 +190,7 @@ python -m adb_.adb_input scroll down
 python -m adb_.adb_app current
 python -m adb_.adb_app list --query <часть имени>
 python -m adb_.adb_app pull-apk <пакет> --out /tmp/apk   # base и сплиты на машину
+python -m adb_.adb_app clear <пакет> --confirm   # pm clear; без --confirm отказывается
 python -m adb_.adb_log crash
 ```
 
@@ -215,6 +217,7 @@ python -m adb_.adb_log crash
 | Функция | Контракт |
 |---------|----------|
 | `adb_cdp_connect('package', serial='') -> dict` | pid → forward → список страниц; forward переповешивает на свежий pid при каждом вызове |
+| `adb_cdp_restart('package', serial='', activity='', timeout=30) -> dict` | весь ритуал разом: stop → start → wait → connect с повторами до ответа сокета; нужен после переустановки APK или `pm clear`, когда первый `/json/list` на молодом процессе отказывается |
 | `adb_cdp_pages() -> list` | открытые страницы: `{title, url, ws}` |
 | `adb_cdp_eval('js', url_part='') -> значение` | вычислить и вернуть значение; `returnByValue` — только данные, DOM-объекты так не вернуть |
 | `adb_cdp_navigate('url', url_part='', waitfor='') -> str` | открыть и дождаться загрузки, вернуть итоговый адрес; игла `url_part` сверяется с итоговым href, точное `href == url` — успех всегда; `waitfor` — JS-условие, которого дождаться после смены адреса |
@@ -228,12 +231,12 @@ python -m adb_.adb_log crash
 | `adb_cdp_tap(selector, url_part='', serial='') -> tuple` | тап по центру элемента, возвращает экранные пиксели; доставка через CDP Input, см. ниже |
 | `adb_cdp_storage(items, url_part='', reload=False) -> dict` | залить `{ключ: значение}` в localStorage страницы и прочитать обратно: `{seeded, values}`; значения кладутся как `JSON.stringify` (контракт шины — читают `JSON.parse`), `reload` перезагружает страницу после записи; строка-значения, похожая на готовый JSON, отклоняется `ValueError` до страницы — иначе закодировалась бы дважды |
 
-CLI: `python -m adb_.adb_cdp connect com.example.app | pages | target reserve | eval 'location.href' |
+CLI: `python -m adb_.adb_cdp connect com.example.app | restart com.example.app | pages | target reserve | eval 'location.href' |
 waitfor 'window.ready' | navigate https://localhost/menu.html --waitfor 'document.title' |
 capture com.example.app shots/ <url...> | element 540 300 | element-rect .tab |
 element-shot .tab shots/ | viewport | tap <селектор> | storage diaData='{"name":"СКУБА"}' --reload`.
 Флаги: `--url-part` (цель), `--timeout`
-(navigate/waitfor), `--json` — вывести значение как JSON (`true`/`null`, а не Python-`True`/`None`:
+(navigate/waitfor/restart), `--json` — вывести значение как JSON (`true`/`null`, а не Python-`True`/`None`:
 вывод едят `jq` и скрипты, без флага идёт читаемый repr).
 Транспорт — `adb_ws` (WebSocket на stdlib): фрагментация длинных ответов и
 ping/pong уже учтены в нём.
@@ -391,3 +394,8 @@ CLI: `python -m adb_.adb_doc save --dir Download`.
     цикла печати это оффскрин-страница printing-WebView; `eval` на ней отрабатывает
     по чужому DOM («null.classList» там, где элемент есть). Многостраничное
     приложение — всегда с адресной оговоркой.
+16. **`install -r` не сбрасывает HTTP-кэш WebView** — переустановленный APK
+    открывается со старым webp внутри: тон замеры сверяют не с теми байтами, что
+    в пакете. Лечится `adb_app_clear` (только эмулятор, `confirm=True`), после
+    которого приложение поднимается разом `adb_cdp_restart`; на телефоне
+    пользователя данных не стирают никогда.
