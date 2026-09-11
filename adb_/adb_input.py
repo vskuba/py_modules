@@ -10,6 +10,7 @@
 устройстве.
 """
 import argparse
+import time
 
 from adb_.adb_ import adb_run, adb_screen_size
 from adb_.adb_ui import ADB_UI_WAIT_TIMEOUT, adb_ui_wait
@@ -157,6 +158,128 @@ def adb_input_wake(serial: str = '') -> None:
     adb_input_key('WAKEUP', serial=serial)
 
 
+def adb_input_stayon(on: bool = True, serial: str = '') -> None:
+    """
+    Держать ли экран включённым, пока устройство на зарядке (`svc power stayon`).
+
+    Для серий и замеров: без этого экран между действиями уходит в сон, и
+    половина серии снимает блокировку. По окончании — `on=False`: телефон с
+    вечно горящим экраном разряжается и греется сам, а вместе с этим и
+    доверие к замерам.
+
+    Args:
+        on: True — не гасить на зарядке, False — штатный таймер (вернуть).
+        serial: устройство; пусто — единственное подключённое.
+    """
+    adb_run('shell', 'svc', 'power', 'stayon', 'true' if on else 'false',
+            serial=serial)
+
+
+def adb_input_wake_full(unlock: bool = True, home: bool = True,
+                        stayon: bool = True, tries: int = 5,
+                        serial: str = '') -> dict:
+    """
+    Полный ритуал пробуждения: экран → замок → шторка → домашний экран, с
+    проверкой фокуса. `adb_input_wake` будит только экран; этот доводит до
+    состояния «можно жать и снимать» на HyperOS/MIUI, где ритуал руками
+    повторяется по три раза за сессию.
+
+    Три каприза HyperOS, из-за которых одна команда не работает. Первый —
+    AOD (`Dozing`) не реагирует на однократный сигнал: жмём `POWER` циклом,
+    пока `mWakefulness` не станет `Awake` (на уже разбуженном экране `POWER`
+    не жмём — погасит). Второй — окно `AOD`/`NotificationShade` держит
+    `mCurrentFocus` даже когда `mFocusedApp` уже лаунчер, и тогда тапы уходят
+    в систему, а не в приложение: `cmd statusbar collapse` помогает не
+    всегда, `HOME` с AOD не снимает вовсе — отсюда повтор с паузой и свайп
+    вверх (жест, которым живой человек сбрасывает AOD на лаунчер). Третий —
+    сон между действиями: `svc power stayon true` на время работы (вернуть
+    самому, см. `adb_input_stayon`).
+
+    Args:
+        unlock: снять замок (`wm dismiss-keyguard`); пин-код не снимается ничем.
+        home: выйти на домашний экран после пробуждения.
+        stayon: включить «не гаснуть на зарядке» (обратно — `adb_input_stayon(False)`).
+        tries: сколько раз жать `POWER`, ожидая `Awake`.
+        serial: устройство; пусто — единственное подключённое.
+
+    Returns:
+        {'awake': bool, 'focus': str, 'shade': bool} — `focus` строка
+        `mCurrentFocus`, `shade=True` — шторка украла фокус даже после
+        повтора (тогда трогать экран рано, читать причину).
+
+    Raises:
+        RuntimeError: экран не разбужен за `tries` нажатий POWER.
+    """
+    awake = False
+    for _ in range(max(1, tries)):
+        if 'mWakefulness=Awake' in adb_run('shell', 'dumpsys', 'power',
+                                           serial=serial, timeout=15):
+            awake = True
+            break
+        adb_input_key('POWER', serial=serial)  # на Dozing/Waking именно POWER
+        time.sleep(1.0)
+    if not awake:
+        raise RuntimeError(f'экран не разбужен за {tries} нажатий POWER — '
+                           f'устройство спит глубже или adb не там')
+    if stayon:
+        adb_input_stayon(True, serial=serial)
+    adb_run('shell', 'cmd', 'statusbar', 'collapse', serial=serial, timeout=15)
+    if unlock:
+        adb_run('shell', 'wm', 'dismiss-keyguard', serial=serial, timeout=15)
+        # dismiss-keyguard асинхронный: keyguard опадает ~1.5 с; нажатия
+        # внутри анимации съедаются ей и до приложения не доходят.
+        time.sleep(1.2)
+    if home:
+        adb_input_key('HOME', serial=serial)
+    focus = _settled_focus(serial)
+    for _ in range(2):
+        if not _stuck_focus(focus):
+            break
+        # Первый collapse мог прийтись на анимацию и не поднять фокус со
+        # шторки. На AOD-устройствах фокус стоит на окне `AOD`/
+        # `NotificationShade` и HOME с AOD не справляется — тогда свайп
+        # вверх, то, что делает человек: снимает AOD с keyguard на лаунчер.
+        # Жесты идут строго после оседания фокуса, иначе предыдущая анимация
+        # съест и этот.
+        adb_run('shell', 'cmd', 'statusbar', 'collapse', serial=serial, timeout=15)
+        if home:
+            adb_input_swipe(*_wake_swipe(serial), serial=serial)
+            adb_input_key('HOME', serial=serial)
+        time.sleep(0.5)
+        focus = _settled_focus(serial)
+    return {'awake': True, 'focus': focus, 'shade': 'NotificationShade' in focus}
+
+
+def _wake_swipe(serial: str) -> tuple:
+    """Нижняя треть экрана, вверх: жест «разбудить и домой» для AOD-окна."""
+    w, h = adb_screen_size(serial)
+    return (w // 2, int(h * 0.8), w // 2, int(h * 0.3))
+
+
+def _stuck_focus(focus: str) -> bool:
+    """Фокус на шторке/AOD или ещё не отдан: экран горит, трогать рано."""
+    return not focus or 'NotificationShade' in focus or 'AOD' in focus
+
+
+def _settled_focus(serial: str, wait: float = 2.5) -> str:
+    """Читает `mCurrentFocus`, ожидая до `wait` с, пока он сойдёт на нет-окно."""
+    focus = _current_focus(serial)
+    deadline = time.monotonic() + wait
+    while _stuck_focus(focus) and time.monotonic() < deadline:
+        time.sleep(0.5)
+        focus = _current_focus(serial)
+    return focus
+
+
+def _current_focus(serial: str) -> str:
+    """Строка mCurrentFocus из window-сервиса; пусто — фокуса нет вовсе."""
+    for line in adb_run('shell', 'dumpsys', 'window', serial=serial,
+                        timeout=15).splitlines():
+        if 'mCurrentFocus' in line:
+            return line.split(':', 1)[-1].strip()
+    return ''
+
+
 def _scroll_span(size: int, part: float, sign: int) -> tuple[int, int]:
     """
     Начало и конец жеста вдоль одной стороны экрана, с отступом от краёв.
@@ -194,8 +317,10 @@ def _text_quote(value: str) -> str:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Нажатия, жесты и ввод на устройстве.',
-        epilog="tap-on 'надпись' | tap 540 1200 | scroll down | text hello | key BACK")
-    parser.add_argument('command', choices=['tap', 'tap-on', 'swipe', 'scroll', 'text', 'key', 'wake'])
+        epilog="tap-on 'надпись' | tap 540 1200 | scroll down | text hello | key BACK | "
+               "wake-full [no-unlock no-home no-stayon] | stayon on|off")
+    parser.add_argument('command', choices=['tap', 'tap-on', 'swipe', 'scroll', 'text',
+                                            'key', 'wake', 'wake-full', 'stayon'])
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
     parser.add_argument('--ms', type=int, default=ADB_INPUT_SWIPE_MS, help='длительность жеста')
     parser.add_argument('args', nargs='*', help='аргументы команды')
@@ -214,6 +339,12 @@ if __name__ == '__main__':
             adb_input_text(' '.join(ns.args), serial=ns.serial)
         elif ns.command == 'key':
             adb_input_key(ns.args[0], serial=ns.serial)
+        elif ns.command == 'wake-full':
+            print(adb_input_wake_full(
+                unlock='no-unlock' not in ns.args, home='no-home' not in ns.args,
+                stayon='no-stayon' not in ns.args, serial=ns.serial))
+        elif ns.command == 'stayon':
+            adb_input_stayon(ns.args[0] not in ('off', 'false', '0'), serial=ns.serial)
         else:
             adb_input_wake(serial=ns.serial)
     except (IndexError, ValueError) as err:

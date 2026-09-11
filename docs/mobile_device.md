@@ -94,7 +94,10 @@ python -m adb_.adb_ describe ["вопрос про экран"] [--serial ...] [
 
 | Функция | Контракт |
 |---------|----------|
-| `adb_burst_capture(n=10, interval=3.0, outdir, serial='') -> dict` | `n` снимков `screencap` с паузой; кадры `frame_%03d.png`, у каждого метка `t` — момент **приёма байтов**, не старта съёмки |
+| `adb_burst_capture(n=10, interval=3.0, outdir, serial='', during='') -> dict` | `n` снимков `screencap` с паузой; кадры `frame_%03d.png`, у каждого метка `t` — момент **приёма байтов**, не старта съёмки; `during` — shell-строка, запущенная один раз после первого кадра (он остаётся «до действия»); тот же dict пишется `manifest.json` в outdir |
+| `adb_burst_launch(package, n=10, interval=0.3, activity='', outdir, serial='') -> dict` | холодный запуск серией: force-stop → кадр «до» → старт (`am start -n` с `activity`, иначе launcher-интент через `monkey`) → кадры запуска; результат как `capture` плюс `package`/`start` |
+| `adb_burst_timeline(frames, band=None, probes=(), luma_max=60, min_px=3000, shift_px=10) -> list` | разложить серию в строки `{'file','t','box':{'w','h','cx','cy'}│None,'colors','shift'}`: тёмный контент в полосе `band (y0,y1,x0,x1)`, цвет в точках `probes ((y,x),…)`, `shift` — bbox прыгнул > `shift_px` или объект появился/исчез; `frames` — dict'ы из capture/launch или просто пути PNG |
+| `adb_burst_timeline_text(rows) -> str` | тот же расклад текстом: `+t` от первого кадра, `WxH@(cx,cy)`, цвета зондов, `SHIFT` на сменах |
 
 Отличие от цикла из `adb_capture_save` — честный `Δt` и флаг тёмных кадров.
 Один `screencap` стоит до секунды, поэтому фактический разброс серии
@@ -105,7 +108,20 @@ python -m adb_.adb_ describe ["вопрос про экран"] [--serial ...] [
 покой анимации, а промах по состоянию экрана. Измерение движения по серии —
 `image_frames_shift` (`image_frames.md`).
 
-CLI: `python -m adb_.adb_burst --n 10 --interval 2 --outdir /tmp/burst`.
+`launch` + `timeline` — фолбек там, где запись экрана недоступна: HyperOS
+после переподключения USB пишет `screenrecord` ~0.3 с молча (`mobile_rec.md`,
+градля 9). Пара кадров ~0.3–0.45 с/кадр ловит окна по 0.3–0.5 с, а `timeline`
+отвечает на «заставка держалась 2.4 с или 1.1» без ffmpeg: строки с одинаковым
+bbox/цветом — одна сцена, `SHIFT` — её смена. Абсолютные тайминги сверять со
+строкой `Displayed com.example.app/...` журнала (`adb_log_read`) — она и есть
+системная правда о старте. Полосу `band` берут по области контента (замерено:
+`900 1500 250 850` на 1080×2400 ловит плашку заставки): на весь экран тёмные
+пиксели статуса-бара и текста сдвигают bbox от любого содержимого.
+
+CLI: `python -m adb_.adb_burst --n 10 --interval 2 --outdir /tmp/burst`
+(старый вызов без подкоманды = `capture`),
+`python -m adb_.adb_burst launch com.example.dia --n 12 --serial SERIAL`,
+`python -m adb_.adb_burst timeline /tmp/burst --band 900 1500 250 850 --probe 400,100`.
 
 ### `adb_file` — файлы на устройстве (файл `adb_/adb_file.py`)
 

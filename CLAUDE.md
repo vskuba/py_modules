@@ -171,7 +171,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `ai.ai_vision` | `describe`, `normalize` |
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
-| `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake` |
+| `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake`, `wake-full [no-unlock no-home no-stayon]`, `stayon on\|off` |
 | `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait`, `install <apk> [-d]`, `pull-apk <пакет> [--out каталог]` |
 | `adb_.adb_log` | `read`, `crash`, `clear`, `pid` |
 | `adb_.adb_file` | `push <local> <remote>`, `pull <remote> [каталог]`, `ls <dir> [--pattern glob]`, `latest <dir> [--pattern glob]` |
@@ -181,7 +181,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_crop` | `on`, `box`, `part` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
 | `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>`, `storage КЛЮЧ='{json}' [--reload]` |
-| `adb_.adb_burst` | `[-n N --interval S --outdir DIR --serial ...]` |
+| `adb_.adb_burst` | `capture [--n --interval --outdir --during «shell»]`, `launch ПАКЕТ [--activity --n --interval]`, `timeline [КАТАЛОГ] [--band Y0 Y1 X0 X1 --probe Y,X] [--serial ...]` |
 | `adb_.adb_rec` | `record [out] [--seconds N --during «shell» --serial S]`, `frames [mp4] [--times 0.5,1.2 │ --fps 2 --out-dir DIR]`, `sheet [mp4] [--out --fps --cols --width]`, `compare <a> <b> --times 0.3,1.4 [--labels A,B --cell-width --out]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |

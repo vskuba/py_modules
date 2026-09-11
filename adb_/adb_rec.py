@@ -41,6 +41,15 @@ ADB_REC_START_DELAY = 1.0
 # Сколько секунд сверх потолка ждём завершения записи; свой ход — ошибка.
 ADB_REC_TAIL = 10.0
 
+# Запись короче этой длины **и** завершённая раньше срока — не запись: так
+# HyperOS после переподключения USB молча обрывает screenrecord ~на 0.3 с
+# (диалога разрешений на экране нет, права adb ни при чём). Сам по себе
+# короткий mp4 ничего не доказывает: статичный экран даёт редкие кадры и
+# маленькую длительность метаданных при исправной записи (на эмуляторе
+# 2-секундный статичный файл читается как 0.7 с) — поэтому решение принимает
+# пара «длительность + сколько реально прожил процесс».
+ADB_REC_MIN_KEEP = 1.0
+
 # Обзорная сетка: кадры раз в ADB_REC_SHEET_FPS секунд, колонками по
 # ADB_REC_SHEET_COLS, ширина кадра ADB_REC_SHEET_WIDTH px. Ширины хватает
 # прочесть заголовок экрана, а вся двухминутная запись остаётся на одном листе.
@@ -67,15 +76,19 @@ def adb_rec_record(out: str = '/tmp/adb_rec.mp4', during: str = '',
         serial: устройство; пусто — единственное подключённое.
 
     Returns:
-        {'file', 'bytes', 'seconds'}.
+        {'file', 'bytes', 'seconds', 'recorded'} — `recorded` фактическая
+        длина в секундах по ffprobe (None если ffprobe нет в PATH); короткая
+        запись — ошибка, а не тихий укороченный файл.
 
     Raises:
-        RuntimeError: adb/устройство подвело, запись не завершилась или
-            файл не пришёл; запись и временный файл на устройстве погасятся/
+        RuntimeError: adb/устройство подвело, запись не завершилась, файл
+            не пришёл или записалось меньше `ADB_REC_MIN_KEEP` с (ограничение
+            устройства); запись и временный файл на устройстве погасятся/
             удалятся в любом случае.
     """
     seconds = max(1, min(int(seconds), ADB_REC_LIMIT))
     remote = f'/sdcard/adb_rec-{int(time.time())}.mp4'
+    started = time.monotonic()
     proc = subprocess.Popen(
         ['adb'] + (['-s', serial] if serial else []) +
         ['shell', 'screenrecord', '--time-limit', str(seconds), remote],
@@ -87,15 +100,36 @@ def adb_rec_record(out: str = '/tmp/adb_rec.mp4', during: str = '',
         try:
             proc.wait(timeout=seconds + ADB_REC_TAIL)
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f'экран не перестал писаться за {seconds + ADB_REC_TAIL:g} с')
+            raise RuntimeError(
+                f'экран не перестал писаться за {seconds + ADB_REC_TAIL:g} с; '
+                f'если устройство ограничивает запись (HyperOS после переподключения '
+                f'USB), фолбек — серия кадров: python -m adb_.adb_burst launch ПАКЕТ')
         pulled = adb_file_pull(remote, os.path.dirname(os.path.abspath(out)) or '.', serial=serial)
         os.replace(pulled, out)
+        lived = time.monotonic() - started
+        recorded = None
+        try:
+            recorded = _ffprobe_duration(out)
+        except FileNotFoundError:
+            pass  # без ffprobe длина недоступна: саму запись это не отменяет
+        # Ранний выход процесса — единственный честный признак обрыва:
+        # статичный экран даёт короткую длительность метаданных и при
+        # исправной записи (эмулятор из 2 с пишет 0.7), HyperOS при обрыве
+        # забирает и процесс, и файл.
+        if lived < seconds * 0.5 and (recorded is None or recorded < ADB_REC_MIN_KEEP):
+            raise RuntimeError(
+                f'screenrecord прожил {lived:.1f} с из {seconds} с и записал '
+                f'{recorded:.1f} с: так HyperOS молча обрывает запись после '
+                f'переподключения USB (диалога разрешений нет, перетыкать '
+                f'бесполезно). Фолбек — серия кадров: python -m adb_.adb_burst '
+                f'launch ПАКЕТ, см. mobile_device.md')
     finally:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
         adb_run('shell', 'rm', '-f', remote, serial=serial, timeout=10)
-    return {'file': out, 'bytes': os.path.getsize(out), 'seconds': seconds}
+    return {'file': out, 'bytes': os.path.getsize(out), 'seconds': seconds,
+            'recorded': round(recorded, 2) if recorded is not None else None}
 
 
 def adb_rec_frames(mp4: str, out_dir: str = '/tmp/adb_rec_frames',
@@ -270,18 +304,27 @@ def _ffmpeg_bin() -> str:
 
 
 def _ffprobe_duration(mp4: str) -> float:
-    """Длительность записи, секунды; ffprobe едет в комплекте с ffmpeg."""
+    """
+    Длительность записи, секунды; ffprobe едет в комплекте с ffmpeg.
+
+    Берёт первое число из format=duration, а если контейнер его не несёт
+    (эмулятор пишет moov без общей длительности — ffprobe отвечает `N/A` при
+    исправном файле) — из длительностей потоков.
+    """
     probe = shutil.which('ffprobe')
     if not probe:
         raise FileNotFoundError('ffprobe не найден в PATH — он идёт с ffmpeg, '
                                 'без него сетку не размечать по рядам')
     done = subprocess.run([probe, '-v', 'error', '-show_entries',
-                           'format=duration', '-of', 'default=nk=1:nw=1', mp4],
+                           'format=duration:stream=duration',
+                           '-of', 'default=nk=1:nw=1', mp4],
                           capture_output=True, text=True, timeout=30)
-    try:
-        return float(done.stdout.strip())
-    except ValueError:
-        raise RuntimeError(f'ffprobe не назвал длительность {mp4}') from None
+    for word in done.stdout.split():
+        try:
+            return float(word)
+        except ValueError:
+            continue
+    raise RuntimeError(f'ffprobe не назвал длительность {mp4}') from None
 
 
 def _rec_cell(path: str, width: int):
