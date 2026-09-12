@@ -8,7 +8,10 @@
 дело workflow, не драйвера.
 
 Якорь приходит в ферму POST /upload/image — драйвер не знает ни хостов, ни
-ssh: тот же код гоняет против любой ComfyUI по http.
+ssh: тот же код гоняет против любой ComfyUI по http. Хозяйский дом — проект:
+если ферма передана как farm_ssh/farm_container (значения даёт вызывающий),
+готовый результат снимается с фермы в --out и стирается на ней — ферма делает,
+проект хранит.
 
 GB10 с единой памятью: задача, влезшая в память только что, роняет всю ферму.
 Поэтому workflow несёт верхним ключом `_mem` — примерный аппетит в ГБ; драйвер
@@ -45,7 +48,10 @@ COMFY_GEN_MEM_MARGIN = 0.3
 # Обучение — те же шаги × градиент-аккумуляция прогонов, оно медленнее инференса:
 # ждём час, а не 900 с (проба на заплатке не дошла до SaveLoRA именно на 900 с).
 COMFY_GEN_TRAIN_TIMEOUT = 3600.0
-COMFY_GEN_TRAIN_SIZE = (384, 384)  # заплатки лица по факту 133×173…337×463
+COMFY_GEN_TRAIN_SIZE = (384, 384)  # живые заплатки лиц 344×461…987×1342; flux1-dev-fp8
+                                   # на 768×1024 (0.79 МП/кадр) не влезает в память и падает
+                                   # torch.OutOfMemoryError при free 93.5 — см. docs/comfy_gen.md
+COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
 
 # QA кадра с лицом: косинус против якоря не ниже порога — иначе прогон на seed+сдвиг.
 COMFY_GEN_QA_PASS = 0.5
@@ -53,7 +59,8 @@ COMFY_GEN_QA_RETRY_SEED = 1000
 
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
-                    anchor_input='', seed=1, n=1, denoise=1.0, qa_anchor=''):
+                    anchor_input='', seed=1, n=1, denoise=1.0, qa_anchor='',
+                    farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
     Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor`: по порогу
@@ -78,19 +85,22 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                                    '__ANCHOR__': anchor_name,
                                    '__SEED__': str(s),
                                    '__DENOISE__': str(denoise)})
-        got = _run_one(body(seed + i), scene, out, base, seed + i, need)
+        got = _run_one(body(seed + i), scene, out, base, seed + i, need,
+                       farm_ssh=farm_ssh, farm_container=farm_container)
         if qa_anchor and scene.get('face_on', True):
             _comfy_gen_qa(got, out, qa_anchor)
             if not all(r['pass'] for r in got):
                 got = _run_one(body(seed + i + COMFY_GEN_QA_RETRY_SEED), scene, out,
-                               base, seed + i + COMFY_GEN_QA_RETRY_SEED, need)
+                               base, seed + i + COMFY_GEN_QA_RETRY_SEED, need,
+                               farm_ssh=farm_ssh, farm_container=farm_container)
                 _comfy_gen_qa(got, out, qa_anchor)
         rows.extend(got)
     return rows
 
 
-def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TRAIN_SIZE):
-    """Обучить LoRA на пачке кадров; вернуть когда ферма закончит.
+def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TRAIN_SIZE,
+                    out='', farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
+    """Обучить LoRA на пачке кадров; вернуть локальные пути готовых лор.
 
     workflow — API-JSON с TrainLoraNode/SaveLoRA; files — локальные кадры
     датасета: каждый грузится в input фермы, ланцошем приводится к `size`
@@ -98,6 +108,11 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TR
     размера; родной размер заплатки диктует size, не 512² вслепую) и вшивается
     цепочкой LoadImage→ImageScale→VAEEncode→LatentBatch в узел TrainLoraNode;
     caption — единая подпись датасета (id персоны, не сцены).
+
+    Лора — актив проекта, ферма её не хранит: при заданных farm_ssh/
+    farm_container свежий файл снимается с фермы в out (имя — из prefix
+    SaveLoRA без счётчика шагов) и стирается на ферме; без farm_* глухо
+    остаётся на ферме (зачем актив чужой установки лежит здесь).
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
@@ -123,6 +138,17 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TR
                     '__DENOISE__': '1.0'})
     _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed, need,
                timeout=COMFY_GEN_TRAIN_TIMEOUT)
+    if not farm_ssh:
+        return []
+    prefix = next(n['inputs']['prefix'] for n in wf.values()
+                  if n.get('class_type', n.get('_cls')) == 'SaveLoRA')
+    sub, stem = str(Path(prefix).parent), Path(prefix).name
+    got = []
+    for name in (f for f in _farm_sh(farm_ssh, farm_container, f'ls {remote}/{sub}')
+                 .split() if f.startswith(stem) and f.endswith('.safetensors')):
+        got.append(_farm_pull(farm_ssh, farm_container, remote, f'{sub}/{name}',
+                              Path(out) if out else Path('.'), stem + '.safetensors'))
+    return got
 
 
 def comfy_gen_upload(path, base):
@@ -158,7 +184,8 @@ def _wf_set(node, path, value):
     node[nid]['inputs'][field] = value
 
 
-def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT):
+def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT,
+             farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
     """Один запуск /prompt -> /history -> /view; кадры на диск, строки манифеста.
 
     need>0 — ГБ, которые задача приблизительно съест: не влезает в свободную
@@ -183,6 +210,10 @@ def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT):
             b.raise_for_status()
             rows.append(_save(b.content, Path(img['filename']).suffix or '.png',
                               out, scene, seed))
+            if farm_ssh and img.get('type') == 'output':
+                # кадр уже в проекте — на ферме он больше не лежит
+                _farm_sh(farm_ssh, farm_container, 'rm -f '
+                         + str(Path(remote) / img['subfolder'] / img['filename']))
     return rows
 
 
@@ -269,6 +300,23 @@ def _comfy_gen_qa(rows, out, anchor):
                                   indent=1) + '\n')
 
 
+def _farm_sh(host, container, sh):
+    """Одна команда внутри контейнера фермы (ls/cat/rm готовых файлов); stdout."""
+    return subprocess.run(['ssh', host, f'docker exec {container} sh -c "{sh}"'],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def _farm_pull(host, container, remote, rel, out, name):
+    """Готовый файл фермы — в проект и стереть там: ферма не склад готового."""
+    p = Path(out) / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(subprocess.run(
+        ['ssh', host, f'docker exec {container} cat {Path(remote) / rel}'],
+        capture_output=True, check=True).stdout)
+    _farm_sh(host, container, f'rm -f {Path(remote) / rel}')
+    return p
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Прогонить workflow персоны над сценой (или всеми сценами).')
@@ -294,13 +342,21 @@ if __name__ == '__main__':
                         help='сила изменения кадра-основы (img2img)')
     parser.add_argument('--size', default='384x384',
                         help='train: «ВхН» датасета под LatentBatch (по умолчанию родной размер заплаток)')
+    parser.add_argument('--farm-ssh', default='',
+                        help='ssh-хост фермы; с ним готовые файлы (лора, кадры) снимаются с фермы в --out и стираются там')
+    parser.add_argument('--farm-container', default='',
+                        help='именование контейнера ComfyUI на ферме')
     ns = parser.parse_args()
     try:
         if ns.command == 'train':
             w, h = (int(v) for v in ns.size.lower().split('x'))
-            comfy_gen_train(ns.workflow, ns.files, base=ns.base, caption=ns.persona,
-                            seed=ns.seed, size=(w, h))
-            print('обучено')
+            got = comfy_gen_train(ns.workflow, ns.files, base=ns.base,
+                                  caption=ns.persona, seed=ns.seed, size=(w, h),
+                                  out=ns.out, farm_ssh=ns.farm_ssh,
+                                  farm_container=ns.farm_container)
+            print(*(str(p) for p in got) or ['обучено'])
+            if got:
+                print('обучено')
             raise SystemExit
         if not ns.out:
             raise SystemExit('ошибка: run требует --out (каталог под кадры)')
@@ -313,7 +369,9 @@ if __name__ == '__main__':
                                         persona=ns.persona, anchor=ns.anchor or None,
                                         anchor_input=ns.anchor_input,
                                         seed=ns.seed, n=ns.n, denoise=ns.denoise,
-                                        qa_anchor=ns.qa_anchor))
+                                        qa_anchor=ns.qa_anchor,
+                                        farm_ssh=ns.farm_ssh,
+                                        farm_container=ns.farm_container))
         for r in rows:
             print(r['file'], r['scene'], r['seed'], r['score'], r['pass'])
     except (ValueError, KeyError, OSError, RuntimeError,
