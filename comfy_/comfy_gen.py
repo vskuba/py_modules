@@ -255,8 +255,11 @@ def _comfy_gen_qa(rows, out, anchor):
     with tempfile.TemporaryDirectory() as td:
         for r in rows:
             crop = Path(td) / (Path(r['file']).stem + '.png')
-            ai_face_crop(Path(out) / r['file'], crop)
-            s = ai_face_score(crop, anchor)
+            try:
+                ai_face_crop(Path(out) / r['file'], crop)
+                s = ai_face_score(crop, anchor)
+            except (ValueError, OSError):
+                s = 0.0  # лицо не нашлось — это провал кадра, не авария батча
             ok = s >= COMFY_GEN_QA_PASS
             r['score'], r['pass'] = s, ok
             if r['file'] in by_file:
