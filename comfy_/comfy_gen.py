@@ -29,11 +29,11 @@ import httpx
 COMFY_GEN_TIMEOUT = 900.0
 
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
-COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__')
+COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
-                    anchor_input='', seed=1, n=1):
+                    anchor_input='', seed=1, n=1, denoise=1.0):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
     workflow — путь к API-JSON; scene — запись scenes.json (id/prompt/nsfw/
@@ -51,7 +51,8 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
         run = _wf_fill(json.loads(json.dumps(wf)),
                        {'__PROMPT__': f'{persona}, {scene["prompt"]}'.strip(', '),
                         '__ANCHOR__': anchor_name,
-                        '__SEED__': str(seed + i)})
+                        '__SEED__': str(seed + i),
+                        '__DENOISE__': str(denoise)})
         rows.extend(_run_one(run, scene, out, base, seed + i))
     return rows
 
@@ -157,6 +158,8 @@ if __name__ == '__main__':
     parser.add_argument('--out', required=True, help='каталог персоны под кадры')
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--n', type=int, default=1, help='кадров на сцену')
+    parser.add_argument('--denoise', type=float, default=1.0,
+                        help='сила изменения кадра-основы (img2img)')
     ns = parser.parse_args()
     try:
         scenes = json.loads(Path(ns.scenes).read_text())
@@ -167,7 +170,7 @@ if __name__ == '__main__':
             rows.extend(comfy_gen_batch(ns.workflow, s, ns.out, base=ns.base,
                                         persona=ns.persona, anchor=ns.anchor or None,
                                         anchor_input=ns.anchor_input,
-                                        seed=ns.seed, n=ns.n))
+                                        seed=ns.seed, n=ns.n, denoise=ns.denoise))
         for r in rows:
             print(r['file'], r['scene'], r['seed'])
     except (ValueError, KeyError, OSError, RuntimeError) as err:
