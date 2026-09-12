@@ -3,3 +3,7 @@
 # Флор по venv py_modules (1.80 проверена); проект волен поднять версию выше.
 -r requirements.txt
 pydantic-ai>=1.80
+# Лицо: antelopev2-эмбединги для ai_face (инференс на CPU через onnxruntime).
+insightface>=1.0
+onnxruntime>=1.20
+opencv-python-headless>=4.10
