@@ -10,6 +10,10 @@
 Якорь приходит в ферму POST /upload/image — драйвер не знает ни хостов, ни
 ssh: тот же код гоняет против любой ComfyUI по http.
 
+GB10 с единой памятью: задача, влезшая в память только что, роняет всю ферму.
+Поэтому workflow несёт верхним ключом `_mem` — примерный аппетит в ГБ; драйвер
+не пошлёт /prompt, если на ферме свободно меньше `_mem` + запас.
+
 Кадры сходят с конвейера без EXIF (exiftool -all=) и с именами-хэшами, как
 файлы на сайте: sha256[:32].jpg. Каждая минута провала — seed+1000, это решает
 вызвавший, драйвер лишь честно исполняет прогон и пишет score/pass в манифест
@@ -31,6 +35,10 @@ COMFY_GEN_TIMEOUT = 900.0
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
 COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 
+# Запас к `_mem` workflow: память на ферме общая с чужими процессами, живой
+# остаток скачет; не пускаем задачу, если не гарантированно влезает.
+COMFY_GEN_MEM_MARGIN = 10.0
+
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                     anchor_input='', seed=1, n=1, denoise=1.0):
@@ -40,9 +48,11 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     face_on); out — каталог куда класть кадры; base — адрес ComfyUI
     («http://хост:порт»); anchor — файл якорного лица, грузится в input фермы,
     его новое имя подставляется вместо __ANCHOR__ (workflow без якоря его
-    просто не содержит); seed — стартовый, i-й кадр — seed+i.
+    просто не содержит); seed — стартовый, i-й кадр — seed+i; `_mem` workflow
+    (ГБ) сверяется со свободной памятью фермы до отправки — не влезает — отказ.
     """
     wf = json.loads(Path(workflow).read_text())
+    need = float(wf.pop('_mem', 0))
     anchor_name = comfy_gen_upload(anchor, base) if anchor else ''
     if anchor_input:
         _wf_set(wf, anchor_input, anchor_name or str(anchor))
@@ -53,7 +63,7 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                         '__ANCHOR__': anchor_name,
                         '__SEED__': str(seed + i),
                         '__DENOISE__': str(denoise)})
-        rows.extend(_run_one(run, scene, out, base, seed + i))
+        rows.extend(_run_one(run, scene, out, base, seed + i, need))
     return rows
 
 
@@ -66,6 +76,7 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1):
     подпись датасета (id персоны, не сцены).
     """
     wf = json.loads(Path(workflow).read_text())
+    need = float(wf.pop('_mem', 0))
     enc = None
     for k, f in enumerate(files):
         lid, eid = str(101 + k), str(201 + k)
@@ -83,7 +94,7 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1):
     run = _wf_fill(json.loads(json.dumps(wf)),
                    {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
                     '__DENOISE__': '1.0'})
-    _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed)
+    _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed, need)
 
 
 def comfy_gen_upload(path, base):
@@ -119,9 +130,18 @@ def _wf_set(node, path, value):
     node[nid]['inputs'][field] = value
 
 
-def _run_one(wf, scene, out, base, seed):
-    """Один запуск /prompt -> /history -> /view; кадры на диск, строки манифеста."""
+def _run_one(wf, scene, out, base, seed, need=0.0):
+    """Один запуск /prompt -> /history -> /view; кадры на диск, строки манифеста.
+
+    need>0 — ГБ, которые задача приблизительно съест: не влезает в свободную
+    память фермы вместе с запасом — отказ, не отправляя (единая память GB10,
+    переполнение валит всю ферму)."""
     pid = str(uuid.uuid4())
+    if need:
+        free = httpx.get(f'{base}/system_stats', timeout=30).json()['system']['ram_free'] / 2**30
+        if free < need + COMFY_GEN_MEM_MARGIN:
+            raise RuntimeError(f'на ферме свободно {free:.0f} ГБ, задаче надо '
+                               f'≥{need + COMFY_GEN_MEM_MARGIN:.0f} — не отправляю')
     for n in wf.values():  # API-форма: каждый узел с class_type
         n.setdefault('class_type', n.pop('_cls'))
     r = httpx.post(f'{base}/prompt', json={'prompt': wf, 'client_id': pid},
