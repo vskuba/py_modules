@@ -57,6 +57,35 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     return rows
 
 
+def comfy_gen_train(workflow, files, *, base, caption, seed=1):
+    """Обучить LoRA на пачке кадров; вернуть когда ферма закончит.
+
+    workflow — API-JSON с TrainLoraNode/LoraSave; files — локальные кадры
+    датасета: каждый грузится в input фермы и вшивается цепочкой
+    LoadImage→VAEEncode→LatentBatch в узел TrainLoraNode; caption — единая
+    подпись датасета (id персоны, не сцены).
+    """
+    wf = json.loads(Path(workflow).read_text())
+    enc = None
+    for k, f in enumerate(files):
+        lid, eid = str(101 + k), str(201 + k)
+        wf[lid] = {'_cls': 'LoadImage', 'inputs': {'image': comfy_gen_upload(f, base)}}
+        wf[eid] = {'_cls': 'VAEEncode', 'inputs': {'pixels': [lid, 0], 'vae': ['3', 0]}}
+        if enc is None:
+            enc = [eid, 0]
+        else:
+            wf[f'3{k:02d}'] = {'_cls': 'LatentBatch',
+                               'inputs': {'samples1': enc, 'samples2': [eid, 0]}}
+            enc = [f'3{k:02d}', 0]
+    for n in wf.values():
+        if n['_cls'] == 'TrainLoraNode':
+            n['inputs']['latents'] = enc
+    run = _wf_fill(json.loads(json.dumps(wf)),
+                   {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
+                    '__DENOISE__': '1.0'})
+    _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed)
+
+
 def comfy_gen_upload(path, base):
     """Залить файл в input фермы через /upload/image; вернуть имя на ферме."""
     p = Path(path)
@@ -145,23 +174,33 @@ def _save(data, ext, out, scene, seed):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Прогонить workflow персоны над сценой (или всеми сценами).')
-    parser.add_argument('command', choices=['run'], help='run — гонять сцены')
+    parser.add_argument('command', choices=['run', 'train'],
+                        help='run — гонять сцены; train — обучить лору на файлах')
     parser.add_argument('--workflow', required=True, help='API-JSON workflow')
-    parser.add_argument('--scenes', required=True,
+    parser.add_argument('--scenes', default='',
                         help='scenes.json каталога персоны (список сцен)')
     parser.add_argument('--scene', default='', help='id одной сцены; пусто — все')
     parser.add_argument('--persona', default='', help='префикс промпта (имя персоны)')
+    parser.add_argument('--files', nargs='*', default=[],
+                        help='кадры датасета для train')
     parser.add_argument('--anchor', default='', help='файл якоря, если workflow ждёт')
     parser.add_argument('--anchor-input', default='',
                         help='«узел.вход» для workflow без маркера __ANCHOR__')
     parser.add_argument('--base', default='http://127.0.0.1:8188', help='адрес ComfyUI')
-    parser.add_argument('--out', required=True, help='каталог персоны под кадры')
+    parser.add_argument('--out', default='', help='каталог персоны под кадры (run)')
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--n', type=int, default=1, help='кадров на сцену')
     parser.add_argument('--denoise', type=float, default=1.0,
                         help='сила изменения кадра-основы (img2img)')
     ns = parser.parse_args()
     try:
+        if ns.command == 'train':
+            comfy_gen_train(ns.workflow, ns.files, base=ns.base,
+                            caption=ns.persona, seed=ns.seed)
+            print('обучено')
+            raise SystemExit
+        if not ns.out:
+            raise SystemExit('ошибка: run требует --out (каталог под кадры)')
         scenes = json.loads(Path(ns.scenes).read_text())
         if ns.scene:
             scenes = [s for s in scenes if s['id'] == ns.scene]
