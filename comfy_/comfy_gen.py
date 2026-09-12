@@ -146,8 +146,9 @@ def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT):
 
     need>0 — ГБ, которые задача приблизительно съест: не влезает в свободную
     память фермы вместе с запасом — отказ, не отправляя (единая память GB10,
-    переполнение валит всю ферму)."""
-    pid = str(uuid.uuid4())
+    переполнение валит всю ферму). Приложение фермы перезапускается посреди
+    прогона и стирает свой queue/history — граф досылается заново (_gen_await),
+    прогон доходит до конца, а не падает с Connection refused."""
     if need:
         free = httpx.get(f'{base}/system_stats', timeout=30).json()['system']['ram_free'] / 2**30
         if free < need + COMFY_GEN_MEM_MARGIN:
@@ -155,22 +156,8 @@ def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT):
                                f'≥{need + COMFY_GEN_MEM_MARGIN:.0f} — не отправляю')
     for n in wf.values():  # API-форма: каждый узел с class_type
         n.setdefault('class_type', n.pop('_cls'))
-    r = httpx.post(f'{base}/prompt', json={'prompt': wf, 'client_id': pid},
-                   timeout=60)
-    if r.status_code != 200:
-        raise RuntimeError(f'/prompt {r.status_code}: {r.text[:500]}')
-    prompt_id = r.json()['prompt_id']
-    deadline = time.monotonic() + timeout
-    while True:
-        h = httpx.get(f'{base}/history/{prompt_id}', timeout=30).json()
-        if prompt_id in h:
-            break
-        if time.monotonic() > deadline:
-            raise TimeoutError(f'ComfyUI не закончил {prompt_id} за {timeout} c')
-        time.sleep(2)
-    done = h[prompt_id]
-    if done.get('status', {}).get('status_str') != 'success':
-        raise RuntimeError(f'workflow {prompt_id}: {json.dumps(done.get("status"), ensure_ascii=False)[:400]}')
+    done = _gen_await({'prompt': wf, 'client_id': str(uuid.uuid4())}, base,
+                      time.monotonic() + timeout, timeout)
     rows = []
     for o in done.get('outputs', {}).values():
         for img in o.get('images', []):
@@ -180,6 +167,40 @@ def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT):
             rows.append(_save(b.content, Path(img['filename']).suffix or '.png',
                               out, scene, seed))
     return rows
+
+
+class _GenLost(RuntimeError):
+    """Приложение фермы перезапустилось и стёрло граф из своей памяти; досылаем."""
+
+
+def _gen_await(body, base, deadline, timeout):
+    """Шлёт body на /prompt и ждёт pid в /history; connection-разрывы и рестарты
+    приложения переживает: в щель крутимся, а если граф пропал с живого фермы
+    (queue чист, в history нет) — досылаем заново, пока не упрёмся в дедлайн."""
+    while True:
+        try:
+            r = httpx.post(f'{base}/prompt', json=body, timeout=60)
+            if r.status_code != 200:
+                raise RuntimeError(f'/prompt {r.status_code}: {r.text[:500]}')
+            pid = r.json()['prompt_id']
+            while True:
+                h = httpx.get(f'{base}/history/{pid}', timeout=30).json()
+                if pid in h:
+                    entry = h[pid]
+                    if entry.get('status', {}).get('status_str') != 'success':
+                        raise RuntimeError(f'workflow {pid}: '
+                                           f'{json.dumps(entry.get("status"), ensure_ascii=False)[:400]}')
+                    return entry
+                q = httpx.get(f'{base}/queue', timeout=30).json()
+                if pid not in [it[1] for it in q['queue_running'] + q['queue_pending']]:
+                    raise _GenLost(f'граф пропал с фермы (pid {pid[:8]})')
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f'ComfyUI не закончил {pid} за {timeout} c')
+                time.sleep(2)
+        except (_GenLost, httpx.TransportError) as err:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f'за {timeout} с ферма не сделала задачу: {err}') from err
+            time.sleep(5)  # приложение фермы в рестарте — подождать и дослать
 
 
 def _save(data, ext, out, scene, seed):
