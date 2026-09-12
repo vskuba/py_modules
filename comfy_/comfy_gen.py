@@ -40,17 +40,24 @@ COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 # — фактический зазор, оставленный прогоном: у обучения на 15 заплатках он был
 # 0.4 ГиБ (free 93.6→0.4) и прогон жил; 4 ГиБ «на глаз» тут не оставляют места
 # никакой задаче (свободно максимум 93.7).
-COMFY_GEN_MEM_MARGIN = 0.5
+COMFY_GEN_MEM_MARGIN = 0.3
 
 # Обучение — те же шаги × градиент-аккумуляция прогонов, оно медленнее инференса:
 # ждём час, а не 900 с (проба на заплатке не дошла до SaveLoRA именно на 900 с).
 COMFY_GEN_TRAIN_TIMEOUT = 3600.0
 COMFY_GEN_TRAIN_SIZE = (384, 384)  # заплатки лица по факту 133×173…337×463
 
+# QA кадра с лицом: косинус против якоря не ниже порога — иначе прогон на seed+сдвиг.
+COMFY_GEN_QA_PASS = 0.5
+COMFY_GEN_QA_RETRY_SEED = 1000
+
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
-                    anchor_input='', seed=1, n=1, denoise=1.0):
+                    anchor_input='', seed=1, n=1, denoise=1.0, qa_anchor=''):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
+
+    Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor`: по порогу
+    `COMFY_GEN_QA_PASS` кадр проходит, иначе тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED.
 
     workflow — путь к API-JSON; scene — запись scenes.json (id/prompt/nsfw/
     face_on); out — каталог куда класть кадры; base — адрес ComfyUI
@@ -66,12 +73,19 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
         _wf_set(wf, anchor_input, anchor_name or str(anchor))
     rows = []
     for i in range(n):
-        run = _wf_fill(json.loads(json.dumps(wf)),
-                       {'__PROMPT__': f'{persona}, {scene["prompt"]}'.strip(', '),
-                        '__ANCHOR__': anchor_name,
-                        '__SEED__': str(seed + i),
-                        '__DENOISE__': str(denoise)})
-        rows.extend(_run_one(run, scene, out, base, seed + i, need))
+        body = lambda s: _wf_fill(json.loads(json.dumps(wf)),
+                                  {'__PROMPT__': f'{persona}, {scene["prompt"]}'.strip(', '),
+                                   '__ANCHOR__': anchor_name,
+                                   '__SEED__': str(s),
+                                   '__DENOISE__': str(denoise)})
+        got = _run_one(body(seed + i), scene, out, base, seed + i, need)
+        if qa_anchor and scene.get('face_on', True):
+            _comfy_gen_qa(got, out, qa_anchor)
+            if not all(r['pass'] for r in got):
+                got = _run_one(body(seed + i + COMFY_GEN_QA_RETRY_SEED), scene, out,
+                               base, seed + i + COMFY_GEN_QA_RETRY_SEED, need)
+                _comfy_gen_qa(got, out, qa_anchor)
+        rows.extend(got)
     return rows
 
 
@@ -226,6 +240,32 @@ def _save(data, ext, out, scene, seed):
     return row
 
 
+def _comfy_gen_qa(rows, out, anchor):
+    """Скорить кадры с лицом против якоря: score/pass — в строки и в манифест.
+
+    Кроит лицо кропом и скорит тем же det, каким кроил — та же цепочка, чем
+    мерили сходство вручную, иначе драйвер и человек видят разные числа.
+    """
+    import tempfile
+    from ai.ai_face import ai_face_crop, ai_face_score
+    by_file = {}
+    mp = Path(out) / 'manifest.json'
+    if mp.exists():
+        by_file = {r['file']: r for r in json.loads(mp.read_text())}
+    with tempfile.TemporaryDirectory() as td:
+        for r in rows:
+            crop = Path(td) / (Path(r['file']).stem + '.png')
+            ai_face_crop(Path(out) / r['file'], crop)
+            s = ai_face_score(crop, anchor)
+            ok = s >= COMFY_GEN_QA_PASS
+            r['score'], r['pass'] = s, ok
+            if r['file'] in by_file:
+                by_file[r['file']].update({'score': s, 'pass': ok})
+    if by_file:
+        mp.write_text(json.dumps(list(by_file.values()), ensure_ascii=False,
+                                  indent=1) + '\n')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Прогонить workflow персоны над сценой (или всеми сценами).')
@@ -241,6 +281,8 @@ if __name__ == '__main__':
     parser.add_argument('--anchor', default='', help='файл якоря, если workflow ждёт')
     parser.add_argument('--anchor-input', default='',
                         help='«узел.вход» для workflow без маркера __ANCHOR__')
+    parser.add_argument('--qa-anchor', default='',
+                        help='лицо-якорь для score/pass; провал — тот же прогон на seed+1000')
     parser.add_argument('--base', default='http://127.0.0.1:8188', help='адрес ComfyUI')
     parser.add_argument('--out', default='', help='каталог персоны под кадры (run)')
     parser.add_argument('--seed', type=int, default=1)
@@ -267,9 +309,10 @@ if __name__ == '__main__':
             rows.extend(comfy_gen_batch(ns.workflow, s, ns.out, base=ns.base,
                                         persona=ns.persona, anchor=ns.anchor or None,
                                         anchor_input=ns.anchor_input,
-                                        seed=ns.seed, n=ns.n, denoise=ns.denoise))
+                                        seed=ns.seed, n=ns.n, denoise=ns.denoise,
+                                        qa_anchor=ns.qa_anchor))
         for r in rows:
-            print(r['file'], r['scene'], r['seed'])
+            print(r['file'], r['scene'], r['seed'], r['score'], r['pass'])
     except (ValueError, KeyError, OSError, RuntimeError,
             httpx.HTTPError) as err:
         raise SystemExit(f'ошибка: {err}')
