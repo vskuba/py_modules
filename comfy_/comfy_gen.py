@@ -39,6 +39,11 @@ COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 # ram_free фермы — запас лишь на скачок живого остатка, не на соседей.
 COMFY_GEN_MEM_MARGIN = 4.0
 
+# Обучение — те же шаги × градиент-аккумуляция прогонов, оно медленнее инференса:
+# ждём час, а не 900 с (проба на заплатке не дошла до SaveLoRA именно на 900 с).
+COMFY_GEN_TRAIN_TIMEOUT = 3600.0
+COMFY_GEN_TRAIN_SIZE = (384, 384)  # заплатки лица по факту 133×173…337×463
+
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                     anchor_input='', seed=1, n=1, denoise=1.0):
@@ -67,15 +72,15 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     return rows
 
 
-def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=(512, 512)):
+def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TRAIN_SIZE):
     """Обучить LoRA на пачке кадров; вернуть когда ферма закончит.
 
     workflow — API-JSON с TrainLoraNode/SaveLoRA; files — локальные кадры
     датасета: каждый грузится в input фермы, ланцошем приводится к `size`
     (LatentBatch складывает только одинаковые латенты — заплатки лиц разного
-    размера) и вшивается цепочкой LoadImage→ImageScale→VAEEncode→LatentBatch
-    в узел TrainLoraNode; caption — единая подпись датасета (id персоны,
-    не сцены).
+    размера; родной размер заплатки диктует size, не 512² вслепую) и вшивается
+    цепочкой LoadImage→ImageScale→VAEEncode→LatentBatch в узел TrainLoraNode;
+    caption — единая подпись датасета (id персоны, не сцены).
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
@@ -99,7 +104,8 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=(512, 512)):
     run = _wf_fill(json.loads(json.dumps(wf)),
                    {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
                     '__DENOISE__': '1.0'})
-    _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed, need)
+    _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed, need,
+               timeout=COMFY_GEN_TRAIN_TIMEOUT)
 
 
 def comfy_gen_upload(path, base):
@@ -135,7 +141,7 @@ def _wf_set(node, path, value):
     node[nid]['inputs'][field] = value
 
 
-def _run_one(wf, scene, out, base, seed, need=0.0):
+def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT):
     """Один запуск /prompt -> /history -> /view; кадры на диск, строки манифеста.
 
     need>0 — ГБ, которые задача приблизительно съест: не влезает в свободную
@@ -154,13 +160,13 @@ def _run_one(wf, scene, out, base, seed, need=0.0):
     if r.status_code != 200:
         raise RuntimeError(f'/prompt {r.status_code}: {r.text[:500]}')
     prompt_id = r.json()['prompt_id']
-    deadline = time.monotonic() + COMFY_GEN_TIMEOUT
+    deadline = time.monotonic() + timeout
     while True:
         h = httpx.get(f'{base}/history/{prompt_id}', timeout=30).json()
         if prompt_id in h:
             break
         if time.monotonic() > deadline:
-            raise TimeoutError(f'ComfyUI не закончил {prompt_id} за {COMFY_GEN_TIMEOUT} c')
+            raise TimeoutError(f'ComfyUI не закончил {prompt_id} за {timeout} c')
         time.sleep(2)
     done = h[prompt_id]
     if done.get('status', {}).get('status_str') != 'success':
@@ -217,11 +223,14 @@ if __name__ == '__main__':
     parser.add_argument('--n', type=int, default=1, help='кадров на сцену')
     parser.add_argument('--denoise', type=float, default=1.0,
                         help='сила изменения кадра-основы (img2img)')
+    parser.add_argument('--size', default='384x384',
+                        help='train: «ВхН» датасета под LatentBatch (по умолчанию родной размер заплаток)')
     ns = parser.parse_args()
     try:
         if ns.command == 'train':
-            comfy_gen_train(ns.workflow, ns.files, base=ns.base,
-                            caption=ns.persona, seed=ns.seed)
+            w, h = (int(v) for v in ns.size.lower().split('x'))
+            comfy_gen_train(ns.workflow, ns.files, base=ns.base, caption=ns.persona,
+                            seed=ns.seed, size=(w, h))
             print('обучено')
             raise SystemExit
         if not ns.out:
