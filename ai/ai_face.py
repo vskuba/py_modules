@@ -34,17 +34,20 @@ AI_FACE_MODES = {
     'head_neck': (0.5, 0.9, 0.45),  # голова целиком + шея
 }
 AI_FACE_FEATHER = 0.08   # радиус пера склейки как доля меньшей стороны выкройки
+AI_FACE_DET = (640, 640)  # размер детекции по умолчанию; крайний ракурс/мелкое
+                          # лицо ловится на меньшем det_size — зовёт другой вызов
 
 _apps = {}       # name -> (cv2, FaceAnalysis): тяжёлый стек грузится лениво, один раз
 _anchor_cache = {}
 
 
-def ai_face_score(path, anchor_path, name=AI_FACE_MODEL):
+def ai_face_score(path, anchor_path, name=AI_FACE_MODEL, det_size=AI_FACE_DET):
     """Косинус лица кадра против якоря; 0.0, если лицо не нашлось где-либо.
 
     На кадре несколько лиц — считается максимум по нормированным эмбедингам.
+    Крайний ракурс/мелкое лицо — зови с тем же `det_size`, что кроил.
     """
-    cv2, app = _face_app(name)
+    cv2, app = _face_app(name, det_size)
     faces = app.get(cv2.imread(str(path)))
     if not faces:
         return 0.0
@@ -54,14 +57,18 @@ def ai_face_score(path, anchor_path, name=AI_FACE_MODEL):
     return round(max(float(f.normed_embedding @ anchor) for f in faces), 3)
 
 
-def ai_face_crop(path, out, mode='face'):
+def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET):
     """Выкроить лицо из кадра в файл-заплатку; вернуть {'box','mode','out'}.
 
     Лиц несколько — берётся самое крупное. Коробка лица расширяется по режиму
     `mode` (ключ AI_FACE_MODES) и обрезается по краям кадра; заплатка — ровно
     эти пиксели, без ресайза: генератор платит только за них.
+
+    Крайний ракурс или мелкое лицо ловятся не на любом det_size: на крупном
+    детектор дробит лицо до несерьёзных пикселей и не берёт его — зовущий
+    передаёт `det_size` помельче.
     """
-    cv2, app = _face_app(AI_FACE_MODEL)
+    cv2, app = _face_app(AI_FACE_MODEL, det_size)
     img = cv2.imread(str(path))
     if img is None:
         raise ValueError(f'не прочитан кадр: {path}')
@@ -114,15 +121,15 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER):
     return {'out': str(out), 'box': [x0, y0, x1, y1]}
 
 
-def _face_app(name):
-    """Один FaceAnalysis на имя: модель тяжёлая, грузится раз."""
-    if name not in _apps:
+def _face_app(name, det=AI_FACE_DET):
+    """FaceAnalysis на пару (имя, det_size): модель тяжёлая, грузится раз."""
+    if (name, tuple(det)) not in _apps:
         import cv2  # vision-половина: тяжёлый стек только по требованию
         from insightface.app import FaceAnalysis
         app = FaceAnalysis(name=name, root=str(Path.home() / '.insightface'))
-        app.prepare(ctx_id=-1, det_size=(640, 640))
-        _apps[name] = (cv2, app)
-    return _apps[name]
+        app.prepare(ctx_id=-1, det_size=tuple(det))
+        _apps[(name, tuple(det))] = (cv2, app)
+    return _apps[(name, tuple(det))]
 
 
 def _anchor_embedding(anchor_path, cv2, app):
@@ -146,24 +153,28 @@ if __name__ == '__main__':
     parser.add_argument('--out', default='', help='куда: score-файл, чек не трогает')
     parser.add_argument('--mode', default='face', choices=list(AI_FACE_MODES),
                         help='crop: что входит в выкройку')
+    parser.add_argument('--det', default='',
+                        help='детекция «W,H» (например 320,320) для score/check/crop; '
+                             'по умолчанию AI_FACE_DET')
     parser.add_argument('--box', default='', help='paste: «x0,y0,x1,y1» из crop')
     ns = parser.parse_args()
+    det = tuple(int(v) for v in ns.det.split(',')) if ns.det else AI_FACE_DET
     try:
         if ns.command == 'score':
-            print(ai_face_score(ns.path, ns.anchor))
+            print(ai_face_score(ns.path, ns.anchor, det_size=det))
         elif ns.command == 'check':
             d = Path(ns.path)
             man = d / 'manifest.json'
             rows = json.loads(man.read_text())
             for r in rows:
-                r['score'] = ai_face_score(d / r['file'], ns.anchor)
+                r['score'] = ai_face_score(d / r['file'], ns.anchor, det_size=det)
                 r['pass'] = r['score'] >= ns.min
                 print(f"{r['file']} {r['scene']} {r['score']} {'ok' if r['pass'] else 'БРАК'}")
             man.write_text(json.dumps(rows, ensure_ascii=False, indent=1) + '\n')
         elif ns.command == 'crop':
             if not ns.out:
                 raise SystemExit('crop требует --out (файл-заплатка)')
-            r = ai_face_crop(ns.path, ns.out, mode=ns.mode)
+            r = ai_face_crop(ns.path, ns.out, mode=ns.mode, det_size=det)
             print(json.dumps(r, ensure_ascii=False))
         else:
             if not (ns.patch and ns.out and ns.box):
