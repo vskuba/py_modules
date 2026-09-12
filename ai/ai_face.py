@@ -31,7 +31,7 @@ def ai_face_score(path, anchor_path, name=AI_FACE_MODEL):
     """
     cv2, app = _face_app(name)
     faces = app.get(cv2.imread(str(path)))
-    if faces is None:
+    if not faces:
         return 0.0
     anchor = _anchor_embedding(anchor_path, cv2, app)
     if anchor is None:
