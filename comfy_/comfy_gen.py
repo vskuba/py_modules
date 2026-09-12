@@ -35,9 +35,9 @@ COMFY_GEN_TIMEOUT = 900.0
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
 COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 
-# Запас к `_mem` workflow: память на ферме общая с чужими процессами, живой
-# остаток скачет; не пускаем задачу, если не гарантированно влезает.
-COMFY_GEN_MEM_MARGIN = 10.0
+# Запас к `_mem` workflow: чужие процессы (рабочая чат-модель) уже учтены в
+# ram_free фермы — запас лишь на скачок живого остатка, не на соседей.
+COMFY_GEN_MEM_MARGIN = 4.0
 
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
@@ -67,21 +67,26 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     return rows
 
 
-def comfy_gen_train(workflow, files, *, base, caption, seed=1):
+def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=(512, 512)):
     """Обучить LoRA на пачке кадров; вернуть когда ферма закончит.
 
-    workflow — API-JSON с TrainLoraNode/LoraSave; files — локальные кадры
-    датасета: каждый грузится в input фермы и вшивается цепочкой
-    LoadImage→VAEEncode→LatentBatch в узел TrainLoraNode; caption — единая
-    подпись датасета (id персоны, не сцены).
+    workflow — API-JSON с TrainLoraNode/SaveLoRA; files — локальные кадры
+    датасета: каждый грузится в input фермы, ланцошем приводится к `size`
+    (LatentBatch складывает только одинаковые латенты — заплатки лиц разного
+    размера) и вшивается цепочкой LoadImage→ImageScale→VAEEncode→LatentBatch
+    в узел TrainLoraNode; caption — единая подпись датасета (id персоны,
+    не сцены).
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
     enc = None
     for k, f in enumerate(files):
-        lid, eid = str(101 + k), str(201 + k)
+        lid, rid, eid = str(101 + k), str(201 + k), str(401 + k)
         wf[lid] = {'_cls': 'LoadImage', 'inputs': {'image': comfy_gen_upload(f, base)}}
-        wf[eid] = {'_cls': 'VAEEncode', 'inputs': {'pixels': [lid, 0], 'vae': ['3', 0]}}
+        wf[rid] = {'_cls': 'ImageScale', 'inputs': {'image': [lid, 0],
+                    'upscale_method': 'lanczos', 'crop': 'disabled',
+                    'width': size[0], 'height': size[1]}}
+        wf[eid] = {'_cls': 'VAEEncode', 'inputs': {'pixels': [rid, 0], 'vae': ['3', 0]}}
         if enc is None:
             enc = [eid, 0]
         else:
@@ -232,5 +237,6 @@ if __name__ == '__main__':
                                         seed=ns.seed, n=ns.n, denoise=ns.denoise))
         for r in rows:
             print(r['file'], r['scene'], r['seed'])
-    except (ValueError, KeyError, OSError, RuntimeError) as err:
+    except (ValueError, KeyError, OSError, RuntimeError,
+            httpx.HTTPError) as err:
         raise SystemExit(f'ошибка: {err}')
