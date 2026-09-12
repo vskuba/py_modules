@@ -21,6 +21,21 @@ def logger_info(msg: str, **kwargs):
     logger.info(msg[:50000], extra={'trace_id': trace_id} | kwargs)
 
 
+def logger_exception(msg: str, exc: BaseException | None = None, **kwargs):
+    """Пишет исключение с трейсбеком. Зовут из-под `except`.
+
+    `logger_info` сохраняет только текст, а по тексту до причины не докопаться:
+    «'NoneType' object has no attribute 'get'» не показывает, где именно.
+    Исключение можно передать явно в `exc=` — когда обработка не текущая,
+    например исключение приехало из `asyncio.gather(..., return_exceptions=True)`.
+
+    Вне `except` вызов законен и пишется без трейсбека: `exc_info=True` там
+    находит `(None, None, None)` и просто молча ничего не добавляет.
+    """
+    logger.error(msg[:50000], exc_info=exc if exc is not None else True,
+                 extra={'trace_id': trace_id} | kwargs)
+
+
 def logging_init():
     # Устанавливаем минимальный уровень логирования для главного логгера
     logger.setLevel(level)
