@@ -27,12 +27,14 @@ GB10 с единой памятью: задача, влезшая в памят�
 import argparse
 import hashlib
 import json
+import math
 import subprocess
 import time
 import uuid
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 # Прогон тяжёлого workflow (flux + лоры) на ферме — минуты; ждём без стеснения.
 COMFY_GEN_TIMEOUT = 900.0
@@ -54,9 +56,9 @@ COMFY_GEN_MEM_MARGIN = 0.3
 # полный прогон на 96 заплатках (900–1500 шагов) идёт больше часа — прошлый
 # компас 3600 с не дожил бы до SaveLoRA.
 COMFY_GEN_TRAIN_TIMEOUT = 7200.0
-COMFY_GEN_TRAIN_SIZE = (384, 384)  # живые заплатки лиц 344×461…987×1342; flux1-dev-fp8
-                                   # на 768×1024 (0.79 МП/кадр) не влезает в память и падает
-                                   # torch.OutOfMemoryError при free 93.5 — см. docs/comfy_gen.md
+COMFY_GEN_TRAIN_BUDGET = (512, 512)  # бюджет площади кадра: патч сверх неё жался бы пропорционально;
+                                     # flux1-dev-fp8 на 768×1024 (0.79 МП/кадр) не влезает в память
+                                     # и падает torch.OutOfMemoryError — см. docs/comfy_gen.md
 COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
 COMFY_GEN_MODELS = '/opt/ComfyUI/models/loras'  # куда ложится лора-актив на ферме
 
@@ -113,16 +115,18 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     return rows
 
 
-def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TRAIN_SIZE,
+def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_TRAIN_BUDGET,
                     out='', farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
     """Обучить LoRA на пачке кадров; вернуть локальные пути готовых лор.
 
     workflow — API-JSON с TrainLoraNode/SaveLoRA; files — локальные кадры
-    датасета: каждый грузится в input фермы, ланцошем приводится к `size`
-    (LatentBatch складывает только одинаковые латенты — заплатки лиц разного
-    размера; родной размер заплатки диктует size, не 512² вслепую) и вшивается
-    цепочкой LoadImage→ImageScale→VAEEncode→LatentBatch в узел TrainLoraNode;
-    caption — единая подпись датасета (id персоны, не сцены).
+    датасета: каждый грузится в input фермы и вшивается цепочкой
+    LoadImage→ImageScale→VAEEncode списком рёбер в узел TrainLoraNode — узел
+    сам принимает список латентов РАЗНЫХ форм (multi-res; LatentBatch требовал
+    одинаковый размер и калечил нативные пропорции, а flux на 2D RoPE построен
+    на нативном аспекте). ImageScale лишь доводит габариты до кратно 16
+    (страйд VAE 8 × патч flux 2) и жался бы к бюджету площади `budget` только
+    сверхнего; caption — единая подпись датасета (id персоны, не сцены).
 
     Лора — актив проекта, ферма её не хранит: при заданных farm_ssh/
     farm_container свежий файл снимается с фермы в out (имя — из prefix
@@ -132,23 +136,22 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TR
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
     comfy_gen_free(base, farm_ssh, farm_container, need)
-    enc = None
+    edges = []
     for k, f in enumerate(files):
         lid, rid, eid = str(101 + k), str(201 + k), str(401 + k)
+        with Image.open(f) as im:
+            w, h = im.size
+        scale = min(1.0, math.sqrt(budget[0] * budget[1] / (w * h)))
         wf[lid] = {'_cls': 'LoadImage', 'inputs': {'image': comfy_gen_upload(f, base)}}
         wf[rid] = {'_cls': 'ImageScale', 'inputs': {'image': [lid, 0],
                     'upscale_method': 'lanczos', 'crop': 'disabled',
-                    'width': size[0], 'height': size[1]}}
+                    'width': max(16, round(w * scale / 16) * 16),
+                    'height': max(16, round(h * scale / 16) * 16)}}
         wf[eid] = {'_cls': 'VAEEncode', 'inputs': {'pixels': [rid, 0], 'vae': ['3', 0]}}
-        if enc is None:
-            enc = [eid, 0]
-        else:
-            wf[f'3{k:02d}'] = {'_cls': 'LatentBatch',
-                               'inputs': {'samples1': enc, 'samples2': [eid, 0]}}
-            enc = [f'3{k:02d}', 0]
+        edges.append([eid, 0])
     for n in wf.values():
         if n['_cls'] == 'TrainLoraNode':
-            n['inputs']['latents'] = enc
+            n['inputs']['latents'] = edges
     run = _wf_fill(json.loads(json.dumps(wf)),
                    {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
                     '__DENOISE__': '1.0'})
@@ -430,8 +433,9 @@ if __name__ == '__main__':
     parser.add_argument('--n', type=int, default=1, help='кадров на сцену')
     parser.add_argument('--denoise', type=float, default=1.0,
                         help='сила изменения кадра-основы (img2img)')
-    parser.add_argument('--size', default='384x384',
-                        help='train: «ВхН» датасета под LatentBatch (по умолчанию родной размер заплаток)')
+    parser.add_argument('--budget', default='512x512',
+                        help='train: бюджет площади «ВхН»: патч сверх него жался бы пропорционально, '
+                             'внутри — родной размер, кратно 16')
     parser.add_argument('--farm-ssh', default='',
                         help='ssh-хост фермы; с ним готовые файлы (лора, кадры) снимаются с фермы в --out и стираются там')
     parser.add_argument('--farm-container', default='',
@@ -449,9 +453,9 @@ if __name__ == '__main__':
                                              ns.farm_container):.1f} ГиБ")
             raise SystemExit
         if ns.command == 'train':
-            w, h = (int(v) for v in ns.size.lower().split('x'))
+            w, h = (int(v) for v in ns.budget.lower().split('x'))
             got = comfy_gen_train(ns.workflow, ns.files, base=ns.base,
-                                  caption=ns.persona, seed=ns.seed, size=(w, h),
+                                  caption=ns.persona, seed=ns.seed, budget=(w, h),
                                   out=ns.out, farm_ssh=ns.farm_ssh,
                                   farm_container=ns.farm_container)
             print(*(str(p) for p in got) or ['обучено'])
