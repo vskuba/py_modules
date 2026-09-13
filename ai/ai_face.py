@@ -57,11 +57,13 @@ def ai_face_score(path, anchor_path, name=AI_FACE_MODEL, det_size=AI_FACE_DET):
     return round(max(float(f.normed_embedding @ anchor) for f in faces), 3)
 
 
-def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET):
+def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
     """Выкроить лицо из кадра в файл-заплатку; вернуть {'box','mode','out'}.
 
-    Лиц несколько — берётся самое крупное. Коробка лица расширяется по режиму
-    `mode` (ключ AI_FACE_MODES) и обрезается по краям кадра; заплатка — ровно
+    Лиц несколько — с якорем берётся ближайшее к нему (кадр про неё, даже
+    если она не одна в кадре: чужое лицо рядом не должно уезжать в заплатку),
+    без якоря — самое крупное. Коробка лица расширяется по режиму `mode`
+    (ключ AI_FACE_MODES) и обрезается по краям кадра; заплатка — ровно
     эти пиксели, без ресайза: генератор платит только за них.
 
     Крайний ракурс или мелкое лицо ловятся не на любом det_size: на крупном
@@ -75,7 +77,11 @@ def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET):
     faces = app.get(img)
     if not faces:
         raise ValueError(f'лицо не найдено: {path}')
-    f = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+    emb = _anchor_embedding(anchor, cv2, app) if anchor and len(faces) > 1 else None
+    if emb is not None:
+        f = max(faces, key=lambda x: float(x.normed_embedding @ emb))
+    else:
+        f = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
     x0, y0, x1, y1 = (int(v) for v in f.bbox)
     dt, db, ds = AI_FACE_MODES[mode]
     fw, fh = x1 - x0, y1 - y0
@@ -147,7 +153,8 @@ if __name__ == '__main__':
     parser.add_argument('command', choices=['score', 'check', 'crop', 'paste'])
     parser.add_argument('path', help='файл (score/check/crop/paste-основа)')
     parser.add_argument('patch', nargs='?', default='', help='paste: файл-заплатка')
-    parser.add_argument('--anchor', default='', help='якорное лицо для score/check')
+    parser.add_argument('--anchor', default='',
+                        help='якорное лицо для score/check/crop (лицо в кадре — ближайшее к нему)')
     parser.add_argument('--min', type=float, default=0.5,
                         help='порог косинуса для pass (check)')
     parser.add_argument('--out', default='', help='куда: score-файл, чек не трогает')
@@ -195,8 +202,8 @@ if __name__ == '__main__':
                     if src.name in done:
                         continue
                     try:
-                        r = ai_face_crop(src, od / (src.stem + '.png'),
-                                         mode=ns.mode, det_size=det)
+                        r = ai_face_crop(src, od / (src.stem + '.png'), mode=ns.mode,
+                                         det_size=det, anchor=ns.anchor)
                     except ValueError as e:
                         print(f'пропущен {src.name}: {e}')
                         continue
@@ -206,7 +213,8 @@ if __name__ == '__main__':
                     print(src.name, r['box'])
                 mp.write_text(json.dumps(man, ensure_ascii=False, indent=1) + '\n')
             else:
-                r = ai_face_crop(ns.path, ns.out, mode=ns.mode, det_size=det)
+                r = ai_face_crop(ns.path, ns.out, mode=ns.mode, det_size=det,
+                                 anchor=ns.anchor)
                 print(json.dumps(r, ensure_ascii=False))
         else:
             if not (ns.patch and ns.out and ns.box):
