@@ -29,6 +29,7 @@ import hashlib
 import json
 import math
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -119,14 +120,14 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
                     out='', farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
     """Обучить LoRA на пачке кадров; вернуть локальные пути готовых лор.
 
-    workflow — API-JSON с TrainLoraNode/SaveLoRA; files — локальные кадры
-    датасета: каждый грузится в input фермы и вшивается цепочкой
-    LoadImage→ImageScale→VAEEncode списком рёбер в узел TrainLoraNode — узел
-    сам принимает список латентов РАЗНЫХ форм (multi-res; LatentBatch требовал
-    одинаковый размер и калечил нативные пропорции, а flux на 2D RoPE построен
-    на нативном аспекте). ImageScale лишь доводит габариты до кратно 16
-    (страйд VAE 8 × патч flux 2) и жался бы к бюджету площади `budget` только
-    сверхнего; caption — единая подпись датасета (id персоны, не сцены).
+    workflow — API-JSON с LoadImageTextDataSetFromFolder/MakeTrainingDataset/
+    TrainLoraNode/SaveLoRA; files — локальные кадры датасета: каждый грузится в
+    input-подпапку фермы с именем caption. Габариты доводятся до кратно 16
+    (страйд VAE 8 × патч flux 2), а сверх бюджета площади `budget` патч жался бы
+    пропорционально — иначе только родной размер: flux на 2D RoPE построен на
+    нативном аспекте, и узел сам ведёт список латентов разных форм (multi-res;
+    LatentBatch требовал одинаковый размер и калечил пропорции лиц).
+    caption — единая подпись датасета (id персоны, не сцены).
 
     Лора — актив проекта, ферма её не хранит: при заданных farm_ssh/
     farm_container свежий файл снимается с фермы в out (имя — из prefix
@@ -136,22 +137,22 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
     comfy_gen_free(base, farm_ssh, farm_container, need)
-    edges = []
-    for k, f in enumerate(files):
-        lid, rid, eid = str(101 + k), str(201 + k), str(401 + k)
-        with Image.open(f) as im:
-            w, h = im.size
-        scale = min(1.0, math.sqrt(budget[0] * budget[1] / (w * h)))
-        wf[lid] = {'_cls': 'LoadImage', 'inputs': {'image': comfy_gen_upload(f, base)}}
-        wf[rid] = {'_cls': 'ImageScale', 'inputs': {'image': [lid, 0],
-                    'upscale_method': 'lanczos', 'crop': 'disabled',
-                    'width': max(16, round(w * scale / 16) * 16),
-                    'height': max(16, round(h * scale / 16) * 16)}}
-        wf[eid] = {'_cls': 'VAEEncode', 'inputs': {'pixels': [rid, 0], 'vae': ['3', 0]}}
-        edges.append([eid, 0])
     for n in wf.values():
-        if n['_cls'] == 'TrainLoraNode':
-            n['inputs']['latents'] = edges
+        if n['_cls'] == 'LoadImageTextDataSetFromFolder':
+            n['inputs']['folder'] = caption
+    tmp_dir = Path(tempfile.mkdtemp())
+    for f in map(Path, files):
+        with Image.open(f) as im:
+            w0, h0 = im.size
+        scale = min(1.0, math.sqrt(budget[0] * budget[1] / (w0 * h0)))
+        w, h = max(16, round(w0 * scale / 16) * 16), max(16, round(h0 * scale / 16) * 16)
+        if (w, h) == (w0, h0):
+            comfy_gen_upload(f, base, subfolder=caption)
+        else:
+            q = tmp_dir / f.name
+            with Image.open(f) as im:
+                im.resize((w, h), Image.LANCZOS).save(q)
+            comfy_gen_upload(q, base, subfolder=caption)
     run = _wf_fill(json.loads(json.dumps(wf)),
                    {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
                     '__DENOISE__': '1.0'})
@@ -170,11 +171,12 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
     return got
 
 
-def comfy_gen_upload(path, base):
-    """Залить файл в input фермы через /upload/image; вернуть имя на ферме."""
+def comfy_gen_upload(path, base, subfolder=''):
+    """Залить файл в input фермы (в подпапку, если задана) через /upload/image."""
     p = Path(path)
     r = httpx.post(f'{base}/upload/image',
-                   files={'image': (p.name, p.read_bytes())}, timeout=60)
+                   files={'image': (p.name, p.read_bytes())},
+                   data={'subfolder': subfolder, 'overwrite': 'true'}, timeout=60)
     r.raise_for_status()
     name = r.json()['name']
     return name
