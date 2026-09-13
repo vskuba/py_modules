@@ -69,6 +69,7 @@ namespace-папок, которые проекты импортируют на�
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
+| `comfy_/comfy_gen.py` | `docs/comfy_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
@@ -187,6 +188,8 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_rec` | `record [out] [--seconds N --during «shell» --serial S]`, `frames [mp4] [--times 0.5,1.2 │ --fps 2 --out-dir DIR]`, `sheet [mp4] [--out --fps --cols --width]`, `compare <a> <b> --times 0.3,1.4 [--labels A,B --cell-width --out]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
+| `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
+| `comfy_.comfy_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
 | `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |

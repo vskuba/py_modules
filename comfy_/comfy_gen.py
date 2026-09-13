@@ -14,8 +14,10 @@ ssh: тот же код гоняет против любой ComfyUI по http. 
 проект хранит.
 
 GB10 с единой памятью: задача, влезшая в память только что, роняет всю ферму.
-Поэтому workflow несёт верхним ключом `_mem` — примерный аппетит в ГБ; драйвер
-не пошлёт /prompt, если на ферме свободно меньше `_mem` + запас.
+Поэтому workflow несёт верхним ключом `_mem` — примерный аппетит в ГБ. Память на
+ферме свободна всегда — что держат её прошлые прогоны, а не соседи: драйвер
+обязательно чистит её (`comfy_gen_free`) перед отправкой задачи, и лишь когда
+после чистки не хватает `_mem` + запас — отказывает, не отправляя.
 
 Кадры сходят с конвейера без EXIF (exiftool -all=) и с именами-хэшами, как
 файлы на сайте: sha256[:32].jpg. Каждая минута провала — seed+1000, это решает
@@ -35,6 +37,9 @@ import httpx
 # Прогон тяжёлого workflow (flux + лоры) на ферме — минуты; ждём без стеснения.
 COMFY_GEN_TIMEOUT = 900.0
 
+# Сколько ждать живого system_stats после перезапуска контейнера фермы.
+COMFY_GEN_FREE_WAIT = 180.0
+
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
 COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 
@@ -46,8 +51,9 @@ COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
 COMFY_GEN_MEM_MARGIN = 0.3
 
 # Обучение — те же шаги × градиент-аккумуляция прогонов, оно медленнее инференса:
-# ждём час, а не 900 с (проба на заплатке не дошла до SaveLoRA именно на 900 с).
-COMFY_GEN_TRAIN_TIMEOUT = 3600.0
+# полный прогон на 96 заплатках (900–1500 шагов) идёт больше часа — прошлый
+# компас 3600 с не дожил бы до SaveLoRA.
+COMFY_GEN_TRAIN_TIMEOUT = 7200.0
 COMFY_GEN_TRAIN_SIZE = (384, 384)  # живые заплатки лиц 344×461…987×1342; flux1-dev-fp8
                                    # на 768×1024 (0.79 МП/кадр) не влезает в память и падает
                                    # torch.OutOfMemoryError при free 93.5 — см. docs/comfy_gen.md
@@ -56,25 +62,33 @@ COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых фай
 # QA кадра с лицом: косинус против якоря не ниже порога — иначе прогон на seed+сдвиг.
 COMFY_GEN_QA_PASS = 0.5
 COMFY_GEN_QA_RETRY_SEED = 1000
+# Детекция сверки: лицо живого кадра — крупное, на det 640 детектор дробит его
+# до несерьёзных пикселей и не берёт (замер: на close-up 896×1152 детект 640 —
+# 0 лиц, 320 — лицо с det_score 0.85). 320 берёт и крупные, и мелкие лица.
+COMFY_GEN_QA_DET = (320, 320)
 
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                     anchor_input='', seed=1, n=1, denoise=1.0, qa_anchor='',
-                    farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
+                    qa_det=COMFY_GEN_QA_DET, farm_ssh='', farm_container='',
+                    remote=COMFY_GEN_REMOTE):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
-    Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor`: по порогу
-    `COMFY_GEN_QA_PASS` кадр проходит, иначе тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED.
+    Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor` детекцией
+    `qa_det` по порогу `COMFY_GEN_QA_PASS`, иначе тот же прогон на
+    seed+COMFY_GEN_QA_RETRY_SEED.
 
     workflow — путь к API-JSON; scene — запись scenes.json (id/prompt/nsfw/
     face_on); out — каталог куда класть кадры; base — адрес ComfyUI
     («http://хост:порт»); anchor — файл якорного лица, грузится в input фермы,
     его новое имя подставляется вместо __ANCHOR__ (workflow без якоря его
-    просто не содержит); seed — стартовый, i-й кадр — seed+i; `_mem` workflow
-    (ГБ) сверяется со свободной памятью фермы до отправки — не влезает — отказ.
+    просто не содержит); seed — стартовый, i-й кадр — seed+i; перед отправкой
+    память фермы чистится `comfy_gen_free` (кэш моделей держит цифру внизу) и
+    лишь потом `_mem` (ГБ) сверяется с свободным — не влезает — отказ.
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
+    comfy_gen_free(base, farm_ssh, farm_container, need)
     anchor_name = comfy_gen_upload(anchor, base) if anchor else ''
     if anchor_input:
         _wf_set(wf, anchor_input, anchor_name or str(anchor))
@@ -88,12 +102,12 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
         got = _run_one(body(seed + i), scene, out, base, seed + i, need,
                        farm_ssh=farm_ssh, farm_container=farm_container)
         if qa_anchor and scene.get('face_on', True):
-            _comfy_gen_qa(got, out, qa_anchor)
+            _comfy_gen_qa(got, out, qa_anchor, qa_det)
             if not all(r['pass'] for r in got):
-                got = _run_one(body(seed + i + COMFY_GEN_QA_RETRY_SEED), scene, out,
-                               base, seed + i + COMFY_GEN_QA_RETRY_SEED, need,
+                got = _run_one(body(seed + i + COMFY_GEN_QA_RETRY_SEED), scene,
+                               out, base, seed + i + COMFY_GEN_QA_RETRY_SEED, need,
                                farm_ssh=farm_ssh, farm_container=farm_container)
-                _comfy_gen_qa(got, out, qa_anchor)
+                _comfy_gen_qa(got, out, qa_anchor, qa_det)
         rows.extend(got)
     return rows
 
@@ -116,6 +130,7 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, size=COMFY_GEN_TR
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
+    comfy_gen_free(base, farm_ssh, farm_container, need)
     enc = None
     for k, f in enumerate(files):
         lid, rid, eid = str(101 + k), str(201 + k), str(401 + k)
@@ -161,6 +176,49 @@ def comfy_gen_upload(path, base):
     return name
 
 
+def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0):
+    """Перед каждой задачей: освободить память фермы, вернуть свободно (ГиБ).
+
+    Память на GB10 свободна всегда — цифра ниже есть только потому, что ComfyUI
+    держит модели в кэше с прошлых прогонов: POST /free их выгружает до `need`.
+    Выгрузила не всё (torch пул не доедает) или ручки нет вовсе — тот же
+    инструмент перезапускает контейнер (farm_ssh/farm_container) и ждёт живого
+    system_stats; ждать «само освободится» нечего.
+    """
+    try:
+        r = httpx.post(f'{base}/free', json={'unload_models': True,
+                                             'free_memory': True}, timeout=30)
+        ok = r.is_success
+    except httpx.TransportError:
+        ok = False
+    if ok:
+        free = _gen_alive(base)
+        if free >= need + COMFY_GEN_MEM_MARGIN:
+            return free
+    if not farm_ssh:
+        raise RuntimeError(f'ферма {base} кэш не выгрузила'
+                           + (f': свободно {free:.0f} ГиБ' if ok else ' и не ответила')
+                           + f', задаче надо ≥{need + COMFY_GEN_MEM_MARGIN:.0f} — не отправляю')
+    subprocess.run(['ssh', farm_ssh, f'docker restart {farm_container}'],
+                   capture_output=True, check=True)
+    return _gen_alive(base)
+
+
+def _gen_alive(base):
+    """Ждать живого приложения фермы (system_stats отвечает) и вернуть ГиБ свободно."""
+    deadline = time.monotonic() + COMFY_GEN_FREE_WAIT
+    while True:
+        try:
+            r = httpx.get(f'{base}/system_stats', timeout=10)
+            if r.is_success:
+                return r.json()['system']['ram_free'] / 2**30
+        except httpx.TransportError:
+            pass
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'ферма {base} не ожила за {COMFY_GEN_FREE_WAIT:.0f} с')
+        time.sleep(2)
+
+
 def _wf_fill(node, values):
     """Заменить строковые значения-маркеры (и подстроки внутри) по всему JSON."""
 
@@ -188,9 +246,10 @@ def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT,
              farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
     """Один запуск /prompt -> /history -> /view; кадры на диск, строки манифеста.
 
-    need>0 — ГБ, которые задача приблизительно съест: не влезает в свободную
-    память фермы вместе с запасом — отказ, не отправляя (единая память GB10,
-    переполнение валит всю ферму). Приложение фермы перезапускается посреди
+    need>0 — ГБ, которые задача приблизительно съест: память уже выгружена
+    (`comfy_gen_free` выше по стеку) и этого всё равно не влезает вместе с
+    запасом — отказ, не отправляя (единая память GB10, переполнение валит всю
+    ферму). Приложение фермы перезапускается посреди
     прогона и стирает свой queue/history — граф досылается заново (_gen_await),
     прогон доходит до конца, а не падает с Connection refused."""
     if need:
@@ -235,9 +294,15 @@ def _gen_await(body, base, deadline, timeout):
                 h = httpx.get(f'{base}/history/{pid}', timeout=30).json()
                 if pid in h:
                     entry = h[pid]
-                    if entry.get('status', {}).get('status_str') != 'success':
+                    st = entry.get('status', {})
+                    if st.get('status_str') != 'success':
+                        msgs = st.get('messages', [])
+                        if any(m[0] == 'execution_interrupted' and
+                               not m[1].get('exception_message') for m in msgs):
+                            # сняли с очереди чужой рукой, без нашей ошибки — дослать
+                            raise _GenLost(f'ферма прервала прогон {pid[:8]}')
                         raise RuntimeError(f'workflow {pid}: '
-                                           f'{json.dumps(entry.get("status"), ensure_ascii=False)[:400]}')
+                                           f'{json.dumps(st, ensure_ascii=False)[:400]}')
                     return entry
                 q = httpx.get(f'{base}/queue', timeout=30).json()
                 if pid not in [it[1] for it in q['queue_running'] + q['queue_pending']]:
@@ -271,7 +336,7 @@ def _save(data, ext, out, scene, seed):
     return row
 
 
-def _comfy_gen_qa(rows, out, anchor):
+def _comfy_gen_qa(rows, out, anchor, det=COMFY_GEN_QA_DET):
     """Скорить кадры с лицом против якоря: score/pass — в строки и в манифест.
 
     Кроит лицо кропом и скорит тем же det, каким кроил — та же цепочка, чем
@@ -287,8 +352,8 @@ def _comfy_gen_qa(rows, out, anchor):
         for r in rows:
             crop = Path(td) / (Path(r['file']).stem + '.png')
             try:
-                ai_face_crop(Path(out) / r['file'], crop)
-                s = ai_face_score(crop, anchor)
+                ai_face_crop(Path(out) / r['file'], crop, det_size=tuple(det))
+                s = ai_face_score(crop, anchor, det_size=tuple(det))
             except (ValueError, OSError):
                 s = 0.0  # лицо не нашлось — это провал кадра, не авария батча
             ok = s >= COMFY_GEN_QA_PASS
@@ -320,9 +385,10 @@ def _farm_pull(host, container, remote, rel, out, name):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Прогонить workflow персоны над сценой (или всеми сценами).')
-    parser.add_argument('command', choices=['run', 'train'],
-                        help='run — гонять сцены; train — обучить лору на файлах')
-    parser.add_argument('--workflow', required=True, help='API-JSON workflow')
+    parser.add_argument('command', choices=['free', 'run', 'train'],
+                        help='free — выгрузить кэш моделей фермы; run — гонять '
+                             'сцены; train — обучить лору на файлах')
+    parser.add_argument('--workflow', default='', help='API-JSON workflow')
     parser.add_argument('--scenes', default='',
                         help='scenes.json каталога персоны (список сцен)')
     parser.add_argument('--scene', default='', help='id одной сцены; пусто — все')
@@ -334,6 +400,9 @@ if __name__ == '__main__':
                         help='«узел.вход» для workflow без маркера __ANCHOR__')
     parser.add_argument('--qa-anchor', default='',
                         help='лицо-якорь для score/pass; провал — тот же прогон на seed+1000')
+    parser.add_argument('--qa-det', default='',
+                        help=f'детекция «W,H» для score/pass (пусто — '
+                             f'{COMFY_GEN_QA_DET[0]},{COMFY_GEN_QA_DET[1]})')
     parser.add_argument('--base', default='http://127.0.0.1:8188', help='адрес ComfyUI')
     parser.add_argument('--out', default='', help='каталог персоны под кадры (run)')
     parser.add_argument('--seed', type=int, default=1)
@@ -348,6 +417,10 @@ if __name__ == '__main__':
                         help='именование контейнера ComfyUI на ферме')
     ns = parser.parse_args()
     try:
+        if ns.command == 'free':
+            print(f"свободно {comfy_gen_free(ns.base, ns.farm_ssh,
+                                             ns.farm_container):.1f} ГиБ")
+            raise SystemExit
         if ns.command == 'train':
             w, h = (int(v) for v in ns.size.lower().split('x'))
             got = comfy_gen_train(ns.workflow, ns.files, base=ns.base,
@@ -363,13 +436,15 @@ if __name__ == '__main__':
         scenes = json.loads(Path(ns.scenes).read_text())
         if ns.scene:
             scenes = [s for s in scenes if s['id'] == ns.scene]
+        qa_det = (tuple(int(v) for v in ns.qa_det.split(','))
+                  if ns.qa_det else COMFY_GEN_QA_DET)
         rows = []
         for s in scenes:
             rows.extend(comfy_gen_batch(ns.workflow, s, ns.out, base=ns.base,
                                         persona=ns.persona, anchor=ns.anchor or None,
                                         anchor_input=ns.anchor_input,
                                         seed=ns.seed, n=ns.n, denoise=ns.denoise,
-                                        qa_anchor=ns.qa_anchor,
+                                        qa_anchor=ns.qa_anchor, qa_det=qa_det,
                                         farm_ssh=ns.farm_ssh,
                                         farm_container=ns.farm_container))
         for r in rows:
