@@ -27,11 +27,6 @@ COMFYUI_TRAINER_TIMEOUT = 36000.0  # 4000 шагов на запечатках �
 COMFYUI_TRAINER_MEM_MARGIN = 4.0   # ГиБ запаса: на живой остаток соседей-процессов
 
 
-def _sh(host, container, sh):
-    return subprocess.run(['ssh', host, f'docker exec {container} sh -c "{sh}"'],
-                          capture_output=True, text=True, check=True, errors='replace').stdout
-
-
 def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
                          lr, steps, seed, out, farm_ssh, farm_container,
                          toolkit='/opt/ComfyUI/tools/ai-toolkit',
@@ -112,6 +107,11 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
                                f'{timeout or COMFYUI_TRAINER_TIMEOUT} с')
         time.sleep(30)
     return _pull(farm_ssh, farm_container, remote, out, name)
+
+
+def _sh(host, container, sh):
+    return subprocess.run(['ssh', host, f'docker exec {container} sh -c "{sh}"'],
+                          capture_output=True, text=True, check=True, errors='replace').stdout
 
 
 def _pull(host, container, remote, out, name):
