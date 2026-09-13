@@ -78,6 +78,7 @@ namespace-папок, которые проекты импортируют на�
 | `auth_/` | `docs/auth_rules.md` |
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
+| `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
 
 Полное оглавление — `docs/readme.md`. Три файла оттуда к правкам здесь отношения не
 имеют, они про устройство проекта-потребителя: `new_project.md`, `frontend_rules.md`,
@@ -204,6 +205,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `image_.image_pair` | `diff-rows <a> <b> [--thresh --axis --rect]`, `splice <base> <patch> --out --pos [--axis --quality --method]` |
 | `apk_.apk_` | `entries <apk> [glob]`, `dump <apk> [подстрока] [--config default│'']`, `xml <apk> <запись>`, `pathdata <apk> <запись>`, `extract <apk> <запись> [--out-dir --png]` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
+| `comfy_.comfy_gen` | `run`/`train` `--workflow [--scenes --scene --persona --anchor --qa-anchor --seed --n --denoise --size --out --base --farm-ssh --farm-container]` |
+| `comfyui_trainer.comfyui_trainer_lora` | `--name --dataset --base --vae [--rank --alpha --lr --steps --seed --out]` |
+| `comfyui_trainer.comfyui_trainer_base` | `<монолит.safetensors> <каталог> [--python --repo --farm-ssh --farm-container]` → diffusers-папка базы |
+| `comfyui_trainer.comfyui_trainer_toolkit` | `[--toolkit --base]` → вердикт «трейнер цел» / что слетело |
 
 Список сверяется командой — таблица устаревает быстрее кода:
 
