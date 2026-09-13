@@ -58,6 +58,7 @@ COMFY_GEN_TRAIN_SIZE = (384, 384)  # живые заплатки лиц 344×461
                                    # на 768×1024 (0.79 МП/кадр) не влезает в память и падает
                                    # torch.OutOfMemoryError при free 93.5 — см. docs/comfy_gen.md
 COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
+COMFY_GEN_MODELS = '/opt/ComfyUI/models/loras'  # куда ложится лора-актив на ферме
 
 # QA кадра с лицом: косинус против якоря не ниже порога — иначе прогон на seed+сдвиг.
 COMFY_GEN_QA_PASS = 0.5
@@ -202,6 +203,25 @@ def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0):
     subprocess.run(['ssh', farm_ssh, f'docker restart {farm_container}'],
                    capture_output=True, check=True)
     return _gen_alive(base)
+
+
+def comfy_gen_model(files, base, farm_ssh, farm_container, dest=COMFY_GEN_MODELS):
+    """Лору-актив проекта — в models фермы, контейнер рестартнуть и ждать живого.
+
+    LoraLoader ключуется путём: свежий файл под тем же именем без рестарта
+    молча генерит прежним лицом (граф тот же, манифест разницы не видит) —
+    поэтому именно рестарт контейнера, а не только загрузка файла."""
+    for f in files:
+        name = Path(f).name
+        subprocess.run(['scp', str(f), f'{farm_ssh}:/tmp/{name}'],
+                       capture_output=True, check=True)
+        subprocess.run(['ssh', farm_ssh, f'docker cp /tmp/{name} {farm_container}:'
+                        f'{dest}/{name} && rm /tmp/{name}'],
+                       capture_output=True, text=True, check=True)
+    subprocess.run(['ssh', farm_ssh, f'docker restart {farm_container}'],
+                   capture_output=True, text=True, check=True)
+    _gen_alive(base)
+    return [Path(f).name for f in files]
 
 
 def _gen_alive(base):
@@ -385,16 +405,17 @@ def _farm_pull(host, container, remote, rel, out, name):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Прогонить workflow персоны над сценой (или всеми сценами).')
-    parser.add_argument('command', choices=['free', 'run', 'train'],
-                        help='free — выгрузить кэш моделей фермы; run — гонять '
-                             'сцены; train — обучить лору на файлах')
+    parser.add_argument('command', choices=['free', 'model', 'run', 'train'],
+                        help='free — выгрузить кэш моделей фермы; model — залить '
+                             'лору-актив в models фермы и рестартнуть её; run — '
+                             'гонять сцены; train — обучить лору на файлах')
     parser.add_argument('--workflow', default='', help='API-JSON workflow')
     parser.add_argument('--scenes', default='',
                         help='scenes.json каталога персоны (список сцен)')
     parser.add_argument('--scene', default='', help='id одной сцены; пусто — все')
     parser.add_argument('--persona', default='', help='префикс промпта (имя персоны)')
     parser.add_argument('--files', nargs='*', default=[],
-                        help='кадры датасета для train')
+                        help='кадры датасета для train; лора-актив для model')
     parser.add_argument('--anchor', default='', help='файл якоря, если workflow ждёт')
     parser.add_argument('--anchor-input', default='',
                         help='«узел.вход» для workflow без маркера __ANCHOR__')
@@ -417,6 +438,12 @@ if __name__ == '__main__':
                         help='именование контейнера ComfyUI на ферме')
     ns = parser.parse_args()
     try:
+        if ns.command == 'model':
+            for name in comfy_gen_model(ns.files, ns.base, ns.farm_ssh,
+                                        ns.farm_container):
+                print(name)
+            print('на ферме')
+            raise SystemExit
         if ns.command == 'free':
             print(f"свободно {comfy_gen_free(ns.base, ns.farm_ssh,
                                              ns.farm_container):.1f} ГиБ")
