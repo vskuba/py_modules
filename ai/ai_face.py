@@ -167,15 +167,47 @@ if __name__ == '__main__':
             man = d / 'manifest.json'
             rows = json.loads(man.read_text())
             for r in rows:
-                r['score'] = ai_face_score(d / r['file'], ns.anchor, det_size=det)
-                r['pass'] = r['score'] >= ns.min
-                print(f"{r['file']} {r['scene']} {r['score']} {'ok' if r['pass'] else 'БРАК'}")
+                # патч-манифест: меряем заплатку; кадровый — сам кадр
+                target = d / r.get('patch', r['file'])
+                try:
+                    r['score'] = ai_face_score(target, ns.anchor, det_size=det)
+                    r['pass'] = r['score'] >= ns.min
+                except Exception as e:
+                    r['score'] = None
+                    print(f'пропущен {target.name}: {e}')
+                    continue
+                print(f"{target.name} {r.get('scene', '')} {r['score']} "
+                      f"{'ok' if r['pass'] else 'БРАК'}".rstrip())
             man.write_text(json.dumps(rows, ensure_ascii=False, indent=1) + '\n')
         elif ns.command == 'crop':
             if not ns.out:
-                raise SystemExit('crop требует --out (файл-заплатка)')
-            r = ai_face_crop(ns.path, ns.out, mode=ns.mode, det_size=det)
-            print(json.dumps(r, ensure_ascii=False))
+                raise SystemExit('crop требует --out (файл-заплатка или каталог)')
+            if Path(ns.path).is_dir():
+                # пачка: все кадры каталога в заплатки, строки — в out/manifest.json
+                d, od = Path(ns.path), Path(ns.out)
+                od.mkdir(parents=True, exist_ok=True)
+                mp = od / 'manifest.json'
+                man = json.loads(mp.read_text()) if mp.exists() else []
+                done = {r['file'] for r in man}
+                for src in sorted(p for p in d.iterdir()
+                                  if p.suffix.lower() in ('.jpg', '.jpeg', '.png')
+                                  and p.stem != 'manifest'):
+                    if src.name in done:
+                        continue
+                    try:
+                        r = ai_face_crop(src, od / (src.stem + '.png'),
+                                         mode=ns.mode, det_size=det)
+                    except ValueError as e:
+                        print(f'пропущен {src.name}: {e}')
+                        continue
+                    r['patch'] = Path(r.pop('out')).name
+                    r['file'] = src.name
+                    man.append(r)
+                    print(src.name, r['box'])
+                mp.write_text(json.dumps(man, ensure_ascii=False, indent=1) + '\n')
+            else:
+                r = ai_face_crop(ns.path, ns.out, mode=ns.mode, det_size=det)
+                print(json.dumps(r, ensure_ascii=False))
         else:
             if not (ns.patch and ns.out and ns.box):
                 raise SystemExit('paste требуют заплатку, --out и --box из crop')
