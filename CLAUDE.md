@@ -70,6 +70,7 @@ namespace-папок, которые проекты импортируют на�
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
 | `comfy_/comfy_gen.py` | `docs/comfy_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
+| `comfy_/comfy_collection.py` | `docs/comfy_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
@@ -206,6 +207,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `apk_.apk_` | `entries <apk> [glob]`, `dump <apk> [подстрока] [--config default│'']`, `xml <apk> <запись>`, `pathdata <apk> <запись>`, `extract <apk> <запись> [--out-dir --png]` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 | `comfy_.comfy_gen` | `run`/`train` `--workflow [--scenes --scene --persona --anchor --qa-anchor --seed --n --denoise --size --out --base --farm-ssh --farm-container]` |
+| `comfy_.comfy_collection` | `<каталог персоны>` → вердикт «коллекция закрыла N/M; добить seed+1000: …; кадров нет вовсе: …» |
 | `comfyui_trainer.comfyui_trainer_lora` | `--name --dataset --base --vae [--rank --alpha --lr --steps --seed --out]` |
 | `comfyui_trainer.comfyui_trainer_base` | `<монолит.safetensors> <каталог> [--python --repo --farm-ssh --farm-container]` → diffusers-папка базы |
 | `comfyui_trainer.comfyui_trainer_toolkit` | `[--toolkit --base]` → вердикт «трейнер цел» / что слетело |
