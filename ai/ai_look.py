@@ -99,6 +99,15 @@ def ai_look_fit(patch, probe, out, region=None):
     масштаба (обратная совместимость). `region` (x0,y0,x1,y1) — где мерить
     каналы патча (например, полоса кожи тела под лицом); без него — центральное
     ядро кадра.
+
+    Аффина применяется к пикселю ПРОПОРЦИОНАЛЬНО его «лицевости», а не ковром:
+    w = клип((D − |x − mu_g|)/(D − d_lo)), где D = |mu_s − mu_g| — величина
+    самого сдвига, d_lo = разброс ядра (тень и блик лица — тоже лицо). Лицо
+    (d≈0) получает весь сдвиг; кожа тела внутри патча (d≈D) — почти ноль, она
+    и так уже тона цели; волосы и фон (d≫D) — ноль, они и так совпадают с
+    оригиналом. Ковёр был причиной «синих квадратов» (замер 2026-09-14: фон вне
+    бокса [221,215,212] против сдвинутого внутри [214,221,250] — шаг B+38 по
+    периметру). Делимость на 0 при D≈0: сдвигать нечего, вес не нужен.
     """
     import cv2
     import numpy as np
@@ -120,7 +129,18 @@ def ai_look_fit(patch, probe, out, region=None):
                         AI_LOOK_FIT_CLIP[0], AI_LOOK_FIT_CLIP[1])
     else:
         ratio = np.ones(3, 'float32')
-    img = np.clip((img.astype('float32') - mu_g) * ratio + mu_s, 0, 255).astype('uint8')
+    f = img.astype('float32')
+    shift = mu_s - mu_g
+    D = float(np.linalg.norm(shift))
+    d_lo = float(np.linalg.norm(sd_g))
+    x = f - mu_g
+    if D > 1:
+        # вес пикселя: 1 на лице (d≈0), 0 на коже тела (d≈D) и на волосах/фоне
+        d = np.linalg.norm(x, axis=2)
+        w = np.clip((D - d) / max(D - d_lo, 1.0), 0, 1)[..., None]
+    else:
+        w = 1.0
+    img = np.clip(f + (x * (ratio - 1) + shift) * w, 0, 255).astype('uint8')
     from pathlib import Path
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
