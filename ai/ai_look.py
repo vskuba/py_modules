@@ -88,7 +88,7 @@ def ai_look_prompt(probe):
     return ', ' + ', '.join(bits)
 
 
-def ai_look_fit(patch, probe, out):
+def ai_look_fit(patch, probe, out, region=None):
     """Подтянуть цвет заплатки к замерам оригинала; {'before','after','moved'}.
 
     Комящая заплатка помнит цвет датасета: кожа светлее, каналы растянуты не
@@ -96,7 +96,9 @@ def ai_look_fit(patch, probe, out):
     mean_src по тому же межквартильному ядру, что и probe: и сдвиг, и масштаб
     канала; множитель запутан клипом [AI_LOOK_FIT_CLIP] — на плоской заплатке
     std_gen≈0 не должен разгонять шум. Без probe['skin_std'] — сдвиг, без
-    масштаба (обратная совместимость).
+    масштаба (обратная совместимость). `region` (x0,y0,x1,y1) — где мерить
+    каналы патча (например, полоса кожи тела под лицом); без него — центральное
+    ядро кадра.
     """
     import cv2
     import numpy as np
@@ -104,9 +106,10 @@ def ai_look_fit(patch, probe, out):
     if img is None:
         raise ValueError(f'не прочитана заплатка: {patch}')
     h, w = img.shape[:2]
-    core = _look_core(img[int(h * 0.3):int(h * 0.85),
-                          int(w * 0.25):int(w * 0.75)].reshape(-1, 3)
-                      .astype('float32'))
+    sub = (img[int(region[1]):int(region[3]), int(region[0]):int(region[2])]
+           if region else
+           img[int(h * 0.3):int(h * 0.85), int(w * 0.25):int(w * 0.75)])
+    core = _look_core(sub.reshape(-1, 3).astype('float32'))
     before = [round(float(v), 1) for v in np.median(core, axis=0)[::-1]]
     mu_g, sd_g = core.mean(0), core.std(0)
     mu_s = np.array(probe['skin'][::-1], 'float32')

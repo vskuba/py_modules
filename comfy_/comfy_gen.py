@@ -191,7 +191,8 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
     межквартильный тон кожи, свет, доля волос; ai_face_crop с `mode` тут
     только меряет бокс), seed и приёмка цифрами. Сшивка — в диспетчере: выход
     графа кроем по боксу, каналы доводим аффинной подгонкой (ai_look_fit) до
-    межквартильного тона probe и вшиваем пером по всей области, которую граф
+    межквартильного тона кожи тела кадра (не лица оригинала — оно чужое) и
+    вшиваем пером по всей области, которую граф
     перерисовал, — вне неё кадр цел байт в байт, скачок шва меряет
     ai_look_integrity. Частотную сшивку с кадром замер отверг: лицо в исходнике
     чужое, и мелкая текстура его тоже чужая (0.537 против 0.363 при hf=1,
@@ -214,6 +215,14 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             if f and f.is_dir():  # каталог патчей: якорь — самый чистый под ракурс кадра
                 f = Path(ai_look_anchor(sorted(f.glob('*.png')), p)['face'])
             probe = ai_look_probe(p, box)
+            # цель подгонки — не лицо оригинала (оно чужое и своего тона), а кожа
+            # тела кадра под выкройкой: лицо обяз совпасть с шеей/плечами, иначе
+            # «жёлтое лицо» (замер 12677b19: лицо [199,140,118] против тела
+            # [204,169,152] — по синему каналу минус 34 единицы)
+            h_ = Image.open(p).size[1]
+            strip = (box[0], box[3], box[2],
+                     min(h_, box[3] + int((box[3] - box[1]) * 0.45)))
+            target = ai_look_probe(p, strip)
             parts = ai_look_parts(p, box)
             prompt = persona + ai_look_prompt(probe)
             got = comfy_gen_batch(workflow, {'id': p.stem, 'prompt': prompt,
@@ -227,13 +236,16 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             man = json.loads(mp.read_text()) if mp.exists() else []
             for r in got:
                 gen = Path(out) / r['file']
-                # сшивка в диспетчере: генерация на всей области, которую граф
-                # перерисовал (бокс ≈ кроп ноды), каналы подтянуты к замерам;
-                # вне бокса кадр цел байт в байт.
+                # сшивка в диспетчере: выход графа кроем по боксу, каналы
+                # доводим до тона КОЖИ ТЕЛА кадра (не лица оригинала — оно
+                # чужое и своего тона), вшиваем маской по контуру лица (kps) с
+                # широким пером: аффина везде одинакова и разницу лицо↔тело не
+                # уменьшает (замер: сдвиг всего кадра оставляет разницу [4,18,53]
+                # и красит фон), а прямоугольное перо даёт видимый квадрат.
                 patch = Path(td) / (p.stem + '-patch.png')
                 Image.open(gen).crop(tuple(box)).save(patch)
-                fit = ai_look_fit(patch, probe, patch)
-                ai_face_paste(p, patch, gen, box)
+                fit = ai_look_fit(patch, target, patch)
+                ai_face_paste(p, patch, gen, box, feather=0.2)
                 r['gen_score'] = r['score']  # что дал граф до диспетчерской склейки
                 r['fit'] = {k: fit[k] for k in ('before', 'after')}
                 r['integrity'] = ai_look_integrity(gen, p, box)
