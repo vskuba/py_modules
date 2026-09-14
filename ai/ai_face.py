@@ -34,6 +34,10 @@ AI_FACE_MODES = {
     'head_neck': (0.5, 0.9, 0.45),  # голова целиком + шея
 }
 AI_FACE_FEATHER = 0.08   # радиус пера склейки как доля меньшей стороны выкройки
+AI_FACE_HF = 1           # один мельчайший уровень пирамиды берётся текстуры кадра
+                        # (зерно/поры, единицы пикселей): на двух (hf=2) средние
+                        # полосы чужого лица съедают сходство (замер 2026-09-14:
+                        # 0.628 при hf=1 против 0.12 при hf=2)
 AI_FACE_DET = (640, 640)  # размер детекции по умолчанию; крайний ракурс/мелкое
                           # лицо ловится на меньшем det_size — зовёт другой вызов
 
@@ -95,7 +99,8 @@ def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
             'kps': [[round(float(a), 1), round(float(b), 1)] for a, b in f.kps]}
 
 
-def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None):
+def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
+                  hf=0):
     """Вшить заплатку в кадр пером по форме лица; вернуть {'out','box'}.
 
     Маска — эллипс по пяти точкам детектора (скулы, подбородок, лоб), а не
@@ -103,8 +108,11 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None):
     остаются оригинальные), край пера размывается на feather*минус-сторона.
     Склейка через лапласианову пирамиду (3 уровня): цветовая растяжка идёт по
     всему перу, а не по одному краю, — скачок шва меряет ai_look_integrity.
-    Без `kps` (абсолютные координаты глаз/рта выкройки) — скруглённый
-    прямоугольник по боксу.
+    `hf` > 0 — частотная склейка: `hf` самых мелких уровней пирамиды берут
+    текстуру кадра (поры, ресницы, зерно — байт в байт оригинал), от заплатки
+    остаётся только низкочастотная геометрия; hf=0 — заплатка на всех уровнях,
+    как было. Без `kps` (абсолютные координаты глаз/рта выкройки) —
+    скруглённый прямоугольник по боксу.
     """
     import cv2
     import numpy as np
@@ -149,7 +157,9 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None):
     r = lb[-1][1] * gm[-1][..., None] + lb[-1][0] * (1 - gm[-1][..., None])
     for lvl in range(len(lb) - 2, -1, -1):
         bb, pp = lb[lvl]
-        g = gm[lvl][..., None]
+        # hf самых мелких уровней — без маски: их остаток даёт сам кадр (HF);
+        # заплатка доходит только до грубых уровней (LF — геометрия и цвет).
+        g = np.zeros_like(gm[lvl][..., None]) if lvl < hf else gm[lvl][..., None]
         r = fit(cv2.pyrUp(r), bb.shape) + pp * g + bb * (1 - g)
     base_img[y0:y1, x0:x1] = r
     out = Path(out)
@@ -195,6 +205,9 @@ if __name__ == '__main__':
                         help='детекция «W,H» (например 320,320) для score/check/crop; '
                              'по умолчанию AI_FACE_DET')
     parser.add_argument('--box', default='', help='paste: «x0,y0,x1,y1» из crop')
+    parser.add_argument('--hf', type=int, default=0,
+                        help='paste: сколько мелких уровней пирамиды берут текстуру '
+                             'кадра (частотная склейка LF(заплатка)+HF(кадр); 0 — нет)')
     ns = parser.parse_args()
     det = tuple(int(v) for v in ns.det.split(',')) if ns.det else AI_FACE_DET
     try:
@@ -251,7 +264,7 @@ if __name__ == '__main__':
             if not (ns.patch and ns.out and ns.box):
                 raise SystemExit('paste требуют заплатку, --out и --box из crop')
             r = ai_face_paste(ns.path, ns.patch, ns.out,
-                              [int(v) for v in ns.box.split(',')])
+                              [int(v) for v in ns.box.split(',')], hf=ns.hf)
             print(json.dumps(r, ensure_ascii=False))
     except (ValueError, KeyError, FileNotFoundError) as err:
         raise SystemExit(f'ошибка: {err}')

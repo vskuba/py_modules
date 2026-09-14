@@ -184,26 +184,31 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                    face='', farm_ssh='', farm_container=''):
     """Натянуть лицо лоры на готовые фото; вернуть строки манифеста по фото.
 
-    Драйвер — только диспетчер: весь крой, анатомическая маска, денуаз и
-    блендинг делает FaceDetailer внутри графа (ракурс фото и есть ракурс —
-    кадр в граф уходит целым, кроит и вшивает обратно сама нода по bbox
-    детектора). Здесь лишь: якорь персоны под ракурс кадра (ai_look_anchor по
-    каталогу патчей — самый чистый под этот ракурс), промпт из замеров кадра
-    (ai_look_probe/ai_look_parts — тон кожи, свет, доля волос; ai_face_crop с
-    `mode` тут только меряет бокс, а не кроит под генерацию), seed и приёмка
-    цифрами: лицо готового кадра скорится против якоря `face` детекцией
-    `qa_det`, провал — тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED внутри
-    comfy_gen_batch; денуазы стадий — __DENOISE__ (лицо) и __DETAIL__ (текстура
-    вторым FaceDetailer). Замеры, стадии и вердикты — в строке манифеста.
+    Драйвер — только диспетчер: крой и гену внутри графа делает FaceDetailer
+    (кадр в граф уходит целым, кроит и вшивает сама нода). Здесь лишь: якорь
+    персоны под ракурс кадра (ai_look_anchor — гибрид косинуса к лицу кадра и
+    к центроиду датасета × ракурс × цветность), замеры кадра (ai_look_probe —
+    межквартильный тон кожи, свет, доля волос; ai_face_crop с `mode` тут
+    только меряет бокс), seed и приёмка цифрами. Сшивка — частотная и в
+    диспетчере: выход графа кроем по боксу, каналы доводим аффинной подгонкой
+    (ai_look_fit) до межквартильного тона probe, вшиваем обратно так, чтобы от
+    генерации остались только низкие частоты (геометрия), а пора, ресницы и
+    зерно — байт в байт из кадра (ai_face_paste hf=AI_FACE_HF); вне выкройки
+    кадр цел байт в байт, скачок шва меряет ai_look_integrity. Денуазы стадий
+    графа — __DENOISE__ (лицо) и __DETAIL__ (текстура вторым FaceDetailer).
+    Провал гейта — тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED внутри
+    comfy_gen_batch. Замеры, стадии и вердикты — в строке манифеста.
     """
-    from ai.ai_face import ai_face_crop
+    from PIL import Image
+    from ai.ai_face import ai_face_crop, ai_face_paste, ai_face_score, AI_FACE_HF
     from ai.ai_look import (ai_look_probe, ai_look_prompt, ai_look_parts,
-                           ai_look_anchor)
+                           ai_look_fit, ai_look_anchor, ai_look_integrity)
     rows = []
     for p in map(Path, photos):
         with tempfile.TemporaryDirectory() as td:
             crop = Path(td) / (p.stem + '.png')
-            box = ai_face_crop(p, crop, mode=mode, det_size=tuple(qa_det))['box']
+            cut = ai_face_crop(p, crop, mode=mode, det_size=tuple(qa_det))
+            box = cut['box']
             f = Path(face) if face else None
             if f and f.is_dir():  # каталог патчей: якорь — самый чистый под ракурс кадра
                 f = Path(ai_look_anchor(sorted(f.glob('*.png')), p)['face'])
@@ -220,14 +225,29 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             mp = Path(out) / 'manifest.json'
             man = json.loads(mp.read_text()) if mp.exists() else []
             for r in got:
+                gen = Path(out) / r['file']
+                # частотная сшивка: LF — подтянутая к замерам генерация на всей
+                # области, которую граф перерисовал (бокс ≈ кроп ноды; эллипс по
+                # kps уже — по краю остаётся чужое лицо и ест сходство), HF —
+                # лишь самое мелкое зерно кадра (AI_FACE_HF).
+                patch = Path(td) / (p.stem + '-patch.png')
+                Image.open(gen).crop(tuple(box)).save(patch)
+                fit = ai_look_fit(patch, probe, patch)
+                ai_face_paste(p, patch, gen, box, hf=AI_FACE_HF)
+                r['fit'], r['hf'] = {k: fit[k] for k in ('before', 'after')}, AI_FACE_HF
+                r['integrity'] = ai_look_integrity(gen, p, box)
+                r['score'] = ai_face_score(gen, f or crop, det_size=tuple(qa_det))
+                r['pass'] = r['score'] >= 0.5
                 for m in man:
                     if m['file'] == r['file']:
+                        m.update(r)
                         m.update({'mode': mode, 'denoise': denoise,
                                   'detail': detail, 'box': box,
                                   'prompt': prompt, 'parts': parts,
                                   'face': f.name if f else '',
                                   'probe': {k: probe[k] for k in
-                                            ('skin', 'hair', 'light', 'sharp')}})
+                                            ('skin', 'skin_std', 'hair',
+                                             'light', 'sharp')}})
                         rows.append(dict(m))
                 mp.write_text(json.dumps(man, ensure_ascii=False,
                                          indent=1) + '\n')

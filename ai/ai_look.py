@@ -25,16 +25,24 @@ AI_LOOK_HAIR_COVER = 0.2   # доля пикселей полосы, похож�
 AI_LOOK_ANCHOR_HANDS = ('рук', 'пал', 'ногот')
 # Масштабы рассогласования ракурса: наклон ° / поворот (смещ. носа) / подъём (глаза в коробке).
 AI_LOOK_POSE = (30.0, 0.5, 0.5)
+# Гибридный ранг якоря: доля косинуса к лицу кадра / к центроиду датасета
+# (один косинус к исходнику выбирает бракованную заплатку на асимметрии кадра).
+AI_LOOK_RANK = (0.7, 0.3)
+# Коридор множителя канальной аффины: на плоской заплатке std_gen≈0 не рушит шум.
+AI_LOOK_FIT_CLIP = (0.8, 1.25)
 
 
 def ai_look_probe(photo, box):
     """Снять замеры с выкройки оригинала: кожа, волосы, свет, резкость.
 
     `photo` — файл, `box` — выкройка [x0,y0,x1,y1] из ai_face_crop. Кожа —
-    медиана ядра (центр выкройки: нос/щёки), волосы — медиана пикселей полосы
-    над бровями, не похожих на кожу (мало таких — hair=None, причёску в промпт
-    не тащим), свет — мода яркости выкройки, резкость — дисперсия Лапласиана
-    серой выкройки (эталон, до которого потом доводим заплатку).
+    тон ядра (центр выкройки: нос/щёки), но не по всем пикселям, а по
+    межквартильному диапазону яркости (25–75%): тень, блик с носа и помада
+    в истинный тон подкожного слоя не входят; волосы — тот же диапазон по
+    пикселям полосы над бровями, не похожих на кожу (мало таких — hair=None,
+    причёску в промпт не тащим), свет — мода яркости выкройки, резкость —
+    дисперсия Лапласиана серой выкройки (эталон, до которого потом доводим
+    заплатку).
     """
     import cv2
     import numpy as np
@@ -44,18 +52,19 @@ def ai_look_probe(photo, box):
         raise ValueError(f'не прочитан кадр: {photo}')
     crop = img[y0:y1, x0:x1]
     h, w = crop.shape[:2]
-    core = crop[int(h * 0.3):int(h * 0.85), int(w * 0.25):int(w * 0.75)]
-    band = crop[0:int(h * 0.35), :]
-    core = core.reshape(-1, 3).astype('float32')
+    core = _look_core(crop[int(h * 0.3):int(h * 0.85),
+                            int(w * 0.25):int(w * 0.75)].reshape(-1, 3)
+                      .astype('float32'))
+    band = crop[0:int(h * 0.35), :].reshape(-1, 3).astype('float32')
     skin = np.median(core, axis=0)
-    far = np.linalg.norm(band.reshape(-1, 3).astype('float32') - skin, axis=1)
-    hair_px = band.reshape(-1, 3).astype('float32')[far > 60]
+    far = np.linalg.norm(band - skin, axis=1)
+    hair_px = _look_core(band[far > 60]) if (far > 60).any() else band[:0]
     cover = float((far > 60).mean())
-    hair = ([round(float(v), 1) for v in
-             np.median(hair_px, axis=0)[::-1]] if cover >= AI_LOOK_HAIR_COVER
-            and len(hair_px) else None)
+    hair = ([round(float(v), 1) for v in np.median(hair_px, axis=0)[::-1]]
+            if cover >= AI_LOOK_HAIR_COVER and len(hair_px) else None)
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     return {'skin': [round(float(v), 1) for v in skin[::-1]],
+            'skin_std': [round(float(v), 1) for v in core.std(0)[::-1]],
             'hair': hair, 'hair_cover': round(cover, 2),
             'light': float(np.median(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))),
             'sharp': round(float(cv2.Laplacian(gray, cv2.CV_64F).var()), 1)}
@@ -82,9 +91,12 @@ def ai_look_prompt(probe):
 def ai_look_fit(patch, probe, out):
     """Подтянуть цвет заплатки к замерам оригинала; {'before','after','moved'}.
 
-    Комящая заплатка помнит цвет датасета: кожа светлее, волосы темнее. Сдвиг
-    каналы заплатки так, чтобы медиана её ядра стала probe['skin'] (а полоса —
-    probe['hair'], если те есть); контраст не трогает — сдвиг, не кривая.
+    Комящая заплатка помнит цвет датасета: кожа светлее, каналы растянуты не
+    так (синий тонет). Канальная аффина New=(Gen−mean_gen)·std_src/std_gen+
+    mean_src по тому же межквартильному ядру, что и probe: и сдвиг, и масштаб
+    канала; множитель запутан клипом [AI_LOOK_FIT_CLIP] — на плоской заплатке
+    std_gen≈0 не должен разгонять шум. Без probe['skin_std'] — сдвиг, без
+    масштаба (обратная совместимость).
     """
     import cv2
     import numpy as np
@@ -92,17 +104,27 @@ def ai_look_fit(patch, probe, out):
     if img is None:
         raise ValueError(f'не прочитана заплатка: {patch}')
     h, w = img.shape[:2]
-    core = img[int(h * 0.3):int(h * 0.85), int(w * 0.25):int(w * 0.75)]
-    core = core.reshape(-1, 3).astype('float32')
+    core = _look_core(img[int(h * 0.3):int(h * 0.85),
+                          int(w * 0.25):int(w * 0.75)].reshape(-1, 3)
+                      .astype('float32'))
     before = [round(float(v), 1) for v in np.median(core, axis=0)[::-1]]
-    shift = np.array(probe['skin'][::-1], 'float32') - np.array(before[::-1], 'float32')
-    img = np.clip(img.astype('float32') + shift[None, None, :], 0, 255).astype('uint8')
+    mu_g, sd_g = core.mean(0), core.std(0)
+    mu_s = np.array(probe['skin'][::-1], 'float32')
+    if probe.get('skin_std'):
+        sd_s = np.array(probe['skin_std'][::-1], 'float32')
+        ratio = np.clip(np.divide(sd_s, sd_g, out=np.ones_like(sd_s),
+                                 where=sd_g > 2),
+                        AI_LOOK_FIT_CLIP[0], AI_LOOK_FIT_CLIP[1])
+    else:
+        ratio = np.ones(3, 'float32')
+    img = np.clip((img.astype('float32') - mu_g) * ratio + mu_s, 0, 255).astype('uint8')
     from pathlib import Path
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), img)
     return {'before': before, 'after': probe['skin'],
-            'moved': bool(max(abs(shift)) > 1)}
+            'moved': bool(np.abs(np.round(ratio - 1, 3)).max() > 0.02
+                         or max(abs(mu_s - mu_g)) > 1)}
 
 
 def ai_look_sharpen(patch, out, sharp):
@@ -191,11 +213,13 @@ def ai_look_parts(path, box):
 def ai_look_anchor(patches, source, det_size=(320, 320), top=8):
     """Выбрать патч лица персоны под конкретный source-кадр: ЕЁ лицо и в ракурсе кадра.
 
-    Лицо персоны — центр (средний эмбединг) всех патчей: датасет может быть не
-    про одно лицо, и якорем обязан быть патч, closest к центру. Ранг: косинус
-    против центра × похожесть ракурса к source-лицу (_look_pose) × цветность
-    (чб ниже). Из лидеров ранга спрашиваем ai_look_parts: якорь — первый без
-    рук (AI_LOOK_ANCHOR_HANDS); везде руки — берём ранг выше всех как есть.
+    Ранг гибрид (AI_LOOK_RANK): доля к косинусу против лица самого кадра —
+    платч нужен ближайший к нему; доля к центроиду всех патчей (датасет может
+    быть не про одно лицо) — один косинуc к кадру выбрал бы смазанный/грязный
+    патч там, где у исходника асимметрия. Ещё множители: похожесть ракурса
+    (_look_pose) и цветность (чб ниже). Из лидеров ранга спрашиваем
+    ai_look_parts: якорь — первый без рук (AI_LOOK_ANCHOR_HANDS); везде руки —
+    берём ранг выше всех как есть.
     """
     import numpy as np
     from pathlib import Path
@@ -221,8 +245,10 @@ def ai_look_anchor(patches, source, det_size=(320, 320), top=8):
     center = np.mean([f.normed_embedding for _, f, _ in found], axis=0)
     center = center / np.linalg.norm(center)
     sface = big(app.get(cv2.imread(str(source))))
+    s_emb = sface.normed_embedding
     ps = _look_pose(sface.kps, sface.bbox)
-    cand = [(round(float(f.normed_embedding @ center) *
+    cand = [(round((AI_LOOK_RANK[0] * float(f.normed_embedding @ s_emb) +
+                    AI_LOOK_RANK[1] * float(f.normed_embedding @ center)) *
                    max(0.2, 1 - _look_pose_dist(_look_pose(f.kps, f.bbox), ps)) *
                    min(1.0, sat / 40), 4), p, [int(v) for v in f.bbox])
             for p, f, sat in found]
@@ -267,3 +293,15 @@ def _look_pose_dist(a, b):
     return min(1.0, abs(a[0] - b[0]) / AI_LOOK_POSE[0] +
                abs(a[1] - b[1]) / AI_LOOK_POSE[1] +
                abs(a[2] - b[2]) / AI_LOOK_POSE[2])
+
+
+def _look_core(px):
+    """Пиксели в межквартильном диапазоне яркости (25–75%): тень, блик и помада
+    в истинный тон не входят; тот же фильтр — у probe и у ai_look_fit, чтобы
+    аффина сверялась с одним и тем же ядром."""
+    import numpy as np
+    if len(px) < 8:
+        return px
+    y = px @ np.array([0.114, 0.587, 0.299], 'float32')
+    lo, hi = np.percentile(y, [25, 75])
+    return px[(y >= lo) & (y <= hi)]
