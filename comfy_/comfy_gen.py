@@ -189,18 +189,19 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
     персоны под ракурс кадра (ai_look_anchor — гибрид косинуса к лицу кадра и
     к центроиду датасета × ракурс × цветность), замеры кадра (ai_look_probe —
     межквартильный тон кожи, свет, доля волос; ai_face_crop с `mode` тут
-    только меряет бокс), seed и приёмка цифрами. Сшивка — частотная и в
-    диспетчере: выход графа кроем по боксу, каналы доводим аффинной подгонкой
-    (ai_look_fit) до межквартильного тона probe, вшиваем обратно так, чтобы от
-    генерации остались только низкие частоты (геометрия), а пора, ресницы и
-    зерно — байт в байт из кадра (ai_face_paste hf=AI_FACE_HF); вне выкройки
-    кадр цел байт в байт, скачок шва меряет ai_look_integrity. Денуазы стадий
+    только меряет бокс), seed и приёмка цифрами. Сшивка — в диспетчере: выход
+    графа кроем по боксу, каналы доводим аффинной подгонкой (ai_look_fit) до
+    межквартильного тона probe и вшиваем пером по всей области, которую граф
+    перерисовал, — вне неё кадр цел байт в байт, скачок шва меряет
+    ai_look_integrity. Частотную сшивку с кадром замер отверг: лицо в исходнике
+    чужое, и мелкая текстура его тоже чужая (0.537 против 0.363 при hf=1,
+    2026-09-14). Денуазы стадий
     графа — __DENOISE__ (лицо) и __DETAIL__ (текстура вторым FaceDetailer).
     Провал гейта — тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED внутри
     comfy_gen_batch. Замеры, стадии и вердикты — в строке манифеста.
     """
     from PIL import Image
-    from ai.ai_face import ai_face_crop, ai_face_paste, ai_face_score, AI_FACE_HF
+    from ai.ai_face import ai_face_crop, ai_face_paste, ai_face_score
     from ai.ai_look import (ai_look_probe, ai_look_prompt, ai_look_parts,
                            ai_look_fit, ai_look_anchor, ai_look_integrity)
     rows = []
@@ -226,15 +227,15 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             man = json.loads(mp.read_text()) if mp.exists() else []
             for r in got:
                 gen = Path(out) / r['file']
-                # частотная сшивка: LF — подтянутая к замерам генерация на всей
-                # области, которую граф перерисовал (бокс ≈ кроп ноды; эллипс по
-                # kps уже — по краю остаётся чужое лицо и ест сходство), HF —
-                # лишь самое мелкое зерно кадра (AI_FACE_HF).
+                # сшивка в диспетчере: генерация на всей области, которую граф
+                # перерисовал (бокс ≈ кроп ноды), каналы подтянуты к замерам;
+                # вне бокса кадр цел байт в байт.
                 patch = Path(td) / (p.stem + '-patch.png')
                 Image.open(gen).crop(tuple(box)).save(patch)
                 fit = ai_look_fit(patch, probe, patch)
-                ai_face_paste(p, patch, gen, box, hf=AI_FACE_HF)
-                r['fit'], r['hf'] = {k: fit[k] for k in ('before', 'after')}, AI_FACE_HF
+                ai_face_paste(p, patch, gen, box)
+                r['gen_score'] = r['score']  # что дал граф до диспетчерской склейки
+                r['fit'] = {k: fit[k] for k in ('before', 'after')}
                 r['integrity'] = ai_look_integrity(gen, p, box)
                 r['score'] = ai_face_score(gen, f or crop, det_size=tuple(qa_det))
                 r['pass'] = r['score'] >= 0.5
