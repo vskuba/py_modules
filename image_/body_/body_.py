@@ -126,7 +126,10 @@ def _body_merge(profiles: list[dict]) -> tuple[dict, dict]:
         if len(set(vals)) == 1:
             merged[field] = vals[0]
         elif field in BODY_FRAME_FIELDS:
-            merged[field] = min(vals, key=order.index)  # худшее из чтений кадра
+            # худшее из чтений кадра: «не видно» хуже любого чтения ряда — кадр,
+            # который ничего не показывает, обесценивает показания соседних.
+            merged[field] = (BODY_NOT_VISIBLE if BODY_NOT_VISIBLE in vals
+                             else min(vals, key=order.index))
         else:
             top = Counter(vals).most_common(2)
             merged[field] = (top[0][0] if len(top) == 1 or top[0][1] > top[1][1]
