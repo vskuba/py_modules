@@ -44,7 +44,8 @@ COMFY_GEN_TIMEOUT = 900.0
 COMFY_GEN_FREE_WAIT = 180.0
 
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
-COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__')
+COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__',
+                    '__FACE__', '__DETAIL__')
 
 # Запас к `_mem` workflow: чужие процессы (рабочая чат-модель) уже учтены в
 # ram_free фермы — запас лишь на скачок живого остатка, не на соседей. Запас
@@ -70,12 +71,16 @@ COMFY_GEN_QA_RETRY_SEED = 1000
 # до несерьёзных пикселей и не берёт (замер: на close-up 896×1152 детект 640 —
 # 0 лиц, 320 — лицо с det_score 0.85). 320 берёт и крупные, и мелкие лица.
 COMFY_GEN_QA_DET = (320, 320)
+# (замер 2026-09-14: тот же кадр swap на det 1024 даёт score 0.0 — крой/embedding
+# при детекции крупнее дет_size ломаются; сверка полным кадром идёт тем же детектором,
+# каким мерилась заплатками — 320.)
 
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
-                    anchor_input='', seed=1, n=1, denoise=1.0, qa_anchor='',
+                    anchor_input='', seed=1, n=1, denoise=1.0, detail=0.22,
+                    qa_anchor='',
                     qa_det=COMFY_GEN_QA_DET, farm_ssh='', farm_container='',
-                    remote=COMFY_GEN_REMOTE):
+                    remote=COMFY_GEN_REMOTE, face=''):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
     Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor` детекцией
@@ -94,6 +99,7 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     need = float(wf.pop('_mem', 0))
     comfy_gen_free(base, farm_ssh, farm_container, need)
     anchor_name = comfy_gen_upload(anchor, base) if anchor else ''
+    face_name = comfy_gen_upload(face, base) if face else ''
     if anchor_input:
         _wf_set(wf, anchor_input, anchor_name or str(anchor))
     rows = []
@@ -101,8 +107,10 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
         body = lambda s: _wf_fill(json.loads(json.dumps(wf)),
                                   {'__PROMPT__': f'{persona}, {scene["prompt"]}'.strip(', '),
                                    '__ANCHOR__': anchor_name,
+                                   '__FACE__': face_name,
                                    '__SEED__': str(s),
-                                   '__DENOISE__': str(denoise)})
+                                   '__DENOISE__': str(denoise),
+                                   '__DETAIL__': str(detail)})
         got = _run_one(body(seed + i), scene, out, base, seed + i, need,
                        farm_ssh=farm_ssh, farm_container=farm_container)
         if qa_anchor and scene.get('face_on', True):
@@ -169,6 +177,98 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
         got.append(_farm_pull(farm_ssh, farm_container, remote, f'{sub}/{name}',
                               Path(out) if out else Path('.'), stem + '.safetensors'))
     return got
+
+
+def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
+                   denoise=0.8, detail=0.22, seed=1, qa_det=COMFY_GEN_QA_DET,
+                   face='', farm_ssh='', farm_container=''):
+    """Натянуть лицо лоры на готовые фото; вернуть строки манифеста по фото.
+
+    Драйвер — только диспетчер: крой и гену внутри графа делает FaceDetailer
+    (кадр в граф уходит целым, кроит и вшивает сама нода). Здесь лишь: якорь
+    персоны под ракурс кадра (ai_look_anchor — гибрид косинуса к лицу кадра и
+    к центроиду датасета × ракурс × цветность), замеры кадра (ai_look_probe —
+    межквартильный тон кожи, свет, доля волос; ai_face_crop с `mode` тут
+    только меряет бокс), seed и приёмка цифрами. Сшивка — в диспетчере: выход
+    графа кроем по боксу, каналы доводим аффинной подгонкой (ai_look_fit) до
+    межквартильного тона кожи тела кадра (не лица оригинала — оно чужое) и
+    вшиваем пером по всей области, которую граф
+    перерисовал, — вне неё кадр цел байт в байт, скачок шва меряет
+    ai_look_integrity. Частотную сшивку с кадром замер отверг: лицо в исходнике
+    чужое, и мелкая текстура его тоже чужая (0.537 против 0.363 при hf=1,
+    2026-09-14). Денуазы стадий
+    графа — __DENOISE__ (лицо) и __DETAIL__ (текстура вторым FaceDetailer).
+    Провал гейта — тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED внутри
+    comfy_gen_batch. Замеры, стадии и вердикты — в строке манифеста.
+    """
+    from PIL import Image
+    from ai.ai_face import ai_face_crop, ai_face_paste, ai_face_score
+    from ai.ai_look import (ai_look_probe, ai_look_prompt, ai_look_parts,
+                           ai_look_fit, ai_look_anchor, ai_look_integrity)
+    rows = []
+    for p in map(Path, photos):
+        with tempfile.TemporaryDirectory() as td:
+            crop = Path(td) / (p.stem + '.png')
+            cut = ai_face_crop(p, crop, mode=mode, det_size=tuple(qa_det))
+            box = cut['box']
+            f = Path(face) if face else None
+            if f and f.is_dir():  # каталог патчей: якорь — самый чистый под ракурс кадра
+                f = Path(ai_look_anchor(sorted(f.glob('*.png')), p)['face'])
+            probe = ai_look_probe(p, box)
+            # цель подгонки — не лицо оригинала (оно чужое и своего тона), а кожа
+            # тела кадра под выкройкой: лицо обяз совпасть с шеей/плечами, иначе
+            # «жёлтое лицо» (замер 12677b19: лицо [199,140,118] против тела
+            # [204,169,152] — по синему каналу минус 34 единицы)
+            h_ = Image.open(p).size[1]
+            strip = (box[0], box[3], box[2],
+                     min(h_, box[3] + int((box[3] - box[1]) * 0.45)))
+            target = ai_look_probe(p, strip)
+            parts = ai_look_parts(p, box)
+            prompt = persona + ai_look_prompt(probe)
+            got = comfy_gen_batch(workflow, {'id': p.stem, 'prompt': prompt,
+                                             'nsfw': False}, out, base=base,
+                                  persona=persona, seed=seed, n=1,
+                                  denoise=denoise, detail=detail,
+                                  anchor=str(p), face=f or '',
+                                  qa_anchor=str(f or crop), qa_det=qa_det,
+                                  farm_ssh=farm_ssh, farm_container=farm_container)
+            mp = Path(out) / 'manifest.json'
+            man = json.loads(mp.read_text()) if mp.exists() else []
+            for r in got:
+                gen = Path(out) / r['file']
+                # сшивка в диспетчере: выход графа кроем по боксу, каналы
+                # доводим до тона КОЖИ ТЕЛА кадра (не лица оригинала — оно
+                # чужое и своего тона), вшиваем маской по контуру лица (kps) с
+                # широким пером: аффина везде одинакова и разницу лицо↔тело не
+                # уменьшает (замер: сдвиг всего кадра оставляет разницу [4,18,53]
+                # и красит фон), а прямоугольное перо даёт видимый квадрат.
+                patch = Path(td) / (p.stem + '-patch.png')
+                Image.open(gen).crop(tuple(box)).save(patch)
+                fit = ai_look_fit(patch, target, patch)
+                # маска — скруглённый прямоугольник бокса, НЕ эллипс по kps: по
+                # весовой подгонке лицо целиком тасует аффина; эллипс режет
+                # лицо по скулам, оставляя чужое лицо исходника в кольце
+                # (замер 2026-09-15: эллипс 0.305 против прямоугольника 0.689)
+                ai_face_paste(p, patch, gen, box, feather=0.2)
+                r['gen_score'] = r['score']  # что дал граф до диспетчерской склейки
+                r['fit'] = {k: fit[k] for k in ('before', 'after')}
+                r['integrity'] = ai_look_integrity(gen, p, box)
+                r['score'] = ai_face_score(gen, f or crop, det_size=tuple(qa_det))
+                r['pass'] = r['score'] >= 0.5
+                for m in man:
+                    if m['file'] == r['file']:
+                        m.update(r)
+                        m.update({'mode': mode, 'denoise': denoise,
+                                  'detail': detail, 'box': box,
+                                  'prompt': prompt, 'parts': parts,
+                                  'face': f.name if f else '',
+                                  'probe': {k: probe[k] for k in
+                                            ('skin', 'skin_std', 'hair',
+                                             'light', 'sharp')}})
+                        rows.append(dict(m))
+                mp.write_text(json.dumps(man, ensure_ascii=False,
+                                         indent=1) + '\n')
+    return rows
 
 
 def comfy_gen_upload(path, base, subfolder=''):
@@ -410,18 +510,29 @@ def _farm_pull(host, container, remote, rel, out, name):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Прогонить workflow персоны над сценой (или всеми сценами).')
-    parser.add_argument('command', choices=['free', 'model', 'run', 'train'],
+    parser.add_argument('command', choices=['free', 'model', 'run', 'train', 'swap'],
                         help='free — выгрузить кэш моделей фермы; model — залить '
                              'лору-актив в models фермы и рестартнуть её; run — '
-                             'гонять сцены; train — обучить лору на файлах')
+                             'гонять сцены; train — обучить лору на файлах; '
+                             'swap — натянуть лицо лоры на готовые фото')
     parser.add_argument('--workflow', default='', help='API-JSON workflow')
     parser.add_argument('--scenes', default='',
                         help='scenes.json каталога персоны (список сцен)')
     parser.add_argument('--scene', default='', help='id одной сцены; пусто — все')
     parser.add_argument('--persona', default='', help='префикс промпта (имя персоны)')
     parser.add_argument('--files', nargs='*', default=[],
-                        help='кадры датасета для train; лора-актив для model')
+                        help='кадры датасета для train; лора-актив для model; '
+                             'фото для swap')
+    parser.add_argument('--mode', default='face',
+                        choices=('face', 'face_hair', 'head_neck'),
+                        help='swap: насколько широка выкройка (только лицо / '
+                             'с причёской / голова с шеей)')
     parser.add_argument('--anchor', default='', help='файл якоря, если workflow ждёт')
+    parser.add_argument('--face', default='',
+                        help='swap: лицо персоны — файл или каталог патчей (для '
+                             'каталога инструмент сам берёт самый чистый под '
+                             'ракурс кадра); против него скорится готовая '
+                             'заплата; пусто — против выкроенного лица оригинала')
     parser.add_argument('--anchor-input', default='',
                         help='«узел.вход» для workflow без маркера __ANCHOR__')
     parser.add_argument('--qa-anchor', default='',
@@ -434,7 +545,11 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--n', type=int, default=1, help='кадров на сцену')
     parser.add_argument('--denoise', type=float, default=1.0,
-                        help='сила изменения кадра-основы (img2img)')
+                        help='сила изменения кадра-основы: для swap — стадия лица '
+                             '(первый FaceDetailer в графе)')
+    parser.add_argument('--detail', type=float, default=0.22,
+                        help='swap: сила второй стадии FaceDetailer (текстура), '
+                             'не меняющая геометрию')
     parser.add_argument('--budget', default='512x512',
                         help='train: бюджет площади «ВхН»: патч сверх него жался бы пропорционально, '
                              'внутри — родной размер, кратно 16')
@@ -463,6 +578,20 @@ if __name__ == '__main__':
             print(*(str(p) for p in got) or ['обучено'])
             if got:
                 print('обучено')
+            raise SystemExit
+        if ns.command == 'swap':
+            if not ns.out:
+                raise SystemExit('ошибка: swap требует --out (каталог под фото)')
+            det = (tuple(int(v) for v in ns.qa_det.split(','))
+                   if ns.qa_det else COMFY_GEN_QA_DET)
+            got = comfy_gen_swap(ns.files, ns.workflow, ns.out, base=ns.base,
+                                 persona=ns.persona, mode=ns.mode, face=ns.face,
+                                 denoise=ns.denoise, detail=ns.detail,
+                                 seed=ns.seed, qa_det=det,
+                                 farm_ssh=ns.farm_ssh,
+                                 farm_container=ns.farm_container)
+            for r in got:
+                print(r['file'], r['scene'], r['seed'], r['score'], r['pass'])
             raise SystemExit
         if not ns.out:
             raise SystemExit('ошибка: run требует --out (каталог под кадры)')

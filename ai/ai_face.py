@@ -91,36 +91,75 @@ def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), img[box[1]:box[3], box[0]:box[2]])
-    return {'box': list(box), 'mode': mode, 'out': str(out)}
+    return {'box': list(box), 'mode': mode, 'out': str(out),
+            'kps': [[round(float(a), 1), round(float(b), 1)] for a, b in f.kps]}
 
 
-def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER):
-    """Вшить заплатку в кадр скруглённым пером; вернуть {'out','box'}.
+def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
+                  hf=0):
+    """Вшить заплатку в кадр пером по форме лица; вернуть {'out','box'}.
 
-    Вне `box` ([x0,y0,x1,y1]) кадр не меняется вовсе; внутри — заплатка (при
-    нужде ресайвится Ланцошем под размер выкройки), край пера размывается на
-    feather*минус-сторона. Так чужое фото становится нашим, не теряя фон и
-    крой оригинала.
+    Маска — эллипс по пяти точкам детектора (скулы, подбородок, лоб), а не
+    прямоугольник выкройки: вне эллипса кадр не тронут вовсе (причёска и фон
+    остаются оригинальные), край пера размывается на feather*минус-сторона.
+    Склейка через лапласианову пирамиду (3 уровня): цветовая растяжка идёт по
+    всему перу, а не по одному краю, — скачок шва меряет ai_look_integrity.
+    `hf` > 0 — частотная склейка: `hf` самых мелких уровней пирамиды берут
+    текстуру кадра (поры, ресницы, зерно — байт в байт оригинал), от заплатки
+    остаётся только низкочастотная геометрия; hf=0 — заплатка на всех уровнях,
+    как было. Для чужого кадра hf по замерам вредит (замер 2026-09-14: 0.537
+    против 0.363 при hf=1): мелкая текстура чужого лица — тоже чужая. Без
+    `kps` (абсолютные координаты глаз/рта выкройки) — скруглённый прямоугольник
+    по боксу.
     """
     import cv2
     import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter
     base_img = cv2.imread(str(base))
     if base_img is None:
         raise ValueError(f'не прочитан кадр: {base}')
     x0, y0, x1, y1 = (int(v) for v in box)
     bw, bh = x1 - x0, y1 - y0
-    im = Image.open(patch)
-    if im.size != (bw, bh):
-        im = im.resize((bw, bh), Image.LANCZOS)
-    ph = np.asarray(im.convert('RGB'))[:, :, ::-1]           # RGB -> BGR под cv2
-    m = Image.new('L', (bw, bh), 0)
-    ImageDraw.Draw(m).rounded_rectangle([0, 0, bw - 1, bh - 1],
-                                       radius=min(bw, bh) // 4, fill=255)
-    m = m.filter(ImageFilter.GaussianBlur(max(1, int(min(bw, bh) * feather))))
-    pm = np.asarray(m)[..., None].astype(np.float32) / 255.0
+    ph = cv2.resize(cv2.imread(str(patch)), (bw, bh),
+                    interpolation=cv2.INTER_LANCZOS4).astype(np.float32)
     roi = base_img[y0:y1, x0:x1].astype(np.float32)
-    base_img[y0:y1, x0:x1] = roi * (1 - pm) + ph * pm
+    m = np.zeros((bh, bw), np.float32)
+    if kps is not None:
+        k = np.asarray(kps, np.float32) - np.float32([x0, y0])
+        ey, my = (k[0][1] + k[1][1]) / 2, (k[3][1] + k[4][1]) / 2   # глаза, рот
+        top, bot = ey - (my - ey) * 0.8, my + (my - ey) * 1.15      # лоб, подбородок
+        cv2.ellipse(m, (int((k[0][0] + k[1][0]) / 2), int((top + bot) / 2)),
+                    (int(abs(k[1][0] - k[0][0]) * 1.15), int((bot - top) / 2)),
+                    0, 0, 360, 1.0, -1)
+    else:
+        r = min(bw, bh) // 4
+        cv2.rectangle(m, (r, 0), (bw - 1 - r, bh - 1), 1.0, -1)
+        cv2.rectangle(m, (0, r), (bw - 1, bh - 1 - r), 1.0, -1)
+        for cx, cy in ((r, r), (bw - 1 - r, r),
+                       (r, bh - 1 - r), (bw - 1 - r, bh - 1 - r)):
+            cv2.circle(m, (int(cx), int(cy)), r, 1.0, -1)
+    m = cv2.GaussianBlur(m, (0, 0), max(1.0, min(bw, bh) * feather))
+    gb, gp, gm, lb = [roi], [ph], [m], []
+
+    def fit(x, shape):
+        # нечётная сторона: пир-ап возвращает на пиксель больше — режем по тонкому уровню
+        return x[:shape[0], :shape[1]] if x.shape[:2] != tuple(shape) else x
+
+    for _ in range(3):
+        b, p = cv2.pyrDown(gb[-1]), cv2.pyrDown(gp[-1])
+        lb.append((gb[-1] - fit(cv2.pyrUp(b), gb[-1].shape),
+                   gp[-1] - fit(cv2.pyrUp(p), gp[-1].shape)))
+        gb.append(b)
+        gp.append(p)
+        gm.append(cv2.pyrDown(gm[-1]))
+    lb.append((gb[-1], gp[-1]))
+    r = lb[-1][1] * gm[-1][..., None] + lb[-1][0] * (1 - gm[-1][..., None])
+    for lvl in range(len(lb) - 2, -1, -1):
+        bb, pp = lb[lvl]
+        # hf самых мелких уровней — без маски: их остаток даёт сам кадр (HF);
+        # заплатка доходит только до грубых уровней (LF — геометрия и цвет).
+        g = np.zeros_like(gm[lvl][..., None]) if lvl < hf else gm[lvl][..., None]
+        r = fit(cv2.pyrUp(r), bb.shape) + pp * g + bb * (1 - g)
+    base_img[y0:y1, x0:x1] = r
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), base_img)
@@ -164,6 +203,9 @@ if __name__ == '__main__':
                         help='детекция «W,H» (например 320,320) для score/check/crop; '
                              'по умолчанию AI_FACE_DET')
     parser.add_argument('--box', default='', help='paste: «x0,y0,x1,y1» из crop')
+    parser.add_argument('--hf', type=int, default=0,
+                        help='paste: сколько мелких уровней пирамиды берут текстуру '
+                             'кадра (частотная склейка LF(заплатка)+HF(кадр); 0 — нет)')
     ns = parser.parse_args()
     det = tuple(int(v) for v in ns.det.split(',')) if ns.det else AI_FACE_DET
     try:
@@ -220,7 +262,7 @@ if __name__ == '__main__':
             if not (ns.patch and ns.out and ns.box):
                 raise SystemExit('paste требуют заплатку, --out и --box из crop')
             r = ai_face_paste(ns.path, ns.patch, ns.out,
-                              [int(v) for v in ns.box.split(',')])
+                              [int(v) for v in ns.box.split(',')], hf=ns.hf)
             print(json.dumps(r, ensure_ascii=False))
     except (ValueError, KeyError, FileNotFoundError) as err:
         raise SystemExit(f'ошибка: {err}')
