@@ -45,7 +45,8 @@ COMFY_GEN_FREE_WAIT = 180.0
 
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
 COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__',
-                    '__FACE__', '__DETAIL__')
+                    '__FACE__', '__DETAIL__', '__WIDTH__', '__HEIGHT__',
+                    '__STEPS__', '__LORA__')
 
 # Запас к `_mem` workflow: чужие процессы (рабочая чат-модель) уже учтены в
 # ram_free фермы — запас лишь на скачок живого остатка, не на соседей. Запас
@@ -64,6 +65,12 @@ COMFY_GEN_TRAIN_BUDGET = (512, 512)  # бюджет площади кадра: �
 COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
 COMFY_GEN_MODELS = '/opt/ComfyUI/models/loras'  # куда ложится лора-актив на ферме
 
+# Длинная сторона рендера выкройки, px. Выкройка идёт в граф В СВОИХ
+# ПРОПОРЦИЯХ: сплющивание в квадрат ломает геометрию лица (flux на 2D RoPE
+# считает по нативному аспекту), а овал, растянутый в квадрат и сжатый обратно,
+# возвращается чужой формы. Кратность 16 — страйд VAE 8 × патч flux 2.
+COMFY_GEN_SWAP_RENDER = 768
+
 # QA кадра с лицом: косинус против якоря не ниже порога — иначе прогон на seed+сдвиг.
 COMFY_GEN_QA_PASS = 0.5
 COMFY_GEN_QA_RETRY_SEED = 1000
@@ -78,14 +85,17 @@ COMFY_GEN_QA_DET = (320, 320)
 
 def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                     anchor_input='', seed=1, n=1, denoise=1.0, detail=0.22,
-                    qa_anchor='',
+                    qa_anchor='', qa_pass=COMFY_GEN_QA_PASS,
+                    width=0, height=0, steps=0, lora=1.0,
                     qa_det=COMFY_GEN_QA_DET, farm_ssh='', farm_container='',
                     remote=COMFY_GEN_REMOTE, face=''):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
     Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor` детекцией
-    `qa_det` по порогу `COMFY_GEN_QA_PASS`, иначе тот же прогон на
-    seed+COMFY_GEN_QA_RETRY_SEED.
+    `qa_det` по порогу `qa_pass`, иначе тот же прогон на
+    seed+COMFY_GEN_QA_RETRY_SEED. Порог — параметр, а не константа: на лице в
+    сотню пикселей косинус к якорю физически ниже, чем на close-up, и общий 0.5
+    заставлял бы каждый прогон вслепую повторяться. `qa_pass=0` — не пересевать.
 
     workflow — путь к API-JSON; scene — запись scenes.json (id/prompt/nsfw/
     face_on); out — каталог куда класть кадры; base — адрес ComfyUI
@@ -110,16 +120,20 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                                    '__FACE__': face_name,
                                    '__SEED__': str(s),
                                    '__DENOISE__': str(denoise),
-                                   '__DETAIL__': str(detail)})
+                                   '__DETAIL__': str(detail),
+                                   '__WIDTH__': str(width),
+                                   '__HEIGHT__': str(height),
+                                   '__STEPS__': str(steps),
+                                   '__LORA__': str(lora)})
         got = _run_one(body(seed + i), scene, out, base, seed + i, need,
                        farm_ssh=farm_ssh, farm_container=farm_container)
         if qa_anchor and scene.get('face_on', True):
-            _comfy_gen_qa(got, out, qa_anchor, qa_det)
-            if not all(r['pass'] for r in got):
+            _comfy_gen_qa(got, out, qa_anchor, qa_det, qa_pass)
+            if qa_pass and not all(r['pass'] for r in got):
                 got = _run_one(body(seed + i + COMFY_GEN_QA_RETRY_SEED), scene,
                                out, base, seed + i + COMFY_GEN_QA_RETRY_SEED, need,
                                farm_ssh=farm_ssh, farm_container=farm_container)
-                _comfy_gen_qa(got, out, qa_anchor, qa_det)
+                _comfy_gen_qa(got, out, qa_anchor, qa_det, qa_pass)
         rows.extend(got)
     return rows
 
@@ -181,85 +195,166 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
 
 def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                    denoise=0.8, detail=0.22, seed=1, qa_det=COMFY_GEN_QA_DET,
-                   face='', farm_ssh='', farm_container=''):
+                   face='', hf=0, render=COMFY_GEN_SWAP_RENDER, steps=20,
+                   lora=1.0, grain=1.0, feather=0.0, fit_full=0.0, parts_ask=True,
+                   qa_pass=COMFY_GEN_QA_PASS, farm_ssh='', farm_container=''):
     """Натянуть лицо лоры на готовые фото; вернуть строки манифеста по фото.
 
-    Драйвер — только диспетчер: крой и гену внутри графа делает FaceDetailer
-    (кадр в граф уходит целым, кроит и вшивает сама нода). Здесь лишь: якорь
-    персоны под ракурс кадра (ai_look_anchor — гибрид косинуса к лицу кадра и
-    к центроиду датасета × ракурс × цветность), замеры кадра (ai_look_probe —
-    межквартильный тон кожи, свет, доля волос; ai_face_crop с `mode` тут
-    только меряет бокс), seed и приёмка цифрами. Сшивка — в диспетчере: выход
-    графа кроем по боксу, каналы доводим аффинной подгонкой (ai_look_fit) до
-    межквартильного тона кожи тела кадра (не лица оригинала — оно чужое) и
-    вшиваем пером по всей области, которую граф
-    перерисовал, — вне неё кадр цел байт в байт, скачок шва меряет
-    ai_look_integrity. Частотную сшивку с кадром замер отверг: лицо в исходнике
-    чужое, и мелкая текстура его тоже чужая (0.537 против 0.363 при hf=1,
-    2026-09-14). Денуазы стадий
-    графа — __DENOISE__ (лицо) и __DETAIL__ (текстура вторым FaceDetailer).
+    Драйвер — только диспетчер: выкройку лица (`ai_face_crop` с `mode`) грузит
+    в граф вместо целого кадра — лицо заполняет разрешение графа, и сэмплинг
+    платит за его пиксели целиком (целый кадр, сплющенный в ~512², даёт мыло:
+    лицо ~150 px, резкость 1.6 против 172 у ветки, замер 2026-09-15). Рендер
+    идёт в ПРОПОРЦИЯХ выкройки (`render` — длинная сторона, кратно 16): квадрат
+    растягивает овал и возвращает лицо чужой формы.
+
+    Здесь же: якорь персоны под ракурс кадра (ai_look_anchor), замеры кадра
+    (ai_look_probe), seed и приёмка цифрами. Сборка обратно — четырьмя
+    стадиями, и порядок у них жёсткий:
+
+    1. выход графа сжимается до масштаба кадра — ДО тона и зерна, иначе
+       ресайз сотрёт положенное зерно и вернёт гладкость;
+    2. `ai_look_fit` — каналы к межквартильному тону кожи ТЕЛА кадра (не лица
+       оригинала: оно чужое и своего тона);
+    3. `image_grain_match` — зерно и фокус до настоящей кожи рядом с лицом
+       (`grain` — множитель, 1.0 ровно до эталона). Без этой стадии заплатка
+       остаётся стерильной, и глаз читает подделку раньше, чем смотрит на черты;
+    4. `ai_mask_face` + `ai_face_paste` — вшивка по контуру 106 точек МИНУС
+       перекрытия: прядь поперёк щеки и пальцы у подбородка остаются кадром.
+       Вне маски кадр цел байт в байт (`ai_look_integrity`).
+
+    `hf` > 0 — частотная склейка поверх этого: `hf` мелких уровней пирамиды
+    берут текстуру самого кадра. Для чужого лица замер её отвергал (0.537
+    против 0.363 при hf=1, 2026-09-14), и с зерном из стадии 3 она обычно не
+    нужна; ось оставлена для кадров той же персоны.
+
+    `parts_ask` — спрашивать ли vision-моделью, что попало в выкройку кроме
+    лица (нужен ключ провайдера; без него — пустой список, прогон идёт).
     Провал гейта — тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED внутри
     comfy_gen_batch. Замеры, стадии и вердикты — в строке манифеста.
     """
     from PIL import Image
     from ai.ai_face import ai_face_crop, ai_face_paste, ai_face_score
+    from ai.ai_landmark import ai_landmark_dense
     from ai.ai_look import (ai_look_probe, ai_look_prompt, ai_look_parts,
                            ai_look_fit, ai_look_anchor, ai_look_integrity)
+    from ai.ai_mask import ai_mask_face
+    from image_.image_grain import (image_grain_match, image_grain_measure,
+                                   image_grain_ref)
     rows = []
     for p in map(Path, photos):
         with tempfile.TemporaryDirectory() as td:
             crop = Path(td) / (p.stem + '.png')
             cut = ai_face_crop(p, crop, mode=mode, det_size=tuple(qa_det))
             box = cut['box']
+            lm = ai_landmark_dense(p, det_size=tuple(qa_det))
             f = Path(face) if face else None
+            # Центроид пачки — второй, независимый от ракурса судья: считается
+            # по каталогу патчей рядом с якорем (или рядом с файлом-якорем).
+            pack = f if f and f.is_dir() else (f.parent if f else None)
+            centroid = _swap_centroid(pack) if pack and pack.is_dir() else None
             if f and f.is_dir():  # каталог патчей: якорь — самый чистый под ракурс кадра
-                f = Path(ai_look_anchor(sorted(f.glob('*.png')), p)['face'])
+                f = Path(ai_look_anchor(sorted(f.glob('*.png')), p,
+                                        parts=parts_ask,
+                                        cache=str(f / 'anchors.json'))['face'])
             probe = ai_look_probe(p, box)
-            # цель подгонки — не лицо оригинала (оно чужое и своего тона), а кожа
-            # тела кадра под выкройкой: лицо обяз совпасть с шеей/плечами, иначе
-            # «жёлтое лицо» (замер 12677b19: лицо [199,140,118] против тела
-            # [204,169,152] — по синему каналу минус 34 единицы)
-            h_ = Image.open(p).size[1]
-            strip = (box[0], box[3], box[2],
-                     min(h_, box[3] + int((box[3] - box[1]) * 0.45)))
-            target = ai_look_probe(p, strip)
-            parts = ai_look_parts(p, box)
+            # Цель подгонки — не лицо оригинала (оно чужое и своего тона), а
+            # настоящая кожа кадра: лицо обязано совпасть с шеей и плечами,
+            # иначе «жёлтое лицо» (замер 12677b19: лицо [199,140,118] против
+            # тела [204,169,152] — минус 34 по синему).
+            # Но полосой «под подбородком» кожу брать нельзя: под ним бывают
+            # волосы, и тогда лицо подгоняется под тон ВОЛОС (замер
+            # 3095684: цель вышла [72,45,28] — это причёска, лицо ушло в
+            # оранжевую тень). Окно кожи ищется тем же инструментом, что и
+            # эталон зерна; не нашлось похожего — падаем на старую полосу,
+            # и это видно по `skin_part` в манифесте.
+            ref = image_grain_ref(p, box, skin=probe['skin'][::-1])
+            # Маска нужна ещё до прогона: по ней меряется ЦЕЛЬ фактуры —
+            # кожа самого лица оригинала (без волос и перекрытий). Соседняя
+            # чистая кожа для этого не годится: у руки нет ни пор, ни веснушек
+            # лицевой плотности (замер 3095684: лицо 2.76 сигмы против 2.13 у
+            # плеча), и заплатка, дотянутая до плеча, остаётся глаже соседа
+            # по кадру — самого лица.
+            mpath = Path(td) / (p.stem + '-mask.png')
+            msk = ai_mask_face(p, lm['contour'], str(mpath),
+                               feather=feather or max(2.0, (box[3] - box[1]) * 0.035))
+            if ref['skin_part'] >= 0.5:
+                target = ai_look_probe(p, ref['box'])
+            else:
+                h_ = Image.open(p).size[1]
+                target = ai_look_probe(p, (box[0], box[3], box[2],
+                                          min(h_, box[3] + int((box[3] - box[1]) * 0.45))))
+            parts = ai_look_parts(p, box) if parts_ask else []
             prompt = persona + ai_look_prompt(probe)
+            w_r, h_r = _swap_render(box, render)
             got = comfy_gen_batch(workflow, {'id': p.stem, 'prompt': prompt,
                                              'nsfw': False}, out, base=base,
                                   persona=persona, seed=seed, n=1,
                                   denoise=denoise, detail=detail,
-                                  anchor=str(p), face=f or '',
+                                  anchor=str(crop), face=f or '',
+                                  width=w_r, height=h_r, steps=steps, lora=lora,
                                   qa_anchor=str(f or crop), qa_det=qa_det,
+                                  qa_pass=qa_pass,
                                   farm_ssh=farm_ssh, farm_container=farm_container)
             mp = Path(out) / 'manifest.json'
             man = json.loads(mp.read_text()) if mp.exists() else []
             for r in got:
                 gen = Path(out) / r['file']
-                # сшивка в диспетчере: выход графа кроем по боксу, каналы
-                # доводим до тона КОЖИ ТЕЛА кадра (не лица оригинала — оно
-                # чужое и своего тона), вшиваем маской по контуру лица (kps) с
-                # широким пером: аффина везде одинакова и разницу лицо↔тело не
-                # уменьшает (замер: сдвиг всего кадра оставляет разницу [4,18,53]
-                # и красит фон), а прямоугольное перо даёт видимый квадрат.
+                bw, bh = box[2] - box[0], box[3] - box[1]
+                # Порядок стадий — не косметика, а условие фотореализма:
+                # 1) выход графа (рендер w_r×h_r) сжимается до масштаба КАДРА,
+                # 2) только потом тон и зерно — положить зерно до сжатия значит
+                #    сжать его вместе с картинкой и снова получить гладко.
                 patch = Path(td) / (p.stem + '-patch.png')
-                Image.open(gen).crop(tuple(box)).save(patch)
-                fit = ai_look_fit(patch, target, patch)
-                # маска — скруглённый прямоугольник бокса, НЕ эллипс по kps: по
-                # весовой подгонке лицо целиком тасует аффина; эллипс режет
-                # лицо по скулам, оставляя чужое лицо исходника в кольце
-                # (замер 2026-09-15: эллипс 0.305 против прямоугольника 0.689)
-                ai_face_paste(p, patch, gen, box, feather=0.2)
+                with Image.open(gen) as im:
+                    im.resize((bw, bh), Image.LANCZOS).save(patch)
+                # каналы — до тона КОЖИ ТЕЛА кадра (не лица оригинала: оно чужое
+                # и своего тона; замер 12677b19 — минус 34 по синему)
+                fit = ai_look_fit(patch, target, patch, full=fit_full)
+                # зерно: генератор отдаёт стерильный пиксель, а рядом лежит
+                # настоящая кожа с шумом матрицы и следами JPEG. Эталон — то же
+                # окно кожи, что дало цель тона: зерно берётся оттуда же
+                # (спектр этой камеры), а не синтезируется белым шумом.
+                # ЦЕЛЬ — фактура лица оригинала под маской, ИСТОЧНИК спектра —
+                # окно чистой кожи: у лица правильная плотность деталей, у окна
+                # — чистый шум камеры без структуры, которую нельзя тиражировать.
+                want = image_grain_measure(p, box, mask=str(mpath))
+                grain_r = image_grain_match(patch, patch, want, ref=str(p),
+                                            ref_box=ref['box'], strength=grain)
+                # маска — контур по 106 точкам МИНУС перекрытия (посчитана выше,
+                # ею же меряли цель фактуры): пряди волос поперёк лица и пальцы
+                # у подбородка обязаны остаться кадром, иначе подмена видна
+                # раньше, чем само лицо (спор «эллипс или прямоугольник» был
+                # спором двух неверных форм: 0.305 и 0.689)
+                ai_face_paste(p, patch, gen, box, hf=hf, mask=str(mpath))
                 r['gen_score'] = r['score']  # что дал граф до диспетчерской склейки
-                r['fit'] = {k: fit[k] for k in ('before', 'after')}
+                r['fit'] = {k: fit[k] for k in ('before', 'after', 'coef')}
+                r['paste'] = {'hf': hf, 'render': [w_r, h_r],
+                              'feather': round(feather or max(2.0, bh * 0.035), 1)}
+                r['mask'] = {k: msk[k] for k in ('cover', 'occluded', 'fallback')}
+                r['grain'] = {'want': want['sigma'], 'was': grain_r['before']['sigma'],
+                              'now': grain_r['after']['sigma'],
+                              'from': grain_r['added'], 'ref': ref['box'],
+                              'skin_part': ref['skin_part']}
                 r['integrity'] = ai_look_integrity(gen, p, box)
                 r['score'] = ai_face_score(gen, f or crop, det_size=tuple(qa_det))
-                r['pass'] = r['score'] >= 0.5
+                if centroid:
+                    # шкала честная: −0.14 у чужого лица кадра, 0.78 — потолок
+                    # самих фотографий персоны (coherence). Один якорь столько
+                    # не скажет: в его косинусе сидит ещё и ракурс якоря.
+                    r['score_set'] = {
+                        'now': ai_face_score(gen, centroid['embedding'],
+                                             det_size=tuple(qa_det)),
+                        'was': ai_face_score(p, centroid['embedding'],
+                                             det_size=tuple(qa_det)),
+                        'ceiling': centroid['coherence'], 'n': centroid['n']}
+                r['pass'] = r['score'] >= qa_pass
                 for m in man:
                     if m['file'] == r['file']:
                         m.update(r)
                         m.update({'mode': mode, 'denoise': denoise,
                                   'detail': detail, 'box': box,
+                                  'pose': lm['pose'], 'lora': lora,
+                                  'steps': steps,
                                   'prompt': prompt, 'parts': parts,
                                   'face': f.name if f else '',
                                   'probe': {k: probe[k] for k in
@@ -327,6 +422,41 @@ def comfy_gen_model(files, base, farm_ssh, farm_container, dest=COMFY_GEN_MODELS
                    capture_output=True, text=True, check=True)
     _gen_alive(base)
     return [Path(f).name for f in files]
+
+
+def _swap_centroid(folder):
+    """Центроид пачки патчей персоны с кэшем рядом; {'embedding','n','coherence'}.
+
+    Центроид — судья вернее одного якоря (ai_face_centroid), но считается он
+    детекцией по всем патчам: две сотни файлов на CPU это минуты, а прогон
+    swap зовут десятками. Поэтому результат ложится в `centroid.json` рядом с
+    патчами и пересчитывается, только когда пачка изменилась (число файлов).
+    """
+    from ai.ai_face import ai_face_centroid
+    files = sorted(Path(folder).glob('*.png'))
+    cache = Path(folder) / 'centroid.json'
+    if cache.exists():
+        got = json.loads(cache.read_text())
+        if got.get('files') == len(files):
+            return got
+    got = ai_face_centroid(files)
+    got['files'] = len(files)
+    cache.write_text(json.dumps(got, ensure_ascii=False) + '\n')
+    return got
+
+
+def _swap_render(box, long_side):
+    """Размер рендера выкройки: её пропорции, длинная сторона `long_side`, /16.
+
+    Кратность 16 — страйд VAE 8 × патч flux 2; аспект сохраняется, потому что
+    flux построен на 2D RoPE и нативном соотношении сторон, а овал, растянутый
+    в квадрат и сжатый обратно, возвращается лицом другой формы.
+    """
+    bw, bh = int(box[2]) - int(box[0]), int(box[3]) - int(box[1])
+    k = long_side / max(bw, bh)
+    w = max(16, int(round(bw * k / 16)) * 16)
+    h = max(16, int(round(bh * k / 16)) * 16)
+    return w, h
 
 
 def _gen_alive(base):
@@ -461,7 +591,8 @@ def _save(data, ext, out, scene, seed):
     return row
 
 
-def _comfy_gen_qa(rows, out, anchor, det=COMFY_GEN_QA_DET):
+def _comfy_gen_qa(rows, out, anchor, det=COMFY_GEN_QA_DET,
+                  qa_pass=COMFY_GEN_QA_PASS):
     """Скорить кадры с лицом против якоря: score/pass — в строки и в манифест.
 
     Кроит лицо кропом и скорит тем же det, каким кроил — та же цепочка, чем
@@ -481,7 +612,7 @@ def _comfy_gen_qa(rows, out, anchor, det=COMFY_GEN_QA_DET):
                 s = ai_face_score(crop, anchor, det_size=tuple(det))
             except (ValueError, OSError):
                 s = 0.0  # лицо не нашлось — это провал кадра, не авария батча
-            ok = s >= COMFY_GEN_QA_PASS
+            ok = s >= qa_pass
             r['score'], r['pass'] = s, ok
             if r['file'] in by_file:
                 by_file[r['file']].update({'score': s, 'pass': ok})
@@ -550,6 +681,29 @@ if __name__ == '__main__':
     parser.add_argument('--detail', type=float, default=0.22,
                         help='swap: сила второй стадии FaceDetailer (текстура), '
                              'не меняющая геометрию')
+    parser.add_argument('--hf', type=int, default=0,
+                        help='swap: сколько самых мелких уровней пирамиды берут '
+                             'текстуру кадра (0 — заплатка на всех уровнях)')
+    parser.add_argument('--render', type=int, default=COMFY_GEN_SWAP_RENDER,
+                        help='swap: длинная сторона рендера выкройки (её '
+                             'пропорции сохраняются, размер кратен 16)')
+    parser.add_argument('--steps', type=int, default=20, help='swap: шагов сэмплера')
+    parser.add_argument('--lora', type=float, default=1.0,
+                        help='swap: сила лоры лица в графе')
+    parser.add_argument('--grain', type=float, default=1.0,
+                        help='swap: множитель зерна (1.0 — ровно до кожи кадра, '
+                             '0 — не класть)')
+    parser.add_argument('--feather', type=float, default=0.0,
+                        help='swap: перо маски в ПИКСЕЛЯХ (0 — от высоты лица)')
+    parser.add_argument('--no-parts', action='store_true',
+                        help='swap: не спрашивать vision, что в выкройке кроме лица')
+    parser.add_argument('--fit', type=float, default=0.0,
+                        help='swap: сколько ОСТАВШЕГОСЯ рассогласования тона '
+                             'доправить сверх гейта (0 — только избыток, '
+                             '1 — полный сдвиг к коже кадра)')
+    parser.add_argument('--qa-pass', type=float, default=COMFY_GEN_QA_PASS,
+                        help='порог косинуса приёмки; 0 — не пересевать прогон '
+                             '(на лице в сотню пикселей общий 0.5 недостижим)')
     parser.add_argument('--budget', default='512x512',
                         help='train: бюджет площади «ВхН»: патч сверх него жался бы пропорционально, '
                              'внутри — родной размер, кратно 16')
@@ -587,11 +741,16 @@ if __name__ == '__main__':
             got = comfy_gen_swap(ns.files, ns.workflow, ns.out, base=ns.base,
                                  persona=ns.persona, mode=ns.mode, face=ns.face,
                                  denoise=ns.denoise, detail=ns.detail,
+                                 hf=ns.hf, render=ns.render, steps=ns.steps,
+                                 lora=ns.lora, grain=ns.grain,
+                                 feather=ns.feather, parts_ask=not ns.no_parts,
+                                 qa_pass=ns.qa_pass, fit_full=ns.fit,
                                  seed=ns.seed, qa_det=det,
                                  farm_ssh=ns.farm_ssh,
                                  farm_container=ns.farm_container)
             for r in got:
-                print(r['file'], r['scene'], r['seed'], r['score'], r['pass'])
+                print(r['file'], r['scene'], r['seed'], r['score'], r['pass'],
+                      'зерно', r['grain']['now'], 'маска', r['mask']['cover'])
             raise SystemExit
         if not ns.out:
             raise SystemExit('ошибка: run требует --out (каталог под кадры)')

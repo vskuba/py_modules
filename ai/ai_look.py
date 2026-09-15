@@ -91,7 +91,7 @@ def ai_look_prompt(probe):
     return ', ' + ', '.join(bits)
 
 
-def ai_look_fit(patch, probe, out, region=None):
+def ai_look_fit(patch, probe, out, region=None, full=0.0):
     """Подтянуть цвет заплатки к замерам оригинала; {'before','after','moved'}.
 
     Комящая заплатка помнит цвет датасета: кожа светлее, каналы растянуты не
@@ -102,6 +102,12 @@ def ai_look_fit(patch, probe, out, region=None):
     масштаба (обратная совместимость). `region` (x0,y0,x1,y1) — где мерить
     каналы патча (например, полоса кожи тела под лицом); без него — центральное
     ядро кадра.
+
+    `full` — сколько ОСТАВШЕГОСЯ рассогласования доправить сверх гейта: 0 —
+    как было (только избыток), 1 — полный сдвиг к цели. Гейт бережёт сходство,
+    но оставляет лицо теплее соседней кожи (замер 3095684: минус 26 по синему
+    против настоящей кожи рядом), а на кадре, где лицо и тело в одном свете,
+    это видно глазом раньше цифры.
 
     Правится ИЗБЫТОК рассогласования, а не весь он: coef = max(D−d_lo, 0)/D,
     где D = |mu_s − mu_g| — величина сдвига, d_lo = разброс ядра (тень и блик
@@ -146,6 +152,7 @@ def ai_look_fit(patch, probe, out, region=None):
     # D≈82 при d_lo≈72 — гейт 0.711 против 0.695 полного сдвига; лора второго
     # прохода кладёт свет сама, аффине дорабатывает то, что осталось).
     coef = max(D - d_lo, 0.0) / max(D, 1e-9)
+    coef = coef + (1.0 - coef) * max(0.0, min(1.0, full))
     if D > 1:
         # вес пикселя: 1 на лице (d≈0), 0 на коже тела (d≈D) и на волосах/фоне
         d = np.linalg.norm(x, axis=2)
@@ -158,7 +165,7 @@ def ai_look_fit(patch, probe, out, region=None):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), img)
-    return {'before': before, 'after': probe['skin'],
+    return {'before': before, 'after': probe['skin'], 'coef': round(coef, 3),
             'moved': bool(np.abs(np.round(ratio - 1, 3)).max() > 0.02
                          or max(abs(mu_s - mu_g)) > 1)}
 
@@ -246,7 +253,8 @@ def ai_look_parts(path, box):
             if w.strip(' .') and w.strip(' .') != 'ничего']
 
 
-def ai_look_anchor(patches, source, det_size=(320, 320), top=8):
+def ai_look_anchor(patches, source, det_size=(320, 320), top=8, parts=True,
+                   cache=''):
     """Выбрать патч лица персоны под конкретный source-кадр: ЕЁ лицо и в ракурсе кадра.
 
     Ранг гибрид (AI_LOOK_RANK): доля к косинусу против лица самого кадра —
@@ -256,46 +264,72 @@ def ai_look_anchor(patches, source, det_size=(320, 320), top=8):
     (_look_pose) и цветность (чб ниже). Из лидеров ранга спрашиваем
     ai_look_parts: якорь — первый без рук (AI_LOOK_ANCHOR_HANDS); везде руки —
     берём ранг выше всех как есть.
+
+    `cache` — файл с замерами пачки (эмбединг, точки, коробка, цветность на
+    файл). Замеры патча от кадра не зависят, а детекция двух сотен патчей на CPU
+    идёт минутами — и платил их КАЖДЫЙ прогон swap, хотя пачка не менялась.
+    Новые файлы дописываются в кэш, пропавшие просто не читаются.
     """
     import numpy as np
     from pathlib import Path
     from ai.ai_face import AI_FACE_MODEL, _face_app
-    cv2, app = _face_app(AI_FACE_MODEL, tuple(det_size))
+    # пять точек отдаёт сам детектор: 2d106, 3d68 и пол-возраст здесь лишние,
+    # а на пачке в две сотни патчей их прогон и есть всё время ранжирования
+    cv2, app = _face_app(AI_FACE_MODEL, tuple(det_size),
+                        modules=('detection', 'recognition'))
     big = lambda fs: max(fs, key=lambda x: (x.bbox[2] - x.bbox[0]) *
                          (x.bbox[3] - x.bbox[1]))
-    found = []
+    import json
+    known = {}
+    if cache and Path(cache).exists():
+        known = json.loads(Path(cache).read_text())
+    found, fresh = [], False
     for p in map(Path, patches):
-        img = cv2.imread(str(p))
-        if img is None:
-            continue
-        fs = app.get(img)
-        if not fs:
-            continue
-        f = big(fs)
-        x0, y0, x1, y1 = (int(v) for v in f.bbox)
-        core = img[y0:y1, x0:x1].astype('int16')
-        sat = float(np.median(core.max(axis=2) - core.min(axis=2)))
-        found.append((p, f, sat))
+        got = known.get(p.name)
+        if got is None:
+            img = cv2.imread(str(p))
+            if img is None:
+                continue
+            fs = app.get(img)
+            if not fs:
+                continue
+            f = big(fs)
+            x0, y0, x1, y1 = (int(v) for v in f.bbox)
+            core = img[y0:y1, x0:x1].astype('int16')
+            got = {'emb': [round(float(v), 5) for v in f.normed_embedding],
+                   'kps': [[float(a), float(b)] for a, b in f.kps],
+                   'bbox': [int(v) for v in f.bbox],
+                   'sat': float(np.median(core.max(axis=2) - core.min(axis=2)))}
+            known[p.name], fresh = got, True
+        found.append((p, got))
     if not found:
         raise ValueError('ни на одном патче не нашлось лица')
-    center = np.mean([f.normed_embedding for _, f, _ in found], axis=0)
+    if cache and fresh:
+        Path(cache).write_text(json.dumps(known, ensure_ascii=False) + '\n')
+    center = np.mean([np.asarray(g['emb'], 'float32') for _, g in found], axis=0)
     center = center / np.linalg.norm(center)
     sface = big(app.get(cv2.imread(str(source))))
     s_emb = sface.normed_embedding
     ps = _look_pose(sface.kps, sface.bbox)
-    cand = [(round((AI_LOOK_RANK[0] * float(f.normed_embedding @ s_emb) +
-                    AI_LOOK_RANK[1] * float(f.normed_embedding @ center)) *
-                   max(0.2, 1 - _look_pose_dist(_look_pose(f.kps, f.bbox), ps)) *
-                   min(1.0, sat / 40), 4), p, [int(v) for v in f.bbox])
-            for p, f, sat in found]
+    cand = [(round((AI_LOOK_RANK[0] * float(np.asarray(g['emb'], 'float32') @ s_emb) +
+                    AI_LOOK_RANK[1] * float(np.asarray(g['emb'], 'float32') @ center)) *
+                   max(0.2, 1 - _look_pose_dist(_look_pose(g['kps'], g['bbox']), ps)) *
+                   min(1.0, g['sat'] / 40), 4), p, g['bbox'])
+            for p, g in found]
     cand.sort(key=lambda c: c[0], reverse=True)
+    if not parts:
+        # без vision: ранг решает всё. Руки у подбородка отсеять нечем, зато
+        # прогон не требует ключа провайдера — годится, когда якорь проверяют
+        # глазами или берут из уже отобранного каталога.
+        rank, p, box = cand[0]
+        return {'face': str(p), 'rank': rank, 'box': box, 'parts': []}
     best = None
     for rank, p, box in cand[:top]:
-        parts = ai_look_parts(p, box)
+        got = ai_look_parts(p, box)
         if best is None:
-            best = {'face': str(p), 'rank': rank, 'box': box, 'parts': parts}
-        if not any(any(k in w for k in AI_LOOK_ANCHOR_HANDS) for w in parts):
-            return {'face': str(p), 'rank': rank, 'box': box, 'parts': parts}
+            best = {'face': str(p), 'rank': rank, 'box': box, 'parts': got}
+        if not any(any(k in w for k in AI_LOOK_ANCHOR_HANDS) for w in got):
+            return {'face': str(p), 'rank': rank, 'box': box, 'parts': got}
     return best
 
 

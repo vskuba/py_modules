@@ -66,6 +66,9 @@ namespace-папок, которые проекты импортируют на�
 | `image_/image_tone.py` | `docs/image_tone.md` — построчный профиль оттенка (медиана `g-b` по ярким), вердикт «полоса», дельта карточки одной строкой и стеклянный контракт `delta = a·(F − bg)` |
 | `image_/image_glass.py` | `docs/image_glass.md` — стеклянная плитка: прозрачный webp с полупрозрачной пластиной, кольцевой кромкой и глифами из дампа; lossless+exact |
 | `image_/image_pair.py` | `docs/image_pair.md` — построчная сверка пары кадров (островки ручных правок), вшивка полосы без перегенерации |
+| `image_/image_grain.py` | `docs/image_grain.md` — сигма шума по Иммеркеру, окно настоящей кожи рядом с лицом, синтез зерна по спектру кадра |
+| `ai/ai_face.py`, `ai/ai_look.py`, `ai/ai_landmark.py`, `ai/ai_enhance.py` | `docs/comfy_gen.md`, §3 — выкройка, замеры, центроид как судья, стадии сборки заплатки |
+| `ai/ai_mask.py` | `docs/ai_mask.md` — контур минус перекрытия, связность вместо яркости, перо в пикселях |
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
@@ -205,6 +208,11 @@ CLI есть у модулей, которыми пользуются «рука
 | `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
 | `image_.image_tone` | `rows <файл> [--rect --chan --min-luma --step]`, `band <файл> [... --min-jump]` |
 | `image_.image_pair` | `diff-rows <a> <b> [--thresh --axis --rect]`, `splice <base> <patch> --out --pos [--axis --quality --method]` |
+| `image_.image_grain` | `measure <кадр> [--box --mask]`, `match <заплатка> --out --ref <кадр> --ref-box x0,y0,x1,y1 [--strength]` |
+| `ai.ai_landmark` | `<кадр> [--anchor --det --dense]` → kps/bbox, с `--dense` ещё 106 точек, контур и поза |
+| `ai.ai_mask` | `<кадр> --out маска.png [--overlay --feather --no-occlusion --dark --strand]` |
+| `ai.ai_face` | `score`/`check`/`crop`/`paste` `[--anchor --min --out --mode --det --box --hf --mask]` |
+| `ai.ai_enhance` | `<кадр> --out [--patch --box --kps --scale --feather]` |
 | `apk_.apk_` | `entries <apk> [glob]`, `dump <apk> [подстрока] [--config default│'']`, `xml <apk> <запись>`, `pathdata <apk> <запись>`, `extract <apk> <запись> [--out-dir --png]` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 | `comfy_.comfy_gen` | `run`/`train` `--workflow [--scenes --scene --persona --anchor --qa-anchor --seed --n --denoise --size --out --base --farm-ssh --farm-container]` |

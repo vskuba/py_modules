@@ -46,15 +46,56 @@ def ai_face_score(path, anchor_path, name=AI_FACE_MODEL, det_size=AI_FACE_DET):
 
     На кадре несколько лиц — считается максимум по нормированным эмбедингам.
     Крайний ракурс/мелкое лицо — зови с тем же `det_size`, что кроил.
+    `anchor_path` — файл якоря либо готовый эмбединг (список чисел из
+    `ai_face_centroid`): центроид пачки судит вернее одного кадра.
     """
-    cv2, app = _face_app(name, det_size)
+    import numpy as np
+    cv2, app = _face_app(name, det_size, modules=('detection', 'recognition'))
     faces = app.get(cv2.imread(str(path)))
     if not faces:
         return 0.0
-    anchor = _anchor_embedding(anchor_path, cv2, app)
+    if isinstance(anchor_path, (list, tuple)):
+        anchor = np.asarray(anchor_path, 'float32')
+    else:
+        anchor = _anchor_embedding(anchor_path, cv2, app)
     if anchor is None:
         return 0.0
     return round(max(float(f.normed_embedding @ anchor) for f in faces), 3)
+
+
+def ai_face_centroid(paths, name=AI_FACE_MODEL, det_size=AI_FACE_DET):
+    """Центроид эмбедингов пачки; {'embedding','n','coherence'}.
+
+    Один якорь — плохой судья: его косинус несёт не только «та ли это женщина»,
+    но и ракурс, свет и качество самого якоря. Центроид пачки от ракурса
+    свободен, и рядом с ним есть потолок — `coherence`, медианный косинус самих
+    патчей к нему: выше него не прыгнет ни один результат, потому что столько
+    же дают НАСТОЯЩИЕ фотографии этого человека (замер diana: 0.78 по 79
+    патчам, а чужое лицо кадра даёт −0.14 — вот и вся шкала).
+
+    Считать каждый раз заново дорого (лицо детектится на каждом файле), потому
+    зовущий обычно считает центроид один раз на персону и носит с собой.
+    """
+    import numpy as np
+    # только детекция и эмбединг: точки, поза и пол-возраст центроиду не нужны,
+    # а на пачке в две сотни патчей их прогон и составляет почти всё время
+    cv2, app = _face_app(name, det_size, modules=('detection', 'recognition'))
+    embs = []
+    for p in map(Path, paths):
+        img = cv2.imread(str(p))
+        if img is None:
+            continue
+        faces = app.get(img)
+        if not faces:
+            continue
+        f = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
+        embs.append(f.normed_embedding)
+    if not embs:
+        raise ValueError('ни на одном файле пачки не нашлось лица')
+    c = np.mean(embs, axis=0)
+    c = c / np.linalg.norm(c)
+    return {'embedding': [round(float(v), 6) for v in c], 'n': len(embs),
+            'coherence': round(float(np.median([e @ c for e in embs])), 3)}
 
 
 def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
@@ -70,7 +111,8 @@ def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
     детектор дробит лицо до несерьёзных пикселей и не берёт его — зовущий
     передаёт `det_size` помельче.
     """
-    cv2, app = _face_app(AI_FACE_MODEL, det_size)
+    cv2, app = _face_app(AI_FACE_MODEL, det_size,
+                        modules=('detection', 'recognition'))
     img = cv2.imread(str(path))
     if img is None:
         raise ValueError(f'не прочитан кадр: {path}')
@@ -96,10 +138,15 @@ def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
 
 
 def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
-                  hf=0):
+                  hf=0, mask=''):
     """Вшить заплатку в кадр пером по форме лица; вернуть {'out','box'}.
 
-    Маска — эллипс по пяти точкам детектора (скулы, подбородок, лоб), а не
+    `mask` — готовая серая маска кадра (`ai_mask_face`: контур по 106 точкам
+    минус пряди и пальцы поверх лица). Она уже с пером в пикселях, поэтому
+    `feather` к ней не применяется, а форму никто не угадывает долями. Это
+    основной путь; ветки ниже — для вызовов, у которых маски нет.
+
+    Без `mask`: эллипс по пяти точкам детектора (скулы, подбородок, лоб), а не
     прямоугольник выкройки: вне эллипса кадр не тронут вовсе (причёска и фон
     остаются оригинальные), край пера размывается на feather*минус-сторона.
     Склейка через лапласианову пирамиду (3 уровня): цветовая растяжка идёт по
@@ -123,7 +170,15 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
                     interpolation=cv2.INTER_LANCZOS4).astype(np.float32)
     roi = base_img[y0:y1, x0:x1].astype(np.float32)
     m = np.zeros((bh, bw), np.float32)
-    if kps is not None:
+    if mask:
+        mm = cv2.imread(str(mask), cv2.IMREAD_GRAYSCALE)
+        if mm is None:
+            raise ValueError(f'не прочитана маска: {mask}')
+        # маска кадра — режем по боксу; маска размером с заплатку — как есть
+        if mm.shape[:2] == base_img.shape[:2]:
+            mm = mm[y0:y1, x0:x1]
+        m = cv2.resize(mm, (bw, bh)).astype(np.float32) / 255
+    elif kps is not None:
         k = np.asarray(kps, np.float32) - np.float32([x0, y0])
         ey, my = (k[0][1] + k[1][1]) / 2, (k[3][1] + k[4][1]) / 2   # глаза, рот
         top, bot = ey - (my - ey) * 0.8, my + (my - ey) * 1.15      # лоб, подбородок
@@ -137,7 +192,8 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
         for cx, cy in ((r, r), (bw - 1 - r, r),
                        (r, bh - 1 - r), (bw - 1 - r, bh - 1 - r)):
             cv2.circle(m, (int(cx), int(cy)), r, 1.0, -1)
-    m = cv2.GaussianBlur(m, (0, 0), max(1.0, min(bw, bh) * feather))
+    if not mask:   # готовая маска приходит с пером в пикселях — не размываем
+        m = cv2.GaussianBlur(m, (0, 0), max(1.0, min(bw, bh) * feather))
     gb, gp, gm, lb = [roi], [ph], [m], []
 
     def fit(x, shape):
@@ -166,15 +222,23 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
     return {'out': str(out), 'box': [x0, y0, x1, y1]}
 
 
-def _face_app(name, det=AI_FACE_DET):
-    """FaceAnalysis на пару (имя, det_size): модель тяжёлая, грузится раз."""
-    if (name, tuple(det)) not in _apps:
+def _face_app(name, det=AI_FACE_DET, modules=None):
+    """FaceAnalysis на (имя, det_size, состав): модель тяжёлая, грузится раз.
+
+    `modules` — какие модели пака поднимать (`allowed_modules` insightface).
+    По умолчанию весь пак: детекция, точки 2d106 и 3d68, пол-возраст, эмбединг —
+    пять прогонов на кадр. Тому, кому нужен только косинус, четыре из них лишние,
+    а на пачке в две сотни патчей это минуты (`ai_face_centroid`).
+    """
+    key = (name, tuple(det), tuple(modules) if modules else None)
+    if key not in _apps:
         import cv2  # vision-половина: тяжёлый стек только по требованию
         from insightface.app import FaceAnalysis
-        app = FaceAnalysis(name=name, root=str(Path.home() / '.insightface'))
+        app = FaceAnalysis(name=name, root=str(Path.home() / '.insightface'),
+                           allowed_modules=list(modules) if modules else None)
         app.prepare(ctx_id=-1, det_size=tuple(det))
-        _apps[(name, tuple(det))] = (cv2, app)
-    return _apps[(name, tuple(det))]
+        _apps[key] = (cv2, app)
+    return _apps[key]
 
 
 def _anchor_embedding(anchor_path, cv2, app):
@@ -206,6 +270,9 @@ if __name__ == '__main__':
     parser.add_argument('--hf', type=int, default=0,
                         help='paste: сколько мелких уровней пирамиды берут текстуру '
                              'кадра (частотная склейка LF(заплатка)+HF(кадр); 0 — нет)')
+    parser.add_argument('--mask', default='',
+                        help='paste: готовая серая маска (ai_mask): контур лица '
+                             'минус пряди и пальцы поверх него')
     ns = parser.parse_args()
     det = tuple(int(v) for v in ns.det.split(',')) if ns.det else AI_FACE_DET
     try:
@@ -262,7 +329,8 @@ if __name__ == '__main__':
             if not (ns.patch and ns.out and ns.box):
                 raise SystemExit('paste требуют заплатку, --out и --box из crop')
             r = ai_face_paste(ns.path, ns.patch, ns.out,
-                              [int(v) for v in ns.box.split(',')], hf=ns.hf)
+                              [int(v) for v in ns.box.split(',')], hf=ns.hf,
+                              mask=ns.mask)
             print(json.dumps(r, ensure_ascii=False))
     except (ValueError, KeyError, FileNotFoundError) as err:
         raise SystemExit(f'ошибка: {err}')
