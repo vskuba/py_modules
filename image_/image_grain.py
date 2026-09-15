@@ -38,6 +38,11 @@ IMAGE_GRAIN_SKIN_BAND = (0.62, 1.7)
 IMAGE_GRAIN_HIGHPASS = 0.8
 # Сколько робастных сигм остатка считать зерном: выше — это уже не шум, а край.
 IMAGE_GRAIN_CLIP = 2.5
+# Нижняя граница фактуры эталона, долей от сигмы самого лица: гладкая стена
+# проходит и по цветности, и по яркости (замер istockphoto-653141840: фон кухни
+# sharp 2.8, сигма 0.22 против 0.93 у лица), но зерна в ней нет — и «подгонка»
+# по ней равняет лицо на пустое место.
+IMAGE_GRAIN_REF_MIN = 0.45
 # Полурадиус ядра синтеза, px: корреляция зерна короткая (демозаик и блок JPEG),
 # дальше в ядро попадает структура кадра.
 IMAGE_GRAIN_KERNEL_R = 6
@@ -149,9 +154,11 @@ def image_grain_ref(photo, box, skin=None):
     и берётся то, где больше пикселей похожи на тон кожи лица (`skin` — BGR
     медиана; без неё считается по ядру самой выкройки) и меньше структуры.
 
-    Возвращает лучшее окно; `skin_part` — какая доля его пикселей похожа на
-    кожу. Доля мала везде (лицо занимает кадр целиком, кожи рядом нет) — это
-    видно по числу, и зовущий решает сам: класть гауссово зерно или не класть.
+    Возвращает лучшее окно. `skin_part` — какая доля его пикселей похожа на
+    кожу, `flat` — окно прошло по цвету, но фактуры в нём нет (гладкий фон),
+    `own` — кожи рядом не нашлось вовсе и эталоном стало ядро самого лица.
+    Функция НЕ БРОСАЕТ исключение из-за отсутствия кожи: на крупном портрете
+    вокруг лица её и не бывает, а ронять из-за этого весь прогон нельзя.
     """
     import cv2
     import numpy as np
@@ -177,7 +184,11 @@ def image_grain_ref(photo, box, skin=None):
     sx0, sy0 = max(0, x0 - bw), max(0, y0 - bh // 2)
     sx1, sy1 = min(w, x1 + bw), min(h, y1 + bh)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    best = None
+    # Сколько шума у самого лица: эталон беднее этого — не кожа, а гладкий фон
+    face_sigma = _grain_sigma(gray[y0 + int(bh * .3):y0 + int(bh * .85),
+                                   x0 + int(bw * .25):x1 - int(bw * .25)])
+    floor = face_sigma * IMAGE_GRAIN_REF_MIN
+    best, best_flat = None, None
     for b in range(sy0, sy1 - wh + 1, step):
         for a in range(sx0, sx1 - ww + 1, step):
             c, d = a + ww, b + wh
@@ -186,6 +197,7 @@ def image_grain_ref(photo, box, skin=None):
             part = float(like[b:d, a:c].mean())
             if part < 0.5:
                 continue
+            sig = _grain_sigma(gray[b:d, a:c])
             sharp = float(cv2.Laplacian(gray[b:d, a:c], cv2.CV_64F).var())
             luma = float(np.median(gray[b:d, a:c]))
             # Три требования к эталону, все три — делители ранга:
@@ -194,13 +206,31 @@ def image_grain_ref(photo, box, skin=None):
             # тон, и чужое зерно — в тенях JPEG шумит иначе, чем в светах.
             rank = (part / (1 + sharp / 500)
                     / (1 + abs(luma - face_luma) / IMAGE_GRAIN_LUMA))
+            got = (rank, [a, b, c, d], round(part, 3), round(sharp, 1),
+                   round(luma, 1), round(sig, 2))
+            if sig < floor:                   # гладкий фон: кожи тут нет
+                if best_flat is None or rank > best_flat[0]:
+                    best_flat = got
+                continue
             if best is None or rank > best[0]:
-                best = (rank, [a, b, c, d], round(part, 3), round(sharp, 1),
-                        round(luma, 1))
+                best = got
+    flat = best is None
+    best = best or best_flat
     if best is None:
-        raise ValueError('рядом с лицом не нашлось окна кожи под эталон зерна')
+        # Кожи рядом нет вовсе — обычное дело на крупном портрете: вокруг лица
+        # только волосы и фон (замер: 18 кадров из 31 в тестовом наборе). Это
+        # не авария: источником зерна становится ЯДРО САМОГО ЛИЦА — та же
+        # камера, то же сжатие, та же плотность деталей. Структуру оттуда
+        # вычищает высокочастотный срез с клипом хвостов.
+        core = [x0 + int(bw * .25), y0 + int(bh * .3),
+                x1 - int(bw * .25), y0 + int(bh * .85)]
+        return {'box': core, 'skin_part': 1.0, 'sharp': 0.0,
+                'luma': round(face_luma, 1), 'sigma': round(face_sigma, 2),
+                'flat': False, 'own': True,
+                'face_sigma': round(face_sigma, 2), 'face_luma': round(face_luma, 1)}
     return {'box': best[1], 'skin_part': best[2], 'sharp': best[3],
-            'luma': best[4], 'face_luma': round(face_luma, 1)}
+            'luma': best[4], 'sigma': best[5], 'flat': flat, 'own': False,
+            'face_sigma': round(face_sigma, 2), 'face_luma': round(face_luma, 1)}
 
 
 def _grain_skin_like(img, skin):

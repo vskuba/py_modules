@@ -88,7 +88,7 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                     qa_anchor='', qa_pass=COMFY_GEN_QA_PASS,
                     width=0, height=0, steps=0, lora=1.0,
                     qa_det=COMFY_GEN_QA_DET, farm_ssh='', farm_container='',
-                    remote=COMFY_GEN_REMOTE, face=''):
+                    remote=COMFY_GEN_REMOTE, face='', reuse=False):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
     Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor` детекцией
@@ -107,7 +107,7 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
-    comfy_gen_free(base, farm_ssh, farm_container, need)
+    comfy_gen_free(base, farm_ssh, farm_container, need, reuse=reuse)
     anchor_name = comfy_gen_upload(anchor, base) if anchor else ''
     face_name = comfy_gen_upload(face, base) if face else ''
     if anchor_input:
@@ -139,7 +139,8 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
 
 
 def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_TRAIN_BUDGET,
-                    out='', farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
+                    steps=0, out='', farm_ssh='', farm_container='',
+                    remote=COMFY_GEN_REMOTE):
     """Обучить LoRA на пачке кадров; вернуть локальные пути готовых лор.
 
     workflow — API-JSON с LoadImageTextDataSetFromFolder/MakeTrainingDataset/
@@ -149,7 +150,10 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
     пропорционально — иначе только родной размер: flux на 2D RoPE построен на
     нативном аспекте, и узел сам ведёт список латентов разных форм (multi-res;
     LatentBatch требовал одинаковый размер и калечил пропорции лиц).
-    caption — единая подпись датасета (id персоны, не сцены).
+    caption — единая подпись датасета (id персоны, не сцены). `steps` — число
+    шагов через маркер `__STEPS__`, если граф его несёт: коротким прогоном
+    (8–16 шагов) меряют ПИК ПАМЯТИ, не тратя часы на полное обучение. Без
+    маркера число шагов остаётся тем, что записано в графе.
 
     Лора — актив проекта, ферма её не хранит: при заданных farm_ssh/
     farm_container свежий файл снимается с фермы в out (имя — из prefix
@@ -177,7 +181,7 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
             comfy_gen_upload(q, base, subfolder=caption)
     run = _wf_fill(json.loads(json.dumps(wf)),
                    {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
-                    '__DENOISE__': '1.0'})
+                    '__DENOISE__': '1.0', '__STEPS__': str(steps)})
     _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed, need,
                timeout=COMFY_GEN_TRAIN_TIMEOUT)
     if not farm_ssh:
@@ -190,6 +194,22 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
                  .split() if f.startswith(stem) and f.endswith('.safetensors')):
         got.append(_farm_pull(farm_ssh, farm_container, remote, f'{sub}/{name}',
                               Path(out) if out else Path('.'), stem + '.safetensors'))
+    if got:
+        # Паспорт прогона рядом с лорой: без него «чем её учили» не
+        # восстанавливается ничем — ни именем файла, ни историей фермы.
+        # Ровно эта дыра и обнаружилась на diana_face.safetensors.
+        from image_.image_manifest import image_manifest_save
+        node = next((n['inputs'] for n in wf.values()
+                     if n.get('class_type', n.get('_cls')) == 'TrainLoraNode'), {})
+        image_manifest_save(got, Path(out) if out else Path('.'), batch='train',
+                            caption=caption, seed=seed, budget=list(budget),
+                            steps=steps or node.get('steps'),
+                            workflow=Path(workflow).name, dataset=len(files),
+                            sources=sorted(Path(f).name for f in files),
+                            params={k: node.get(k) for k in
+                                    ('rank', 'learning_rate', 'optimizer',
+                                     'batch_size', 'grad_accumulation_steps',
+                                     'training_dtype', 'lora_dtype')})
     return got
 
 
@@ -197,7 +217,8 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                    denoise=0.8, detail=0.22, seed=1, qa_det=COMFY_GEN_QA_DET,
                    face='', hf=0, render=COMFY_GEN_SWAP_RENDER, steps=20,
                    lora=1.0, grain=1.0, feather=0.0, fit_full=0.0, parts_ask=True,
-                   qa_pass=COMFY_GEN_QA_PASS, farm_ssh='', farm_container=''):
+                   qa_pass=COMFY_GEN_QA_PASS, reuse=False,
+                   farm_ssh='', farm_container=''):
     """Натянуть лицо лоры на готовые фото; вернуть строки манифеста по фото.
 
     Драйвер — только диспетчер: выкройку лица (`ai_face_crop` с `mode`) грузит
@@ -277,12 +298,17 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             mpath = Path(td) / (p.stem + '-mask.png')
             msk = ai_mask_face(p, lm['contour'], str(mpath),
                                feather=feather or max(2.0, (box[3] - box[1]) * 0.035))
-            if ref['skin_part'] >= 0.5:
+            # `flat` — окно прошло по цвету и яркости, но фактуры в нём нет:
+            # это гладкий фон, а не кожа (замер istockphoto-653141840: стена
+            # кухни, сигма 0.16 против 0.86 у лица). Равнять по ней ТОН нельзя —
+            # лицо утащило на [208,164,101] и по контуру пошла синяя кромка.
+            if ref['skin_part'] >= 0.5 and not ref.get('flat'):
                 target = ai_look_probe(p, ref['box'])
             else:
-                h_ = Image.open(p).size[1]
-                target = ai_look_probe(p, (box[0], box[3], box[2],
-                                          min(h_, box[3] + int((box[3] - box[1]) * 0.45))))
+                # кожи рядом нет — равняемся на тон ТОГО ЛИЦА, которое заменяем:
+                # оно заведомо в свете этого кадра, а полоса под подбородком
+                # бывает и волосами, и воротником
+                target = probe
             parts = ai_look_parts(p, box) if parts_ask else []
             prompt = persona + ai_look_prompt(probe)
             w_r, h_r = _swap_render(box, render)
@@ -293,7 +319,7 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                                   anchor=str(crop), face=f or '',
                                   width=w_r, height=h_r, steps=steps, lora=lora,
                                   qa_anchor=str(f or crop), qa_det=qa_det,
-                                  qa_pass=qa_pass,
+                                  qa_pass=qa_pass, reuse=reuse,
                                   farm_ssh=farm_ssh, farm_container=farm_container)
             mp = Path(out) / 'manifest.json'
             man = json.loads(mp.read_text()) if mp.exists() else []
@@ -377,8 +403,12 @@ def comfy_gen_upload(path, base, subfolder=''):
     return name
 
 
-def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0):
+def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0, reuse=False):
     """Перед каждой задачей: освободить память фермы, вернуть свободно (ГиБ).
+
+    `reuse` — не выгружать, если свободного уже хватает под `need`: для пачки
+    кадров по одному графу перезагрузка модели (17 ГБ с диска) стоит дороже
+    всего остального прогона.
 
     Память на GB10 свободна всегда — цифра ниже есть только потому, что ComfyUI
     держит модели в кэше с прошлых прогонов: POST /free их выгружает до `need`.
@@ -386,6 +416,17 @@ def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0):
     инструмент перезапускает контейнер (farm_ssh/farm_container) и ждёт живого
     system_stats; ждать «само освободится» нечего.
     """
+    if reuse:
+        # Пачкой по одному графу выгрузка стоит дороже, чем экономит: модель
+        # весит 17 ГБ и читается с диска заново перед КАЖДЫМ кадром. Если
+        # свободного и так хватает — не трогаем кэш. Гейт при этом никуда не
+        # девается: не хватило — идём обычным путём и выгружаем.
+        try:
+            free = _gen_alive(base)
+            if free >= need + COMFY_GEN_MEM_MARGIN:
+                return free
+        except (httpx.HTTPError, TimeoutError):
+            pass
     try:
         r = httpx.post(f'{base}/free', json={'unload_models': True,
                                              'free_memory': True}, timeout=30)
@@ -701,6 +742,10 @@ if __name__ == '__main__':
                         help='swap: сколько ОСТАВШЕГОСЯ рассогласования тона '
                              'доправить сверх гейта (0 — только избыток, '
                              '1 — полный сдвиг к коже кадра)')
+    parser.add_argument('--reuse', action='store_true',
+                        help='не выгружать модели фермы, если памяти и так '
+                             'хватает: для пачки кадров по одному графу это '
+                             'экономит перезагрузку 17 ГБ на каждый кадр')
     parser.add_argument('--qa-pass', type=float, default=COMFY_GEN_QA_PASS,
                         help='порог косинуса приёмки; 0 — не пересевать прогон '
                              '(на лице в сотню пикселей общий 0.5 недостижим)')
@@ -727,7 +772,7 @@ if __name__ == '__main__':
             w, h = (int(v) for v in ns.budget.lower().split('x'))
             got = comfy_gen_train(ns.workflow, ns.files, base=ns.base,
                                   caption=ns.persona, seed=ns.seed, budget=(w, h),
-                                  out=ns.out, farm_ssh=ns.farm_ssh,
+                                  steps=ns.steps, out=ns.out, farm_ssh=ns.farm_ssh,
                                   farm_container=ns.farm_container)
             print(*(str(p) for p in got) or ['обучено'])
             if got:
@@ -745,6 +790,7 @@ if __name__ == '__main__':
                                  lora=ns.lora, grain=ns.grain,
                                  feather=ns.feather, parts_ask=not ns.no_parts,
                                  qa_pass=ns.qa_pass, fit_full=ns.fit,
+                                 reuse=ns.reuse,
                                  seed=ns.seed, qa_det=det,
                                  farm_ssh=ns.farm_ssh,
                                  farm_container=ns.farm_container)

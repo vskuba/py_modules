@@ -344,18 +344,9 @@ def _look_color_name(rgb):
 
 
 def _look_pose(kps, box):
-    """Ракурс лица по пяти точкам детектора: наклон головы, поворот, подъём.
-
-    Наклон — угол линии глаз; поворот — насколько нос ушёл от середины глаз
-    (в профиль линия сжимается, нос ползёт к краю); подъём — где линия глаз
-    стоит в коробке лица (задранный подбородок — глаза ниже центра).
-    """
-    import math
-    (lx, ly), (rx, ry) = kps[0][:2], kps[1][:2]
-    roll = math.degrees(math.atan2(float(ry - ly), float(rx - lx)))
-    yaw = float(kps[2][0] - (lx + rx) / 2) / max(1.0, float(abs(rx - lx)))
-    pitch = (float(ly + ry) / 2 - float(box[1])) / max(1.0, float(box[3] - box[1]))
-    return round(roll, 1), round(yaw, 3), round(pitch, 3)
+    """Ракурс лица: та же формула, что у `ai_landmark_pose` — и она там одна."""
+    from ai.ai_landmark import ai_landmark_pose
+    return ai_landmark_pose(kps, box)
 
 
 def _look_pose_dist(a, b):

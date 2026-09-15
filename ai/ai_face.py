@@ -75,12 +75,16 @@ def ai_face_centroid(paths, name=AI_FACE_MODEL, det_size=AI_FACE_DET):
 
     Считать каждый раз заново дорого (лицо детектится на каждом файле), потому
     зовущий обычно считает центроид один раз на персону и носит с собой.
+
+    `faces` — построчно по файлам: коробка, пять точек, уверенность детектора,
+    сам эмбединг и косинус К ЦЕНТРОИДУ. Он считается тем же проходом: оценке датасета нужно и
+    то, и другое, а вторая детекция сотни файлов стоит минуты на пустом месте.
     """
     import numpy as np
     # только детекция и эмбединг: точки, поза и пол-возраст центроиду не нужны,
     # а на пачке в две сотни патчей их прогон и составляет почти всё время
     cv2, app = _face_app(name, det_size, modules=('detection', 'recognition'))
-    embs = []
+    embs, rows = [], []
     for p in map(Path, paths):
         img = cv2.imread(str(p))
         if img is None:
@@ -90,12 +94,20 @@ def ai_face_centroid(paths, name=AI_FACE_MODEL, det_size=AI_FACE_DET):
             continue
         f = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
         embs.append(f.normed_embedding)
+        rows.append({'file': p.name, 'bbox': [int(v) for v in f.bbox],
+                     'emb': [round(float(v), 5) for v in f.normed_embedding],
+                     'kps': [[round(float(a), 1), round(float(b), 1)] for a, b in f.kps],
+                     'det': round(float(f.det_score), 3), 'faces': len(faces),
+                     'size': [int(img.shape[1]), int(img.shape[0])]})
     if not embs:
         raise ValueError('ни на одном файле пачки не нашлось лица')
     c = np.mean(embs, axis=0)
     c = c / np.linalg.norm(c)
+    for row, e in zip(rows, embs):
+        row['cos'] = round(float(e @ c), 3)
     return {'embedding': [round(float(v), 6) for v in c], 'n': len(embs),
-            'coherence': round(float(np.median([e @ c for e in embs])), 3)}
+            'coherence': round(float(np.median([e @ c for e in embs])), 3),
+            'faces': rows}
 
 
 def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
@@ -215,7 +227,12 @@ def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,
         # заплатка доходит только до грубых уровней (LF — геометрия и цвет).
         g = np.zeros_like(gm[lvl][..., None]) if lvl < hf else gm[lvl][..., None]
         r = fit(cv2.pyrUp(r), bb.shape) + pp * g + bb * (1 - g)
-    base_img[y0:y1, x0:x1] = r
+    # КЛИП обязателен: лапласианова пирамида даёт выброс за границы на резком
+    # перепаде (светлая кожа против тёмных волос), а присваивание float32 в
+    # uint8-массив numpy заворачивает по модулю — 260 становится 4. На контуре
+    # лица это выглядело как чистая синяя кромка: R и G ушли в ноль, B остался
+    # (замер istockphoto-653141840).
+    base_img[y0:y1, x0:x1] = np.clip(r, 0, 255).astype(base_img.dtype)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), base_img)

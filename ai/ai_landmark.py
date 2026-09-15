@@ -83,6 +83,22 @@ def ai_landmark_dense(path, anchor='', det_size=AI_LANDMARK_DET):
             'pose': [round(float(v), 1) for v in f.get('pose', [0, 0, 0])]}
 
 
+def ai_landmark_pose(kps, bbox):
+    """Ракурс по пяти точкам: (наклон°, поворот, подъём).
+
+    Наклон — угол линии глаз; поворот — насколько нос ушёл от середины глаз (в
+    профиль линия сжимается, нос ползёт к краю); подъём — где линия глаз стоит в
+    коробке лица. Те же три числа, по которым `ai_look_anchor` подбирает патч
+    под ракурс кадра, и по которым оценка датасета считает покрытие углов.
+    """
+    import math
+    (lx, ly), (rx, ry) = kps[0][:2], kps[1][:2]
+    roll = math.degrees(math.atan2(float(ry - ly), float(rx - lx)))
+    yaw = float(kps[2][0] - (lx + rx) / 2) / max(1.0, float(abs(rx - lx)))
+    pitch = (float(ly + ry) / 2 - float(bbox[1])) / max(1.0, float(bbox[3] - bbox[1]))
+    return round(roll, 1), round(yaw, 3), round(pitch, 3)
+
+
 def ai_landmark_ellipse(bbox, kps, mode='face'):
     """Коробка эллипса по kps: тот же овал, что режет mask в ai_face_paste.
 
