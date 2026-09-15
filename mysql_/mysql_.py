@@ -8,6 +8,7 @@ from aiomysql.pool import _create_pool, Pool
 
 from config.config import config_get
 from logging_.logging_ import logger_info
+from mysql_.mysql_log import mysql_log_line
 
 pool: Optional[aiomysql.Pool] = None
 pool_lock = asyncio.Lock()
@@ -83,7 +84,7 @@ class MySQLConnectionManager:
         if self._cursor is None:
             raise RuntimeError("Попытка выполнить execute() вне контекста 'async with db:'")
 
-        log_msg = f"[MySQL SQL]: {query} | Args: {args}" if args else f"[MySQL SQL]: {query}"
+        log_msg = mysql_log_line(query, args)
         logger_info(log_msg)
         try:
             return await self._cursor.execute(query, args)
@@ -121,7 +122,7 @@ class LoggingCursor:
         return getattr(self._cursor, name)
 
     async def execute(self, query, args=None):
-        log_msg = f"[MySQL SQL]: {query} | Args: {args}" if args else f"[MySQL SQL]: {query}"
+        log_msg = mysql_log_line(query, args)
         logger_info(log_msg)
 
         try:

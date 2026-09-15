@@ -86,14 +86,24 @@ def http_heartbeat_ready(config: dict) -> bool:
     return bool(data.get('base') and (data.get('beat') or data.get('alive')))
 
 
-def http_heartbeat_client() -> httpx.AsyncClient:
-    """Общий клиент под все сессии. Закрывать вызывающему.
+def http_heartbeat_client(proxy: str = '') -> httpx.AsyncClient:
+    """Общий клиент под все сессии **одного выхода**. Закрывать вызывающему.
+
+    Args:
+        proxy: адрес прокси (`http_proxy.py`). Пусто — прямой выход, как было.
 
     ⚠ Он **без cookie**: они у каждой сессии свои и уходят с запросом. Клиент
     здесь ради переиспользования соединений, а не ради состояния.
+
+    ⚠ **Клиент на выход, а не один на всех.** Там, где сайт считает учётки по
+    внешнему адресу, каждая сессия ходит своим прокси — и общий клиент отправил бы
+    их все через один. Вызывающий группирует сессии по выходу и держит клиента на
+    группу; переиспользование соединений от этого не страдает — оно и так имеет
+    смысл только внутри одного выхода.
     """
     return httpx.AsyncClient(
         timeout=HTTP_HEARTBEAT_TIMEOUT, follow_redirects=True,
+        proxy=proxy or None,
         headers={'User-Agent': HTTP_HEARTBEAT_UA},
         limits=httpx.Limits(max_connections=HTTP_HEARTBEAT_PARALLEL * 2,
                             max_keepalive_connections=HTTP_HEARTBEAT_PARALLEL))

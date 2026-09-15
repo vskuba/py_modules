@@ -18,10 +18,12 @@ DOM (`watch`), журнал консоли (`console`). Так это состо
 import asyncio
 import time
 import uuid
+from urllib.parse import unquote
 
 from playwright.async_api import async_playwright, Browser, Playwright
 
 from config.config import config_get
+from http_.http_proxy import http_proxy_hide
 from logging_.logging_ import logger_info
 
 # Предел на число живых страниц. Ограничение не Chromium-а — он выдержит больше, —
@@ -81,7 +83,8 @@ async def browser_pool_stop():
 
 async def browser_pool_session_open(name: str = '', url: str = '', storage_state: dict | None = None,
                                     viewport: dict | None = None, site_id: int = 0,
-                                    locale: str = '', timezone_id: str = '') -> dict:
+                                    locale: str = '', timezone_id: str = '',
+                                    proxy: str = '') -> dict:
     """Заводит сессию: свой контекст, одна страница в нём.
 
     `storage_state` — сохранённые cookie и localStorage прошлой сессии: с ним
@@ -94,6 +97,16 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
     `site_id` — метка вызывающего: чем он сам эту сессию помечает (у нас — закладка
     сайта в его базе). Пул её не проверяет и ничего о ней не знает; в базу она не
     уезжает и уезжать не должна — сессия живёт в памяти и умирает вместе с процессом.
+
+    `proxy` — выход наружу для **этой** сессии: `socks5://user:pass@host:1080`.
+
+    ⚠ **Прокси на контекст, а не на браузер.** Chromium здесь один на процесс, и
+    задай мы выход при запуске — через него пошли бы все сессии разом. Сайтам
+    знакомств нужно обратное: учётки считаются по внешнему адресу, и у каждой
+    анкеты он должен быть свой. Контекст это и даёт, не поднимая второго браузера.
+
+    ⚠ **Пароль сюда приезжает открытым** — иначе через прокси не пройти. В журнал
+    он не попадает: строка сессии пишет адрес без него.
     """
     if _browser is None:
         raise RuntimeError('браузер не запущен')
@@ -116,6 +129,8 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
             options['locale'] = locale
         if timezone_id:
             options['timezone_id'] = timezone_id
+        if proxy:
+            options['proxy'] = _proxy_options(proxy)
 
         context = await _browser.new_context(**options)
         page = await context.new_page()
@@ -130,7 +145,11 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
             'used_at': time.time(),
         }
 
-    logger_info(f'[browser] сессия открыта: {session_id} ({name or "без имени"}), всего {len(_sessions)}')
+    # Выход пишем в строку журнала, но **без пароля**: `http_proxy_hide` оставляет
+    # схему, логин и хост — по ним видно, той ли прокси открылась сессия.
+    through = f', выход {http_proxy_hide(proxy)}' if proxy else ''
+    logger_info(f'[browser] сессия открыта: {session_id} ({name or "без имени"})'
+                f'{through}, всего {len(_sessions)}')
 
     if url:
         try:
@@ -270,3 +289,38 @@ def _session_info(entry: dict) -> dict:
         'recording': entry.get('record') is not None,
         'watching': entry.get('watch') is not None,
     }
+
+
+def _proxy_options(url: str) -> dict:
+    """Адрес выхода → то, чего ждёт Playwright: `{server, username, password}`.
+
+    ⚠ **Логин и пароль отдельными полями, а не внутри адреса.** Playwright
+    передаёт `server` в Chromium как есть, а тот учётные данные из URL прокси
+    игнорирует: выход молча оказался бы неавторизованным, и провайдер отвечал бы
+    407-м на каждый запрос страницы.
+
+    ⚠ **SOCKS5 с паролем Chromium не умеет вовсе** — это его давнее ограничение,
+    а не наше. Такой выход годится нашему HTTP-слою (httpx умеет), но не браузеру,
+    поэтому случай назван в журнале словами: иначе он выглядит как «сайт не
+    открывается», и искать причину будут в сценарии.
+    """
+    raw = str(url or '')
+    scheme, rest = raw.split('://', 1) if '://' in raw else ('http', raw)
+
+    username = password = ''
+    if '@' in rest:
+        auth, rest = rest.rsplit('@', 1)
+        username, _, password = auth.partition(':')
+        username, password = unquote(username), unquote(password)
+
+    if username and scheme.startswith('socks'):
+        logger_info(f'[browser] ⚠ {scheme} с логином: Chromium не умеет авторизацию SOCKS — '
+                    f'сессия пойдёт мимо выхода либо получит отказ провайдера')
+
+    options = {'server': f'{scheme}://{rest}'}
+    if username:
+        options['username'] = username
+    if password:
+        options['password'] = password
+
+    return options

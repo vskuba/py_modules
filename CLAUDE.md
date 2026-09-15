@@ -72,7 +72,7 @@ namespace-папок, которые проекты импортируют на�
 | `comfy_/comfy_gen.py` | `docs/comfy_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
 | `comfy_/comfy_collection.py` | `docs/comfy_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
-| `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md` |
+| `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
 | `logging_/` | `docs/observability_rules.md` |
 | `datetime_/` | `docs/datetime_rules.md` |

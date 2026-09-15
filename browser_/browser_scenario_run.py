@@ -51,6 +51,10 @@ class BrowserScenarioRunRequest(BaseModel):
     variables: dict[str, str] = Field(default_factory=dict, description='Значения; попадают в журнал')
     secrets: dict[str, str] = Field(default_factory=dict, description='Значения; в журнал не попадают')
     keep_session: bool = Field(False, description='Не гасить временную сессию после прогона')
+    # Выход наружу для временной вкладки — строкой, а не номером: у контейнера
+    # базы нет, реестр разворачивает тот, кто его ведёт.
+    proxy: str = Field('', max_length=500,
+                       description='Выход временной вкладки: socks5://user:pass@host:1080')
 
 
 @router.post('/browser/scenario/run', dependencies=browser_api_auth)
@@ -68,6 +72,7 @@ async def browser_scenario_run_post(data: BrowserScenarioRunRequest):
             variables=data.variables,
             secrets=data.secrets,
             keep_session=data.keep_session,
+            proxy=data.proxy,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail='сессия не найдена')
@@ -79,8 +84,17 @@ async def browser_scenario_run_post(data: BrowserScenarioRunRequest):
 
 async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
                                variables: dict | None = None, secrets: dict | None = None,
-                               keep_session: bool = False) -> dict:
+                               keep_session: bool = False, proxy: str = '') -> dict:
     """Выполняет шаги по порядку и возвращает трассу прогона.
+
+    `proxy` — выход наружу для **временной** вкладки, которую прогон заводит сам
+    (`session_id` пуст). Готовая сессия свой выход уже имеет, и подменять его
+    нельзя: он задан при её открытии.
+
+    ⚠ **Без этого сценарий входа ходил бы с общего адреса.** Прогон с пустым
+    `session_id` — обычное дело (отправка, звёздочка, карточка собеседника), и
+    внутри он логинится под учёткой. Сайты, считающие вход по IP, складывали бы
+    все такие входы на один адрес сервера.
 
     Первый упавший шаг останавливает прогон: следующие шаги рассчитывают на то,
     что предыдущий сработал, и продолжать значило бы получить лавину ошибок вместо
@@ -95,7 +109,7 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     if missing:
         raise ValueError(f'не переданы переменные: {", ".join(missing)}')
 
-    entry, own_session = await _session_take(session_id, scenario.name)
+    entry, own_session = await _session_take(session_id, scenario.name, proxy)
     page = entry['page']
     # Наблюдатели — состояние **на прогон**, а не на страницу.
     #
@@ -155,11 +169,15 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     }
 
 
-async def _session_take(session_id: str, name: str) -> tuple[dict, bool]:
+async def _session_take(session_id: str, name: str, proxy: str = '') -> tuple[dict, bool]:
     """Сессия прогона и признак «завели её мы».
 
     Свою сессию гасим после прогона, чужую — никогда: сценарий часто крутят на
     странице, которую человек в этот момент смотрит в живом окне.
+
+    ⚠ `proxy` действует только на **свою** вкладку: у готовой сессии выход задан
+    при открытии, и менять его на ходу Playwright не умеет — прокси там свойство
+    контекста, а не запроса.
     """
     if session_id:
         entry = browser_pool_session_get(session_id)
@@ -169,7 +187,7 @@ async def _session_take(session_id: str, name: str) -> tuple[dict, bool]:
             raise RuntimeError('страница сессии закрыта')
         return entry, False
 
-    session = await browser_pool_session_open(name=f'сценарий: {name}'[:100])
+    session = await browser_pool_session_open(name=f'сценарий: {name}'[:100], proxy=proxy)
     return browser_pool_session_get(session['session_id']), True
 
 

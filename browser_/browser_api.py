@@ -46,6 +46,13 @@ class BrowserSessionCreate(BaseModel):
     viewport: dict | None = Field(None, description='{"width": …, "height": …}')
     locale: str = Field('', max_length=20, description='Язык интерфейса сайта, напр. ru-RU')
     timezone_id: str = Field('', max_length=60, description='Пояс страницы, напр. Europe/Kyiv')
+    # Адрес выхода целиком, с логином и паролем: `socks5://user:pass@host:1080`.
+    #
+    # ⚠ Строкой, а не номером в чужом реестре: контейнер-браузер про базу не знает
+    # и знать не должен — у него её нет вовсе. Кто и где хранит выходы, решает
+    # вызывающий; сюда приезжает готовый адрес.
+    proxy: str = Field('', max_length=500,
+                       description='Выход наружу: socks5://user:pass@host:1080')
 
     @field_validator('url')
     @classmethod
@@ -132,6 +139,7 @@ async def browser_api_session_create(data: BrowserSessionCreate):
             site_id=data.site_id,
             locale=data.locale,
             timezone_id=data.timezone_id,
+            proxy=data.proxy,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
