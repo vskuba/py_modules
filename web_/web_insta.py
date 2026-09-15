@@ -49,7 +49,8 @@ async def web_insta_download(posts: list[dict], out: str, concurrency: int = 6) 
     """Скачать медиа постов в каталог out; вернуть строки манифеста.
 
     Имена — sha256[:32] содержимого (как везде в датасетах персоны), рядом
-    ложится manifest.json со строками {file, pk, taken_at}. Уже скачанное по
+    ложится `posts.json` со строками {file, pk, taken_at} — реестр скачанного,
+    а не манифест прогона (тот свой, словарём, пишет проект). Уже скачанное по
     хэшу не перекачивается.
     """
     import httpx
@@ -82,7 +83,7 @@ async def web_insta_download(posts: list[dict], out: str, concurrency: int = 6) 
         res = await asyncio.gather(*[one(b) for b in posts])
         rows = [r for r in res if r]
     if rows:
-        old = out / 'manifest.json'
+        old = out / 'posts.json'
         prev = json.loads(old.read_text()) if old.exists() else []
         old.write_text(json.dumps(prev + rows, ensure_ascii=False, indent=1) + '\n')
     return rows
@@ -125,7 +126,7 @@ def _balanced(s: str, i: int) -> int:
 
 def _seen_rows(out) -> set:
     from pathlib import Path
-    old = out / 'manifest.json'
+    old = out / 'posts.json'
     return {r['file'] for r in (json.loads(old.read_text()) if old.exists() else [])}
 
 
