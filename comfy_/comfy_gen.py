@@ -776,8 +776,11 @@ if __name__ == '__main__':
             print('на ферме')
             raise SystemExit
         if ns.command == 'free':
-            print(f"свободно {comfy_gen_free(ns.base, ns.farm_ssh,
-                                             ns.farm_container):.1f} ГиБ")
+            # Перенос строки внутри f-строки — синтаксис 3.12+, а образы
+            # проектов стоят на python:3.11-slim: там это `SyntaxError` при
+            # импорте модуля целиком. Считаем значение заранее.
+            free = comfy_gen_free(ns.base, ns.farm_ssh, ns.farm_container)
+            print(f'свободно {free:.1f} ГиБ')
             raise SystemExit
         if ns.command == 'train':
             w, h = (int(v) for v in ns.budget.lower().split('x'))
