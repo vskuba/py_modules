@@ -343,7 +343,10 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                     im.resize((bw, bh), Image.LANCZOS).save(patch)
                 # каналы — до тона КОЖИ ТЕЛА кадра (не лица оригинала: оно чужое
                 # и своего тона; замер 12677b19 — минус 34 по синему)
-                fit = ai_look_fit(patch, target, patch, full=fit_full)
+                # Цель с самого лица (`own`) — правим равномерно: взвешивать по
+                # «лицевости» нечего, и карта в этом случае красит пятнами.
+                fit = ai_look_fit(patch, target, patch, full=fit_full,
+                                  weighted=not ref.get('own'))
                 # зерно: генератор отдаёт стерильный пиксель, а рядом лежит
                 # настоящая кожа с шумом матрицы и следами JPEG. Эталон — то же
                 # окно кожи, что дало цель тона: зерно берётся оттуда же
