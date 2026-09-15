@@ -74,12 +74,12 @@ def image_sheet_crops(files, out, box=None, mode='raw', cols=IMAGE_SHEET_COLS,
             x0, y0, x1, y1 = ai_landmark_ellipse(lm['bbox'], lm['kps'], mode=mode)
         else:
             x0, y0, x1, y1 = 0, 0, img.shape[1], img.shape[0]
-        crops.append(cv2.cvtColor(img[max(0, y0):min(img.shape[0], y1),
+        crops.append((cv2.cvtColor(img[max(0, y0):min(img.shape[0], y1),
                                       max(0, x0):min(img.shape[1], x1)],
-                                 cv2.COLOR_BGR2RGB))
+                                   cv2.COLOR_BGR2RGB), f))
     from PIL import Image
-    tmp = [Path(out).with_suffix('.crop%02d.png') .resolve() for _ in crops]
-    for c, t in zip(crops, tmp):
+    tmp = [Path(out).with_name(f'{f.stem}-кроп.png') for _, f in crops]
+    for (c, _), t in zip(crops, tmp):
         Image.fromarray(c).save(t)
     got = _grid(tmp, out, cols, thumb, 'name')
     for t in tmp:
