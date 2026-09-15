@@ -245,6 +245,10 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                 patch = Path(td) / (p.stem + '-patch.png')
                 Image.open(gen).crop(tuple(box)).save(patch)
                 fit = ai_look_fit(patch, target, patch)
+                # маска — скруглённый прямоугольник бокса, НЕ эллипс по kps: по
+                # весовой подгонке лицо целиком тасует аффина; эллипс режет
+                # лицо по скулам, оставляя чужое лицо исходника в кольце
+                # (замер 2026-09-15: эллипс 0.305 против прямоугольника 0.689)
                 ai_face_paste(p, patch, gen, box, feather=0.2)
                 r['gen_score'] = r['score']  # что дал граф до диспетчерской склейки
                 r['fit'] = {k: fit[k] for k in ('before', 'after')}
