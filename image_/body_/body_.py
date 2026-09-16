@@ -64,12 +64,19 @@ async def body_passport(paths: list[str], model_name: str = '') -> dict:
     from ai.ai_vision import ai_vision_describe  # лениво: LLM-стек нужен только здесь
 
     async def one(path: str) -> dict:
-        try:
-            raw = await ai_vision_describe(
-                open(path, 'rb').read(), _body_prompt(), model_name=model_name)
-            return {'path': str(path), 'passport': _body_json(raw)}
-        except (OSError, RuntimeError, ValueError) as err:
-            return {'path': str(path), 'error': f'{type(err).__name__}: {err}'}
+        # кадр читаем в две попытки: сетевой сбой модели (ReadTimeout и прочий
+        # транспорт) чаще лечится вторым запросом, а упрямый остаётся ошибкой
+        # одного кадра — прогон из-за него терять нечего, он уйдёт в skipped.
+        for retry in (False, True):
+            try:
+                raw = await ai_vision_describe(
+                    open(path, 'rb').read(), _body_prompt(), model_name=model_name)
+                return {'path': str(path), 'passport': _body_json(raw)}
+            except Exception as err:
+                if retry:
+                    return {'path': str(path),
+                            'error': f'{type(err).__name__}: {err}'}
+                await asyncio.sleep(2)
 
     frames = list(await asyncio.gather(*[one(p) for p in paths]))
     read = [f['passport'] for f in frames if 'passport' in f]
