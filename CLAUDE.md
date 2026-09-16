@@ -88,6 +88,7 @@ namespace-папок, которые проекты импортируют на�
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
 | `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье» |
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
+| `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
@@ -190,6 +191,7 @@ CLI есть у модулей, которыми пользуются «рука
 | Модуль | Команды |
 |--------|---------|
 | `tool_.tool_find` | `«намерение словами» [--limit N]`, `--map` → функции и темы по запросу |
+| `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose` → следы неудачной правки в прозе |
 | `project_.project_` | `root`, `main-root`, `python`, `env` |
 | `project_.project_run` | `-c` / `-a` / `-m` / `<файл>` / `-` (stdin) |
 | `project_.project_submodule` | `state`, `bump [--line --from]` → gitlink против чекаута, слияние двух линий |
@@ -234,7 +236,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `image_.image_pair` | `diff-rows <a> <b> [--thresh --axis --rect]`, `splice <base> <patch> --out --pos [--axis --quality --method]` |
 | `image_.image_grain` | `measure <кадр> [--box --mask]`, `match <заплатка> --out --ref <кадр> --ref-box x0,y0,x1,y1 [--strength]` |
 | `image_.body_.body_` | `<кадр…> [--model]` → сведённый JSON-паспорт фигуры |
-| `image_.body_.body_compare` | `<паспорт-a.json> <паспорт-b.json>` → score + полевой поясень |
+| `image_.body_.body_compare` | `<паспорт-a.json> <паспорт-b.json>` → score + полевое пояснение |
 | `image_.body_.body_find` | `[<исходник…>] --from-url URL [--out --limit --model]` → ранг похожих по фигуре; без исходника — лента как есть |
 | `ai.ai_landmark` | `<кадр> [--anchor --det --dense]` → kps/bbox, с `--dense` ещё 106 точек, контур и поза |
 | `ai.ai_mask` | `<кадр> --out маска.png [--overlay --feather --no-occlusion --dark --strand]` |
@@ -258,6 +260,9 @@ grep -rln "__main__" --include=*.py . | grep -v '\.venv\|__pycache__'
 `docs/code_rules.md`, раздел «Автопроверка»):
 
 ```bash
+# следы неудачной правки в прозе — перед каждым коммитом (docs_rules.md, §6.0)
+PYTHONPATH=. python -m tool_.tool_typo
+
 # приватная функция стоит выше публичной
 for f in $(git ls-files '*.py'); do
   last_pub=$(grep -nP '^(async )?def [a-z]' "$f" | tail -1 | cut -d: -f1)
