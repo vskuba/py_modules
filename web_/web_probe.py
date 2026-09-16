@@ -18,6 +18,9 @@ CDP-сессию и не размечая кадр по пикселям. Отв
   (поздний посев чинят вызовом из зонда ререндера вроде `DIA_RENDER`);
 * измеряется момент исполнения зонда (t=0 раскладки), а не момент дампа:
   анимированный transform в значения не попадает — для него budget не help;
+* тело зонда исполняется внутри `async function` и ждёт результат через `await`
+  — сам зонд тоже может `await`-ить (таймеры страницы при виртуальном времени
+  сжимаются, `await new Promise(r => setTimeout(r, 50))` доживает до дампа);
 * SVG `className` — строка только через `getAttribute('class')`, в зонде про
   svg-селекторы это ловушка для JS-руки.
 
@@ -55,7 +58,8 @@ def web_probe(src, probe_js, seed_js='', size=WEB_SHOT_SIZE,
         src: http(s)-URL или путь к локальному HTML (раздаётся со своего
             каталога, как в `web_shot` — корневые ссылки живут).
         probe_js: тело функции-зонда; обязан что-то `return`-нуть (значение и
-            вернётся). Исполняется после всех скриптов страницы.
+            вернётся). Исполняется после всех скриптов страницы; внутри async
+            функции — тело умеет `await`.
         seed_js: JS сразу после <head>, до скриптов страницы — посев
             localStorage и прочее состояние, которое страница читает на старте.
         size: (ширина, высота) вьюпорта.
@@ -104,9 +108,11 @@ def web_probe_rects(src, selectors, **kw) -> dict:
 
 
 def _probe_script(probe_js) -> str:
-    """Обёртка зонда: try/catch, результат — в скрытый <pre> документа."""
-    return ("(function () { var out;"
-            "try { out = JSON.stringify((function () { %s })()); }"
+    """Обёртка зонда: async-IIFE — тело умеет `await` (виртуальное время крутит
+    таймеры страницы, микрозадачи доживают до дампа), try/catch, результат —
+    в скрытый <pre> документа."""
+    return ("(async function () { var out;"
+            "try { out = JSON.stringify(await (async function () { %s })()); }"
             "catch (e) { out = JSON.stringify({__probe_error__: String(e)}); }"
             "var pre = document.createElement('pre');"
             "pre.id = '%s'; pre.style.display = 'none';"
