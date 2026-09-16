@@ -38,11 +38,11 @@ async def body_find(photos: list[str], sources: list[str], out: str = '',
 
     Returns:
         success: дошли ли до ранга
-        passport: сведённый паспорт исходников — пояс «на что похожи»;
+        passport: сведённый паспорт исходников — пояснение «на что похожи»;
             без исходников — пустой, а `items` тогда идут без оценки
         conflicts: поля, где исходные кадры не сошлись
         items: [{pk, score, taken_at, files, fields, caveats}] ранжированно по
-            сходству; fields — полевой пояснь кандидата перед человеком
+            сходству; fields — полевое пояснение кандидата перед человеком
         error: только при success=false
     """
     from web_.web_insta import web_insta_posts, web_insta_download
