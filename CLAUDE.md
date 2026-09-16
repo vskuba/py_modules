@@ -53,6 +53,7 @@ namespace-папок, которые проекты импортируют на�
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) |
+| `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
 | `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
 | `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
@@ -80,11 +81,15 @@ namespace-папок, которые проекты импортируют на�
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
+| `setting_/setting_state.py` | `docs/setting_state.md` — JSON-состояние кругов поверх настроек, `dynamic=1` |
 | `logging_/` | `docs/observability_rules.md` |
 | `datetime_/` | `docs/datetime_rules.md` |
 | `auth_/` | `docs/auth_rules.md` |
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
+| `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье» |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
+| `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
+| `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
 
 Полное оглавление — `docs/readme.md`. Три файла оттуда к правкам здесь отношения не
@@ -178,6 +183,9 @@ CLI есть у модулей, которыми пользуются «рука
 |--------|---------|
 | `project_.project_` | `root`, `main-root`, `python`, `env` |
 | `project_.project_run` | `-c` / `-a` / `-m` / `<файл>` / `-` (stdin) |
+| `project_.project_submodule` | `state`, `bump [--line --from]` → gitlink против чекаута, слияние двух линий |
+| `project_.project_test` | `[цели pytest] [--k -k-фильтр] [--m маркер]` → код возврата сюиты |
+| `setting_.setting_state` | `read`/`patch`/`clear <ключ> [--defaults '{}'] [--patch '{}']` → состояние JSON |
 | `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
 | `ai.ai_vision` | `describe`, `normalize` |
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
@@ -196,7 +204,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_rec` | `record [out] [--seconds N --during «shell» --serial S]`, `frames [mp4] [--times 0.5,1.2 │ --fps 2 --out-dir DIR]`, `sheet [mp4] [--out --fps --cols --width]`, `compare <a> <b> --times 0.3,1.4 [--labels A,B --cell-width --out]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
+| `web_.web_peek` | `<URL> [--markers a,b] [--method --body --show]` → сырой ответ без браузера |
 | `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
+| `uvicorn_.uvicorn_panel` | `GET /health`, `POST /api/... --body '{...}'` — под учёткой из `.env`, автоперелогин |
+| `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
 | `comfy_.comfy_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
 | `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
