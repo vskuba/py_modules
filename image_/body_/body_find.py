@@ -6,6 +6,10 @@
 паспорт и сверяется с источником; пост с несколькими кадрами в ранге усредняется
 по своим кадрам. Каталог по умолчанию временный: разовый прогон ничего не
 переживает, что бы индексировалось.
+
+Исходники необязательны: без них сверять нечего, и тогда кадры из источников
+отдаются списком без оценки (`score: null`, `fields: []`) — судья глаза, а не
+страж-цифра. Сверка включается только тем, что пришло с фото-исходниками.
 """
 import argparse
 import asyncio
@@ -24,7 +28,8 @@ async def body_find(photos: list[str], sources: list[str], out: str = '',
     """Найти в источниках кадры с фигурой, похожей на фигуру исходников.
 
     Args:
-        photos: файлы фото-исходников (по ним строится паспорт источника)
+        photos: файлы фото-исходников (по ним строится паспорт источника);
+            пусто — сверять нечего, кадры отдаются списком без оценки
         sources: URL источников (профили/посты Instagram — что читает web_insta)
         out: каталог для скачанных кандидатов; пусто — временный (разовый прогон)
         limit: сколько кандидатов вернуть максимум
@@ -33,7 +38,8 @@ async def body_find(photos: list[str], sources: list[str], out: str = '',
 
     Returns:
         success: дошли ли до ранга
-        passport: сведённый паспорт исходников — пояс «на что похожи»
+        passport: сведённый паспорт исходников — пояс «на что похожи»;
+            без исходников — пустой, а `items` тогда идут без оценки
         conflicts: поля, где исходные кадры не сошлись
         items: [{pk, score, taken_at, files, fields, caveats}] ранжированно по
             сходству; fields — полевой пояснь кандидата перед человеком
@@ -41,10 +47,12 @@ async def body_find(photos: list[str], sources: list[str], out: str = '',
     """
     from web_.web_insta import web_insta_posts, web_insta_download
 
-    src = await body_passport(photos, model_name=model_name)
-    if not src['success']:
-        return {'success': False,
-                'error': f'исходники не прочитаны: {src["error"]}'}
+    src = None
+    if photos:
+        src = await body_passport(photos, model_name=model_name)
+        if not src['success']:
+            return {'success': False,
+                    'error': f'исходники не прочитаны: {src["error"]}'}
 
     with contextlib.ExitStack() as stack:
         dir_ = Path(out) if out else Path(
@@ -58,6 +66,17 @@ async def body_find(photos: list[str], sources: list[str], out: str = '',
             rows += [r for r in got if 'err' not in r]
         if not rows:
             return {'success': False, 'error': 'источники не отдали ни одного кадра'}
+
+        if src is None:
+            # исходников нет — ни паспорта, ни сверки, ни vision-чтения кадров:
+            # список в порядке ленты, судья — глаза
+            return {'success': True, 'passport': {}, 'conflicts': {},
+                    'items': [{'pk': r['pk'] or Path(r['file']).stem,
+                               'score': None, 'taken_at': r['taken_at'],
+                               'files': [str(dir_ / r['file'])],
+                               'fields': [], 'caveats': {}}
+                              for r in rows[:limit]],
+                    'skipped': []}
 
         sem = asyncio.Semaphore(concurrency)
 
@@ -93,8 +112,10 @@ async def body_find(photos: list[str], sources: list[str], out: str = '',
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(
-        description='Поиск по источникам: исходники → паспорта → ранг кандидатов.')
-    p.add_argument('photo', nargs='+', help='файлы фото-исходников')
+        description='Поиск по источникам: исходники (необязательны) → паспорта '
+                    '→ ранг кандидатов; без исходников — лента как есть.')
+    p.add_argument('photo', nargs='*', default=[],
+                   help='файлы фото-исходников; пусто — список без сверки')
     p.add_argument('--from-url', dest='from_url', action='append', required=True,
                    help='источник (профиль/пост Instagram); повторяемо')
     p.add_argument('--out', default='', help='каталог кандидатов; пусто — временный')
