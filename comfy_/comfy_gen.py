@@ -467,14 +467,20 @@ def comfy_gen_model(files, base, farm_ssh, farm_container, dest=COMFY_GEN_MODELS
     LoraLoader ключуется путём: свежий файл под тем же именем без рестарта
     молча генерит прежним лицом (граф тот же, манифест разницы не видит) —
     поэтому именно рестарт контейнера, а не только загрузка файла."""
+    # ⚠ Адрес фермы может нести флаги (`-i ключ`, `-o …`): своего ~/.ssh/config
+    # внутри контейнера нет. Разбираем по пробелам — адрес последним словом,
+    # остальное опции. Тот же приём, что в `comfyui_trainer_*._ssh`; без него
+    # `scp` получал всю строку одним аргументом и падал.
+    *opts, host = str(farm_ssh).split()
     for f in files:
         name = Path(f).name
-        subprocess.run(['scp', str(f), f'{farm_ssh}:/tmp/{name}'],
+        subprocess.run(['scp', *opts, str(f), f'{host}:/tmp/{name}'],
                        capture_output=True, check=True)
-        subprocess.run(['ssh', farm_ssh, f'docker cp /tmp/{name} {farm_container}:'
+        subprocess.run(['ssh', *opts, host,
+                        f'docker cp /tmp/{name} {farm_container}:'
                         f'{dest}/{name} && rm /tmp/{name}'],
                        capture_output=True, text=True, check=True)
-    subprocess.run(['ssh', farm_ssh, f'docker restart {farm_container}'],
+    subprocess.run(['ssh', *opts, host, f'docker restart {farm_container}'],
                    capture_output=True, text=True, check=True)
     _gen_alive(base)
     return [Path(f).name for f in files]
