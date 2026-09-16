@@ -80,7 +80,8 @@ def ai_vision_normalize(image: bytes, max_side: int = AI_VISION_MAX_SIDE) -> byt
 
 
 async def ai_vision_describe(image: bytes, prompt: str = '', model_name: str = '',
-                             max_tokens: int = 2500, timeout: float = 180.0) -> str:
+                             max_tokens: int = 2500, timeout: float = 180.0,
+                             out: dict | None = None) -> str:
     """
     Спросить vision-модель, что на картинке, — одним ходом, без истории.
 
@@ -98,6 +99,10 @@ async def ai_vision_describe(image: bytes, prompt: str = '', model_name: str = '
             (gx10 — 131072) принимает с запасом.
         timeout: секунды на весь запрос; локальная модель на большой картинке
             думает медленно, щедрый таймаут по умолчанию не случайно.
+        out: сюда кладутся `url` (куда ушёл запрос) и `status` (код ответа) —
+            журналу прогона они нужны, а больше нигде они и не живут: адрес
+            здесь расходится с именем модели, а код никто, кроме этого запроса,
+            не знает. Ставится и при отказе — обрыв тоже надобно видеть.
 
     Returns:
         Текст ответа модели.
@@ -135,10 +140,16 @@ async def ai_vision_describe(image: bytes, prompt: str = '', model_name: str = '
     }
     body.update(provider.raw_body_no_thinking())
 
+    url = f'{base_url.rstrip("/")}/chat/completions'
+    if out is not None:
+        out['url'] = url       # до запроса: при обрыве сети видно хотя бы куда целились
+
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f'{base_url.rstrip("/")}/chat/completions',
-                                 json=body,
+        resp = await client.post(url, json=body,
                                  headers={'Authorization': f'Bearer {api_key}'})
+
+    if out is not None:
+        out['status'] = resp.status_code   # и провал тоже: журнал переживает не только успех
 
     if resp.status_code != 200:
         raise RuntimeError(
