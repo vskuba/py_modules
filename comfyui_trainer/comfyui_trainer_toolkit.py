@@ -22,7 +22,7 @@ def comfyui_trainer_toolkit_check(*, toolkit, base, farm_ssh, farm_container):
     после утреннего generic-лица.
     """
     sh = subprocess.run(
-        ['ssh', farm_ssh, f'docker exec -i {farm_container} bash -s'],
+        ['ssh', *str(farm_ssh).split(), f'docker exec -i {farm_container} bash -s'],
         input=(f"echo $(grep -ac '{COMFYUI_TRAINER_TOOLKIT_PATCH_MARKER}' "
                f"{toolkit}/toolkit/stable_diffusion_model.py) "
                f"$(grep -ac '{COMFYUI_TRAINER_TOOLKIT_UNPATCHED}' "

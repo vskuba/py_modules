@@ -199,7 +199,7 @@ def comfyui_trainer_base(src, dst, *, farm_ssh, farm_container,
     script = (COMFYUI_TRAINER_BASE_SCRIPT
               .replace('__SRC__', src).replace('__DST__', str(dst))
               .replace('__REPO__', repo))
-    r = subprocess.run(['ssh', farm_ssh, f'docker exec -i {farm_container} '
+    r = subprocess.run(['ssh', *str(farm_ssh).split(), f'docker exec -i {farm_container} '
                         f'bash -c "cat > /tmp/comfyui_trainer_base.py"'],
                        input=script.encode(), check=True, capture_output=True)
 
@@ -207,9 +207,9 @@ def comfyui_trainer_base(src, dst, *, farm_ssh, farm_container,
         return subprocess.run(cmd, capture_output=True, text=True,
                               check=True, errors='replace').stdout
 
-    out = _run(['ssh', farm_ssh, f'docker exec {farm_container} {python} '
+    out = _run(['ssh', *str(farm_ssh).split(), f'docker exec {farm_container} {python} '
                 f'/tmp/comfyui_trainer_base.py'])
-    _run(['ssh', farm_ssh, f'docker exec {farm_container} rm -f '
+    _run(['ssh', *str(farm_ssh).split(), f'docker exec {farm_container} rm -f '
           f'/tmp/comfyui_trainer_base.py'])
     print(out)
     return str(dst)

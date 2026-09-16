@@ -71,7 +71,7 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
     }
     yml = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)
     remote_cfg = f'{toolkit}/config/{name}.yaml'
-    subprocess.run(['ssh', farm_ssh, f'docker exec -i {farm_container} '
+    subprocess.run([*_ssh(farm_ssh), f'docker exec -i {farm_container} '
                     f'bash -c "cat > {remote_cfg}"'],
                    input=yml.encode(), check=True, capture_output=True)
     # единая память GB10: не влезает с запасом — отказ, не отправляя
@@ -109,15 +109,27 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
     return _pull(farm_ssh, farm_container, remote, out, name)
 
 
+def _ssh(host):
+    """`ssh` с адресом в аргументы команды; адрес может нести флаги.
+
+    ⚠ Строка `host` разбирается по пробелам, а не подставляется целиком. Иначе
+    вызывающему негде передать `-i ключ` и `-o …`, а они обязательны там, где
+    своего `~/.ssh/config` нет или он чужой по правам: внутри контейнера процесс
+    работает от root, а проброшенный конфиг принадлежит человеку снаружи — ssh
+    отвергает такой файл ДО того, как посмотрит на флаги.
+    """
+    return ['ssh', *str(host).split()]
+
+
 def _sh(host, container, sh):
-    return subprocess.run(['ssh', host, f'docker exec {container} sh -c "{sh}"'],
+    return subprocess.run([*_ssh(host), f'docker exec {container} sh -c "{sh}"'],
                           capture_output=True, text=True, check=True, errors='replace').stdout
 
 
 def _pull(host, container, remote, out, name):
     """Лора фермы — в проект под именем персоны и стерта на ферме."""
     p = f'{out}/{name}.safetensors'
-    subprocess.run(['ssh', host, f'docker exec {container} cat {remote}'],
+    subprocess.run([*_ssh(host), f'docker exec {container} cat {remote}'],
                    check=True, capture_output=True,
                    stdout=open(p, 'wb'))
     _sh(host, container, f'rm -rf {remote.rsplit("/", 1)[0]}')  # папка прогона
