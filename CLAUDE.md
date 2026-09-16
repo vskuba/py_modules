@@ -87,6 +87,7 @@ namespace-папок, которые проекты импортируют на�
 | `auth_/` | `docs/auth_rules.md` |
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
 | `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье» |
+| `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
@@ -134,6 +135,8 @@ namespace-папок, которые проекты импортируют на�
 Как перечислять — секунды, дешевле самописного аналога:
 
 ```bash
+PYTHONPATH=. python -m tool_.tool_find "что нужно сделать"   # ← первый ход: функции и темы по намерению
+PYTHONPATH=. python -m tool_.tool_find --map                 # не нашлось словами — карта namespace
 cat docs/readme.md                              # оглавление тем: строка на файл
 ls                                              # namespace-папки: актуальнее любой таблицы
 grep -rnP '^(async )?def [a-z]' --include=*.py . | grep -v '\.venv\|__pycache__'
@@ -186,6 +189,7 @@ CLI есть у модулей, которыми пользуются «рука
 
 | Модуль | Команды |
 |--------|---------|
+| `tool_.tool_find` | `«намерение словами» [--limit N]`, `--map` → функции и темы по запросу |
 | `project_.project_` | `root`, `main-root`, `python`, `env` |
 | `project_.project_run` | `-c` / `-a` / `-m` / `<файл>` / `-` (stdin) |
 | `project_.project_submodule` | `state`, `bump [--line --from]` → gitlink против чекаута, слияние двух линий |
@@ -324,7 +328,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_`, `redis_queue`, `qdrant_`, `sqllite3`, `queue_`, `state` |
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_` |
-| Утилиты | `project_`, `datetime_`, `json_`, `async_`, `thread_` |
+| Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `datetime_`, `json_`, `async_`, `thread_` |
 | Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `apk_` (разбор APK на машине), `translator`, `flux_schnell`, `microphone` |
 
 Назначение каждого — `docs/py_modules.md`, §3; актуальный список — всегда `ls`, а не эта
