@@ -351,6 +351,7 @@ def _shift_1d(pa: np.ndarray, pb: np.ndarray, search: int) -> tuple:
 
 
 def main() -> None:
+    """CLI: `python -m image_.image_frames delta|stitch|drift|shift|grid|cycle …`."""
     ap = argparse.ArgumentParser(description='Скролл-кадры и анимация')
     ap.add_argument('command',
                     choices=['delta', 'stitch', 'drift', 'shift', 'grid', 'cycle'])

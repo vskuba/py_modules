@@ -9,6 +9,24 @@ async def setting_get(
         user_id: int | None = None,
         node_id: int | None = None
 ) -> Any | None:
+    """Прочитать настройку из базы — в своей области: общей, пользователя или узла.
+
+    Args:
+        key: имя настройки.
+        default: чем ответить, когда строки нет.
+        user_id: область пользователя; пусто — общая настройка.
+        node_id: область узла; пусто — общая настройка.
+
+    Returns:
+        Значение так, как оно лежит в базе, иначе `default`.
+
+    ⚠ Область задаётся парой `(user_id, node_id)`, и пустое значение здесь означает
+    `IS NULL`, а не «любой»: общая настройка и пользовательская — разные строки, и
+    запрос без `user_id` пользовательскую не найдёт.
+
+    ⚠ Значения хранятся строками (`setting_set` делает `str(value)`): число и
+    булево вернутся как `'1'`, а не как `1` или `True`.
+    """
     async with mysql_get_db_async() as db:
         condition, params = _scope_condition(user_id, node_id)
         await db.execute(
@@ -30,6 +48,22 @@ async def setting_set(
         node_id: int | None = None,
         dynamic: int = 0,
 ) -> bool:
+    """Записать настройку — обновить существующую либо завести новую.
+
+    Args:
+        key: имя настройки.
+        value: значение; приводится к строке.
+        user_id: область пользователя; пусто — общая настройка.
+        node_id: область узла; пусто — общая настройка.
+        dynamic: пометка «значение ведёт программа, а не человек» — см. `setting_state`.
+
+    Returns:
+        bool: всегда `True`; неуспех приходит исключением.
+
+    ⚠ Upsert собран руками: уникальный индекс не ловит дубли, когда в колонках
+    области стоит `NULL`. Отсюда порядок «UPDATE → проверить наличие → INSERT», и
+    при гонке двух процессов строка всё же может задвоиться.
+    """
     async with mysql_get_db_async() as db:
         # Уникальный индекс не ловит дубли при NULL в scope-колонках — свой upsert
         condition, params = _scope_condition(user_id, node_id)
@@ -57,6 +91,19 @@ async def setting_delete(
         user_id: int | None = None,
         node_id: int | None = None
 ) -> bool:
+    """Удалить настройку в своей области — общую, пользователя или узла.
+
+    Args:
+        key: имя настройки.
+        user_id: область пользователя; пусто — общая настройка.
+        node_id: область узла; пусто — общая настройка.
+
+    Returns:
+        bool: всегда `True`, в том числе когда удалять было нечего.
+
+    ⚠ Пустые `user_id`/`node_id` означают `IS NULL`, а не «любой»: вызов без них
+    сносит общую настройку и не трогает пользовательские.
+    """
     async with mysql_get_db_async() as db:
         condition, params = _scope_condition(user_id, node_id)
         await db.execute(

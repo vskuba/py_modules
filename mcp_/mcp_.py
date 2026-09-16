@@ -41,6 +41,11 @@ class McpConfig(BaseModel):
 
 
 def mcp_config_list_get() -> list[str]:
+    """Имена сохранённых конфигураций MCP-серверов — по файлам каталога настроек.
+
+    Returns:
+        list[str]: имена без расширения `.json`; каталога нет — пустой список.
+    """
     if not os.path.exists(_mcp_config_dir()):
         return []
 
@@ -48,6 +53,17 @@ def mcp_config_list_get() -> list[str]:
 
 
 def mcp_config_get(name: str) -> McpConfig | None:
+    """Прочитать конфигурацию MCP-сервера: команда запуска, окружение, инструменты.
+
+    Args:
+        name: имя конфигурации, как в `mcp_config_list_get`.
+
+    Returns:
+        McpConfig | None: `None` и когда файла нет, и когда он не читается.
+
+    ⚠ Ошибка чтения наружу не поднимается — она уходит в журнал, а возвращается
+    `None`: «нет конфигурации» и «конфигурация сломана» отсюда неразличимы.
+    """
     filename = _mcp_config_filename(name)
     if not os.path.exists(filename):
         return None
@@ -65,6 +81,18 @@ def mcp_config_get(name: str) -> McpConfig | None:
 
 
 def mcp_config_tools_json_get(name: str) -> list[dict[str, Any]]:
+    """Инструменты MCP-сервера сырым JSON — без разбора в `McpConfig`.
+
+    Нужно там, где схему инструментов отдают модели как есть: разбор в датакласс и
+    обратная сборка потеряли бы поля, которых нет в `McpTool`.
+
+    Args:
+        name: имя конфигурации.
+
+    Returns:
+        list[dict]: инструменты как записаны; нет файла, нет ключа или файл битый —
+        пустой список.
+    """
     filename = _mcp_config_filename(name)
     if not os.path.exists(filename):
         return []
@@ -108,6 +136,14 @@ def mcp_config_save(name: str, config: McpConfig):
 
 
 def mcp_config_delete(name: str):
+    """Удалить файл конфигурации MCP-сервера.
+
+    Args:
+        name: имя конфигурации.
+
+    Returns:
+        Всегда `None` — и когда файл удалён, и когда его не было.
+    """
     filename = _mcp_config_filename(name)
     file_path = Path(filename)
     if file_path.exists():

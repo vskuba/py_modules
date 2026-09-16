@@ -335,6 +335,7 @@ def _chan_pair(chan) -> tuple:
 
 
 def main() -> None:
+    """CLI: `python -m image_.image_tone rows|band|delta|edge|glass …`."""
     import argparse
 
     ap = argparse.ArgumentParser(

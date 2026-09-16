@@ -3,6 +3,22 @@ from diffusers import AutoPipelineForText2Image
 from PIL import Image, ImageDraw, ImageFont
 
 def add_text_to_image(img, text):
+    """Подписать кадр — чёрная плашка снизу и белый текст поверх неё.
+
+    Args:
+        img: картинка Pillow; правится **на месте**.
+        text: подпись в одну строку — по ширине кадра не переносится и уходит за край.
+
+    Returns:
+        Та же картинка, что пришла, — для удобства цепочки вызовов.
+
+    ⚠ Имя историческое, без префикса namespace: переименование сломает соседние
+    проекты, поэтому его не трогают.
+
+    ⚠ Файл вокруг — не библиотека, а **скрипт**: на импорте он поднимает SDXL-turbo
+    на процессоре и рисует восемнадцать кадров в текущий каталог. Ради одной этой
+    функции импортировать модуль нельзя.
+    """
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 16)

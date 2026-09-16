@@ -142,10 +142,23 @@ class LoggingCursor:
 
 
 def mysql_get_url() -> str:
+    """Адрес базы строкой `mysql://…` — собирается из настроек окружения.
+
+    ⚠ Содержит пароль открытым текстом: в журнал, в вывод команды и в текст ошибки
+    не класть.
+    """
     return f'mysql://{user}:{password}@{host}:{port}/{db}'
 
 
 def mysql_conn_get() -> pymysql.Connection:
+    """Отдельное синхронное соединение с базой — мимо пула, строки словарями.
+
+    Returns:
+        pymysql.Connection: новое соединение, `utf8mb4`, `DictCursor`.
+
+    ⚠ Соединение **не из пула**, и закрывает его вызывающий. Асинхронному коду
+    приложения нужен не этот вход, а `mysql_get_db_async`.
+    """
     return pymysql.connect(
         host=host,
         port=port,
@@ -158,6 +171,14 @@ def mysql_conn_get() -> pymysql.Connection:
 
 
 def mysql_get_db():
+    """Синхронное соединение генератором — под зависимости FastAPI (`Depends`).
+
+    Yields:
+        pymysql.Connection: соединение; закрывается в `finally`, когда зависимость
+        отработала.
+
+    ⚠ Транзакцию за вызывающего не ведёт: `commit` остаётся на нём.
+    """
     connection = mysql_conn_get()
     try:
         yield connection
@@ -166,10 +187,31 @@ def mysql_get_db():
 
 
 def mysql_get_db_async():
+    """Курсор из общего пула — обычный способ сходить в базу: `async with … as db`.
+
+    Returns:
+        MySQLConnectionManager: менеджер контекста; внутри — курсор со строками-
+        словарями, соединение возвращается в пул на выходе.
+
+    ⚠ Сама функция **не корутина**: `await` перед ней не нужен, работа начинается
+    в `async with`.
+
+    ⚠ Пул заводится с `autocommit=True` — отдельная транзакция не открывается,
+    каждый запрос фиксируется сам по себе.
+    """
     return MySQLConnectionManager()
 
 
 async def mysql_pool_get() -> Pool:
+    """Общий пул соединений с базой — один на процесс, заводится при первом обращении.
+
+    Returns:
+        Пул aiomysql: 5–10 соединений, autocommit, DictCursor.
+
+    ⚠ Пул лежит в модульной переменной и привязан к event loop, в котором создан.
+    Импорт длинной формой (`py_modules.mysql_.mysql_`) загрузит модуль второй раз —
+    и пулов станет два.
+    """
     global pool
     if pool is None:
         async with pool_lock:
@@ -192,6 +234,12 @@ async def mysql_pool_get() -> Pool:
 
 
 async def mysql_pool_close():
+    """Закрыть общий пул и дождаться, пока соединения отпустят, — на остановке приложения.
+
+    ⚠ Обнуляет модульную переменную, поэтому следующий `mysql_pool_get` заведёт пул
+    заново. В кронджобе это обязательный `finally`: без закрытия процесс не выйдет,
+    пока соединения не отвалятся по таймауту.
+    """
     global pool
     if pool is not None:
         pool.close()

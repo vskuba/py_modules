@@ -207,6 +207,7 @@ def _rects(raw) -> list:
 
 
 def main() -> None:
+    """CLI: `python -m image_.image_glass <src> <out> --rects --fill …` — подкоманд нет."""
     import argparse
 
     ap = argparse.ArgumentParser(

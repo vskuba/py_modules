@@ -281,6 +281,7 @@ def _moving_avg(p, k):
 
 
 def main() -> None:
+    """CLI: `python -m image_.image_layout bgfield|edge|dots|cutout …`."""
     ap = argparse.ArgumentParser(description='Геометрия разметки в кадре')
     ap.add_argument('command', choices=['bgfield', 'edge', 'dots', 'cutout'])
     ap.add_argument('files', nargs='+')

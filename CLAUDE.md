@@ -223,8 +223,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `image_.image_scan` | `runs`, `bbox [--tone --tol --rect --alpha-thresh]`, `rows`, `glyph`, `windows`, `diff` |
 | `image_.image_svg` | `<svg> [-o out] [--size 512 --supersample 3]` |
 | `image_.image_fix` | `erase <файл> --out --box ...`, `inpaint <файл> --out --box ... [--sigma]`, `fill <файл> --out --box --color`, `strokes <файл> --out --box ...` |
-| `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid` |
-| `image_.image_tone` | `rows <файл> [--rect --chan --min-luma --step]`, `band <файл> [... --min-jump]` |
+| `image_.image_frames` | `delta`, `stitch`, `drift`, `shift`, `grid`, `cycle [--interval --tol --rect]` |
+| `image_.image_layout` | `bgfield [--xy]`, `edge [--band --axis --search]`, `dots --band [--tol]`, `cutout --rect --out [--radius --feather]` |
+| `image_.image_glass` | `<src> <out> --rects --fill [--radius --rim --rim-w --no-ink --crop --ss]` — подкоманд нет |
+| `image_.image_tone` | `rows <файл> [--rect --chan --min-luma --step]`, `band <файл> [... --min-jump]`, `delta [--y --bg --card --height]`, `edge [--x --w --probe]`, `glass --fill\|--delta [--bg --alpha]` |
 | `image_.image_pair` | `diff-rows <a> <b> [--thresh --axis --rect]`, `splice <base> <patch> --out --pos [--axis --quality --method]` |
 | `image_.image_grain` | `measure <кадр> [--box --mask]`, `match <заплатка> --out --ref <кадр> --ref-box x0,y0,x1,y1 [--strength]` |
 | `image_.body_.body_` | `<кадр…> [--model]` → сведённый JSON-паспорт фигуры |

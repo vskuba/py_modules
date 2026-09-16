@@ -137,6 +137,7 @@ def _runs(flags, start: int) -> list:
 
 
 def main() -> None:
+    """CLI: `python -m image_.image_pair diff-rows|splice …`."""
     import argparse
 
     ap = argparse.ArgumentParser(
