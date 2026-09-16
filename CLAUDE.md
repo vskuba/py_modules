@@ -192,10 +192,15 @@ CLI есть у модулей, которыми пользуются «рука
 |--------|---------|
 | `tool_.tool_find` | `«намерение словами» [--limit N]`, `--map` → функции и темы по запросу |
 | `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose` → следы неудачной правки в прозе |
+| `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
+| `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
+| `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
+| `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
 | `project_.project_` | `root`, `main-root`, `python`, `env` |
 | `project_.project_run` | `-c` / `-a` / `-m` / `<файл>` / `-` (stdin) |
 | `project_.project_submodule` | `state`, `bump [--line --from]` → gitlink против чекаута, слияние двух линий |
 | `project_.project_test` | `[цели pytest] [--k -k-фильтр] [--m маркер]` → код возврата сюиты |
+| `project_.project_probe` | `-a «код» [--service uvicorn --root]` → домен окружением поднятой панели снаружи |
 | `setting_.setting_state` | `read`/`patch`/`clear <ключ> [--defaults '{}'] [--patch '{}']` → состояние JSON |
 | `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
 | `ai.ai_vision` | `describe`, `normalize` |
@@ -219,6 +224,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
 | `uvicorn_.uvicorn_panel` | `GET /health`, `POST /api/... --body '{...}'` — под учёткой из `.env`, автоперелогин |
 | `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
+| `uvicorn_.uvicorn_stale` | `[--root --service]` → панель бежит правку или старый код; мёртвые `.pyc` |
 | `comfy_.comfy_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
 | `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
