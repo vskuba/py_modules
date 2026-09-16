@@ -198,7 +198,14 @@ def _value(one, name: str):
 
 
 def _clean(text: str) -> str:
-    """Вырезает секреты из содержимого: пары JSON и пароль строки подключения."""
-    text = _JSON_PAIR.sub(lambda m: m.group(1) + MYSQL_LOG_MARK + m.group(3), text)
+    """Вырезает секреты из содержимого — общими правилами, а не своими.
 
-    return _URL_AUTH.sub(lambda m: m.group(1) + MYSQL_LOG_MARK + m.group(3), text)
+    ⚠ **Правила живут в `logging_/logging_secret.py`**, потому что нужны не только
+    журналу базы: тело ответа чужого сайта тоже уходит в журнал и тоже может
+    нести пароль. Две копии этих регулярок разошлись бы в первый же день, когда
+    список ключей пополнят, — и разошлись бы молча: журнал выглядел бы
+    вычищенным.
+    """
+    from logging_.logging_secret import logging_secret_clean
+
+    return logging_secret_clean(text)
