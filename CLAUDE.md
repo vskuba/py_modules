@@ -104,6 +104,11 @@ namespace-папок, которые проекты импортируют на�
 - **Приватные (`_prefix`) — ниже всех публичных, в конце файла.**
 - **Константы — `UPPER_CASE` с префиксом namespace**: `ADB_UI_WAIT_TIMEOUT`, `AI_VISION_MAX_SIDE`.
 - **Никакой кириллицы в идентификаторах.** Докстринги и комментарии — по-русски.
+- **Докстринг у публичной функции обязателен**, и первая его строка — зачем функцию звать,
+  словами, которыми её ищут: не «Возвращает соединение Redis», а «Подключиться к Redis —
+  один клиент на процесс, адрес из настроек». Есть грабли — блок `⚠` в докстринге
+  обязателен. Подробности — `docs/code_rules.md`, §7; новый инструмент вдобавок приносит
+  страницу в `docs/` — `docs/docs_rules.md`, §7.
 - Ориентир по размеру файла — ~150–200 строк; больше — сигнал делить по ответственности.
 
 **Исторические исключения не «чинят»** (переименование ломает соседей): `logger_info`,
@@ -257,6 +262,19 @@ done
 # кириллица в именах
 grep -rnP "^\s*(async\s+)?def\s+\w*[а-яА-ЯёЁ]|^\s*class\s+\w*[а-яА-ЯёЁ]" \
   --include=*.py . | grep -v "\.venv\|__pycache__"
+
+# публичная функция без докстринга
+python - <<'PY'
+import ast, pathlib
+for p in sorted(pathlib.Path('.').rglob('*.py')):
+    if '.venv' in p.parts or '__pycache__' in p.parts: continue
+    try: tree = ast.parse(p.read_text(encoding='utf-8'))
+    except SyntaxError: continue
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and not n.name.startswith('_') and not ast.get_docstring(n):
+            print(f'{p}:{n.lineno} {n.name}')
+PY
 ```
 
 Известные несоответствия на сегодня: `qdrant_/qdrant_.py` (приватная выше публичной) —
