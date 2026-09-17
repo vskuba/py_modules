@@ -277,9 +277,14 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             # по каталогу патчей рядом с якорем (или рядом с файлом-якорем).
             pack = f if f and f.is_dir() else (f.parent if f else None)
             centroid = _swap_centroid(pack) if pack and pack.is_dir() else None
-            if f and f.is_dir():  # каталог патчей: якорь — самый чистый под ракурс кадра
-                f = Path(ai_look_anchor(sorted(f.glob('*.png')), p,
-                                        parts=parts_ask,
+            if f and f.is_dir():  # каталог пачки: якорь — самый чистый под ракурс кадра
+                # ⚠ Все кадры пачки, а не только `*.png` — та же грабля, что у
+                # центроида выше. Материалы приходят с камеры и лежат `.jpg`; на
+                # одной установке единственными png в каталоге оказались три
+                # ЧУЖИХ лица, и якорем становились они.
+                кадры = sorted(x for x in f.iterdir()
+                               if x.is_file() and x.suffix.lower() in COMFY_GEN_FACE_EXTS)
+                f = Path(ai_look_anchor(кадры, p, parts=parts_ask,
                                         cache=str(f / 'anchors.json'))['face'])
             probe = ai_look_probe(p, box)
             # Цель подгонки — не лицо оригинала (оно чужое и своего тона), а
