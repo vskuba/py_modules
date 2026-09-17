@@ -97,9 +97,10 @@ namespace-папок, которые проекты импортируют на�
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
 
-Полное оглавление — `docs/readme.md`. Три файла оттуда к правкам здесь отношения не
+Полное оглавление — `docs/readme.md`. Четыре файла оттуда к правкам здесь отношения не
 имеют, они про устройство проекта-потребителя: `new_project.md`, `frontend_rules.md`,
-`deploy_rules.md`. `testing_rules.md` — тоже про проект: сюита живёт там (см. «Команды»).
+`frontend_check_rules.md`, `deploy_rules.md`. `testing_rules.md` — тоже про проект: сюита
+живёт там (см. «Команды»).
 
 Короткая выжимка `code_rules.md` — то, что нарушают чаще всего:
 
