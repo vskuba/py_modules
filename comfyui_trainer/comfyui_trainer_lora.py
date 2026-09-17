@@ -127,11 +127,26 @@ def _sh(host, container, sh):
 
 
 def _pull(host, container, remote, out, name):
-    """Лора фермы — в проект под именем персоны и стерта на ферме."""
+    """Лора фермы — в проект под именем персоны и стерта на ферме.
+
+    ⚠ `capture_output` и `stdout` вместе НЕ ЖИВУТ: `subprocess.run` бросает
+    `ValueError: stdout and stderr arguments may not be used with
+    capture_output`. Забор при этом падал ВСЕГДА, а `open(p, "wb")` успевал
+    создать пустой файл — и он выглядел как готовая лора. Одно обучение
+    (2 ч 17 мин фермы) так и пропало: пустышку приняли за веса, а папку прогона
+    следом стёрли.
+
+    Поэтому здесь только `stderr`, а вывод идёт прямо в файл. И папка прогона
+    стирается ТОЛЬКО когда файл непустой: пока весов нет, они должны остаться
+    на ферме — это единственное место, откуда их ещё можно забрать.
+    """
     p = f'{out}/{name}.safetensors'
-    subprocess.run([*_ssh(host), f'docker exec {container} cat {remote}'],
-                   check=True, capture_output=True,
-                   stdout=open(p, 'wb'))
+    with open(p, 'wb') as f:
+        got = subprocess.run([*_ssh(host), f'docker exec {container} cat {remote}'],
+                             check=True, stderr=subprocess.PIPE, stdout=f)
+    if not Path(p).stat().st_size:
+        raise RuntimeError(f'лора снялась пустой: {remote} '
+                           f'({got.stderr.decode(errors="replace").strip()})')
     _sh(host, container, f'rm -rf {remote.rsplit("/", 1)[0]}')  # папка прогона
     return p
 
