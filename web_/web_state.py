@@ -63,3 +63,20 @@ def _origin(url: str) -> str:
     from urllib.parse import urlsplit
     p = urlsplit(url)
     return f'{p.scheme}://{p.netloc}'
+
+
+if __name__ == '__main__':
+    import argparse
+    import json as _json
+    ap = argparse.ArgumentParser(
+        description='Спросить живую панель и вернуть поле ответа из-под '
+                    'конверта result (учётка — из .env проекта).')
+    ap.add_argument('url', help='полный адрес ручки')
+    ap.add_argument('--params', action='append', default=[],
+                    metavar='ключ=значение', help='query-параметр, повторять')
+    ap.add_argument('--method', default='GET')
+    ap.add_argument('--body', default='', help='тело JSON для пишущих ручек')
+    ns = ap.parse_args()
+    print(_json.dumps(web_state(
+        ns.url, params=dict(p.split('=', 1) for p in ns.params) or None,
+        method=ns.method, json_body=ns.body or None), ensure_ascii=False))

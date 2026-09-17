@@ -52,7 +52,7 @@ namespace-папок, которые проекты импортируют на�
 | `adb_/adb_rec.py` | `docs/mobile_rec.md` — запись экрана, разбор на кадры, обзорный лист, сверка двух записей |
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
-| `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) |
+| `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) и про страницу панели без бойлерплейта (`web_drive_page`: вход из `.env`, модуль с любыми кавычками, `wait` с базой) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `web_/web_gallery.py` | `docs/web_gallery.md` — полноразмерные фото страницы-галереи: ленивая разметка, оригиналы без суффиксов |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
@@ -87,12 +87,12 @@ namespace-папок, которые проекты импортируют на�
 | `datetime_/` | `docs/datetime_rules.md` |
 | `auth_/` | `docs/auth_rules.md` |
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
-| `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье» |
+| `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье»; точка «что отвечает ручка» одним вызовом (`web_/web_state.py`) |
 | `uvicorn_/uvicorn_mirror.py` | `docs/uvicorn_mirror.md` — копия страницы панели как полноценный исток: тело по своему пути, прочее — прокси |
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
 | `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
-| `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
+| `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `tool_/tool_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
@@ -198,6 +198,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose` → следы неудачной правки в прозе |
 | `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
 | `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
+| `tool_.tool_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `file_.file_check` | `файл... [--size --sha]` → цел ли файл: пустышка, огрызок, подмена головы |
 | `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
 | `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
@@ -208,6 +209,8 @@ CLI есть у модулей, которыми пользуются «рука
 | `project_.project_probe` | `-a «код» [--service uvicorn --root]` → домен окружением поднятой панели снаружи |
 | `setting_.setting_state` | `read`/`patch`/`clear <ключ> [--defaults '{}'] [--patch '{}']` → состояние JSON |
 | `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
+| `docker_.compose_x` | `СЕРВИС команда… [-a флаг=значение] [--no-quiet]` → `{'код','вывод','ошибка'}`; `$ИМЯ` в `-a` подставляется из окружения проекта |
+| `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
 | `ai.ai_vision` | `describe`, `normalize` |
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
@@ -228,6 +231,9 @@ CLI есть у модулей, которыми пользуются «рука
 | `web_.web_peek` | `<URL> [--markers a,b] [--method --body --show]` → сырой ответ без браузера |
 | `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
 | `web_.web_gallery` | `<URL> [--out каталог]` → полноразмерные фото страницы-галереи (без `--out` — только список) |
+| `web_.web_drive` | `СТРАНИЦА --js «тело async-функции» [--js-file --storage КЛЮЧ --shot --size]` → исполнение страницы по CDP |
+| `web_.web_drive_page` | `<адрес панели> -e 'return …'` → то же без бойлерплейта: вход из `.env`, модуль страницы, `wait` с базой |
+| `web_.web_state` | `<ручка> [--params к=в] [--method --body]` → поле ответа из-под конверта `result`, учётка из `.env` |
 | `uvicorn_.uvicorn_panel` | `GET /health`, `POST /api/... --body '{...}'` — под учёткой из `.env`, автоперелогин |
 | `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
 | `uvicorn_.uvicorn_stale` | `[--root --service]` → панель бежит правку или старый код; мёртвые `.pyc` |

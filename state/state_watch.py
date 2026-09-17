@@ -27,7 +27,7 @@ def state_watch(table, where: dict, column) -> dict:
 
     Returns:
         {'значение': значение или None — строки нет,
-         'проба': строка `python -m mysql_.mysql_query sql …`,executable в
+         'проба': строка `python -m mysql_.mysql_query sql …`, исполнимая в
          корне проекта часовым сторожем как есть}.
     """
     for name in [table, column, *where]:
@@ -42,3 +42,18 @@ def state_watch(table, where: dict, column) -> dict:
     return {'значение': rows[0][column] if rows else None,
             'проба': f"python -m mysql_.mysql_query sql \"{shown}\" "
                      f"--format json"}
+
+
+if __name__ == '__main__':
+    import argparse
+    ap = argparse.ArgumentParser(
+        description='значение колонки строки базы сейчас + готовая проба '
+                    'сторожу (--where повторять для сложных строк).')
+    ap.add_argument('table', help='имя таблицы')
+    ap.add_argument('column', help='колонка, за которой сторожить')
+    ap.add_argument('--where', action='append', default=[], required=True,
+                    metavar='колонка=значение', help='условие строки, повторять')
+    ns = ap.parse_args()
+    out = state_watch(ns.table, dict(w.split('=', 1) for w in ns.where),
+                      ns.column)
+    print(out['проба'])

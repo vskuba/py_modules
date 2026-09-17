@@ -48,3 +48,27 @@ def compose_x(service, cmd, *, args=None, quiet=('[Warning]',)) -> dict:
 def _quiet(text: str, marks) -> str:
     return '\n'.join(line for line in text.splitlines()
                      if not any(m in line for m in marks))
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+    ap = argparse.ArgumentParser(
+        description='команда в сервисе compose-стека из корня проекта; '
+                    'вывод — JSON без клиентского шума (--no-quiet не гасить).')
+    ap.add_argument('service', help='имя сервиса (persona_mysql, …)')
+    ap.add_argument('-a', '--arg', action='append', default=[],
+                    metavar='флаг=значение',
+                    help='флаг контейнеру; значение $ИМЯ берётся из окружения; '
+                         'без «=» — голый флаг; повторять')
+    ap.add_argument('cmd', nargs='+', help='бинарь и аргументы контейнеру')
+    ap.add_argument('--no-quiet', action='store_true',
+                    help='не выбрасывать шумовые строки из вывода')
+    ns = ap.parse_args()
+    args = {}
+    for a in ns.arg:
+        flag, _, value = a.partition('=')
+        args[flag] = value or True
+    print(json.dumps(compose_x(ns.service, ns.cmd, args=args,
+                               quiet=() if ns.no_quiet else ('[Warning]',)),
+                     ensure_ascii=False))

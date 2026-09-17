@@ -34,3 +34,19 @@ def tool_echo(path, must, *, service, app_dir='/app') -> dict:
         counts[m] = int(r['вывод'].strip() or 0) if r['код'] in (0, 1) \
             and r['вывод'].strip().isdigit() else None
     return {'файл': path, 'сервис': service, 'совпадений': counts}
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+    ap = argparse.ArgumentParser(
+        description='Сколько раз каждый признак правки виден в файле внутри '
+                    'сервиса: 0 — контейнер правку не видит.')
+    ap.add_argument('path', help='путь файла в проекте (тот, что правил)')
+    ap.add_argument('--must', action='append', default=[], required=True,
+                    metavar='признак', help='строка правки, повторять')
+    ap.add_argument('--service', required=True,
+                    help='имя сервиса, который исполняет этот код')
+    ns = ap.parse_args()
+    print(json.dumps(tool_echo(ns.path, ns.must, service=ns.service),
+                     ensure_ascii=False))

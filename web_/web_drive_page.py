@@ -105,3 +105,19 @@ def web_drive_page(url, script, *, login=None, login_url='/auth/login',
     p = urlsplit(url)
     start = f'{p.scheme}://{p.netloc}{login_url}' if login else url
     return web_drive_eval(start, full + script, wait_ms=wait_ms, chrome=chrome)
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+    ap = argparse.ArgumentParser(
+        description='Скрипт на живой странице без бойлерплейта: оболочка '
+                    'входит (учётка из .env), подключает модуль страницы, '
+                    'wait с базовой линией.')
+    ap.add_argument('url', help='адрес живой страницы')
+    ap.add_argument('-e', '--js', required=True,
+                    help='тело async-функции — самое дело (с return)')
+    ap.add_argument('--wait-ms', type=int, default=20000)
+    ns = ap.parse_args()
+    res = web_drive_page(ns.url, ns.js, wait_ms=ns.wait_ms)
+    print(json.dumps(res['value'], ensure_ascii=False))
