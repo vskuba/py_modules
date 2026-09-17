@@ -63,6 +63,10 @@ COMFY_GEN_TRAIN_BUDGET = (512, 512)  # бюджет площади кадра: �
                                      # flux1-dev-fp8 на 768×1024 (0.79 МП/кадр) не влезает в память
                                      # и падает torch.OutOfMemoryError — см. docs/comfy_gen.md
 COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
+# Какие файлы пачки считаем кадрами персоны. Не только png: материалы приходят
+# с камеры и лежат jpg, а пачка выкроек — png. Судья обязан видеть и то и другое.
+COMFY_GEN_FACE_EXTS = ('.png', '.jpg', '.jpeg', '.webp')
+
 COMFY_GEN_MODELS = '/opt/ComfyUI/models/loras'  # куда ложится лора-актив на ферме
 
 # Длинная сторона рендера выкройки, px. Выкройка идёт в граф В СВОИХ
@@ -485,7 +489,14 @@ def _swap_centroid(folder):
     патчами и пересчитывается, только когда пачка изменилась (число файлов).
     """
     from ai.ai_face import ai_face_centroid
-    files = sorted(Path(folder).glob('*.png'))
+    # ⚠ Берём ВСЕ кадры пачки, а не только `*.png`. Пока брались одни png,
+    # судьёй становилось то, что в папке лежит в этом формате: у одной персоны
+    # там оказались три ЧУЖИХ лица среди сотни своих jpg, и сходство мерилось
+    # к ним. Замер: косинус между таким «судьёй» и настоящим центроидом
+    # персоны — 0.245, то есть они смотрят в разные стороны, а все оценки
+    # прогонов были не о том.
+    files = sorted(p for p in Path(folder).iterdir()
+                   if p.is_file() and p.suffix.lower() in COMFY_GEN_FACE_EXTS)
     cache = Path(folder) / 'centroid.json'
     if cache.exists():
         got = json.loads(cache.read_text())
