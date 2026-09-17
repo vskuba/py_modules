@@ -54,6 +54,7 @@ namespace-папок, которые проекты импортируют на�
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
+| `web_/web_gallery.py` | `docs/web_gallery.md` — полноразмерные фото страницы-галереи: ленивая разметка, оригиналы без суффиксов |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
 | `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
 | `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
@@ -87,7 +88,9 @@ namespace-папок, которые проекты импортируют на�
 | `auth_/` | `docs/auth_rules.md` |
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
 | `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье» |
+| `uvicorn_/uvicorn_mirror.py` | `docs/uvicorn_mirror.md` — копия страницы панели как полноценный исток: тело по своему пути, прочее — прокси |
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
+| `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py` | `docs/project_runtime.md` |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
@@ -194,9 +197,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose` → следы неудачной правки в прозе |
 | `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
 | `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
+| `file_.file_check` | `файл... [--size --sha]` → цел ли файл: пустышка, огрызок, подмена головы |
 | `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
 | `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
-| `project_.project_` | `root`, `main-root`, `python`, `env` |
+| `project_.project_` | `root`, `main-root`, `python`, `env [--only ПРЕФИКС,…]` |
 | `project_.project_run` | `-c` / `-a` / `-m` / `<файл>` / `-` (stdin) |
 | `project_.project_submodule` | `state`, `bump [--line --from]` → gitlink против чекаута, слияние двух линий |
 | `project_.project_test` | `[цели pytest] [--k -k-фильтр] [--m маркер]` → код возврата сюиты |
@@ -222,9 +226,11 @@ CLI есть у модулей, которыми пользуются «рука
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
 | `web_.web_peek` | `<URL> [--markers a,b] [--method --body --show]` → сырой ответ без браузера |
 | `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
+| `web_.web_gallery` | `<URL> [--out каталог]` → полноразмерные фото страницы-галереи (без `--out` — только список) |
 | `uvicorn_.uvicorn_panel` | `GET /health`, `POST /api/... --body '{...}'` — под учёткой из `.env`, автоперелогин |
 | `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
 | `uvicorn_.uvicorn_stale` | `[--root --service]` → панель бежит правку или старый код; мёртвые `.pyc` |
+| `uvicorn_.uvicorn_mirror` | `СТРАНИЦА [--probe 'JS с return'] [--base]` → копия страницы как исток для probe/shot/drive |
 | `comfy_.comfy_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
 | `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |

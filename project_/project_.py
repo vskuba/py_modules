@@ -142,6 +142,9 @@ if __name__ == '__main__':
     parser.add_argument('command', choices=['root', 'main-root', 'python', 'env'],
                         help='root — корень выкладки; main-root — корень репозитория; '
                              'python — интерпретатор; env — переменные для дочернего процесса')
+    parser.add_argument('--only', default='',
+                        help='env: только ключи с этими префиксами через запятую '
+                             '(значения из .env, прочитанного конфигом)')
     args = parser.parse_args()
 
     if args.command == 'root':
@@ -150,5 +153,10 @@ if __name__ == '__main__':
         print(project_main_root())
     elif args.command == 'python':
         print(project_python())
+    elif args.only:
+        from config.config import config_get   # импорт читает .env в os.environ
+        for key in sorted(os.environ):
+            if any(key.startswith(p.strip()) for p in args.only.split(',')):
+                print(f'{key}={config_get(key)}')
     else:
         print(f"PYTHONPATH={project_env()['PYTHONPATH']}")
