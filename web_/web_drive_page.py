@@ -37,8 +37,11 @@ const wait = async (fn, ms = 9000, base) => { const t0 = Date.now();
 %(login)s
 const pg = await (await fetch(%(url)s, {credentials: 'same-origin'})).text();
 %(scan)s
-document.body.innerHTML =
-    new DOMParser().parseFromString(pg, 'text/html').body.innerHTML;
+const doc = new DOMParser().parseFromString(pg, 'text/html');
+// стили страницы едут в голову шелла, иначе голый body рисуется без них и
+// сбивает с толку: модалка без правила [hidden] кажется открытой.
+document.head.append(...doc.head.querySelectorAll('style, link[rel=stylesheet]'));
+document.body.innerHTML = doc.body.innerHTML;
 const mod = await import(src);
 await mod[nm](ia);
 """
@@ -69,7 +72,8 @@ if (!l.ok) return {err: 'вход', status: l.status};
 
 
 def web_drive_page(url, script, *, login=None, login_url='/auth/login',
-                   wait_ms=20000, chrome='', init=None) -> dict:
+                   wait_ms=20000, chrome='', init=None, shot='',
+                   size=()) -> dict:
     """Прогнать скрипт на живой странице без бойлерплейта входа и разметки.
 
     До тела `script` оболочка сама: входит (учётка берётся из `.env` —
@@ -93,6 +97,7 @@ def web_drive_page(url, script, *, login=None, login_url='/auth/login',
         init: {'файл': 'url модуля', 'имя': 'функция', 'аргумент': ...} —
             модуль и вызов инициализации явно; без него модуль угадывается по
             разметке (см. ⚠ в шапке), и на странице с двумя модулями ошибается.
+        shot: куда положить PNG страницы после выполнения; пусто — не снимать.
 
     Returns:
         как `web_drive_eval`: {'value', 'console', 'storage', 'shot'}.
@@ -122,7 +127,8 @@ def web_drive_page(url, script, *, login=None, login_url='/auth/login',
     from urllib.parse import urlsplit
     p = urlsplit(url)
     start = f'{p.scheme}://{p.netloc}{login_url}' if login else url
-    return web_drive_eval(start, full + script, wait_ms=wait_ms, chrome=chrome)
+    return web_drive_eval(start, full + script, wait_ms=wait_ms, chrome=chrome,
+                          shot=shot, size=size or (1080, 2400))
 
 
 if __name__ == '__main__':
