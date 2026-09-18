@@ -95,7 +95,7 @@ def project_python() -> Path:
     return candidate if _executable(candidate) else Path(sys.executable)
 
 
-def project_env(extra: dict | None = None) -> dict:
+def project_env(extra: dict | None = None, strip: tuple = ()) -> dict:
     """
     Окружение дочернего процесса: `PYTHONPATH` с корнем проекта и с `py_modules`.
 
@@ -104,6 +104,10 @@ def project_env(extra: dict | None = None) -> dict:
 
     Args:
         extra: переменные поверх готового окружения; значения приводятся к строке.
+        strip: имена унаследованных переменных, которые дочернему процессу не
+            достаются (с хвостовым `*` — префикс целиком). Без этого чужой шум
+            побеждает проект: `config` читает `.env` без `override`, и то, что
+            уже пришло в `os.environ`, из `.env` уже не вытеснить.
 
     Returns:
         Словарь, готовый для `subprocess(env=…)`.
@@ -115,6 +119,12 @@ def project_env(extra: dict | None = None) -> dict:
         parts.append(inherited)
 
     env = dict(os.environ)
+    for pat in strip:
+        if pat.endswith('*'):
+            for k in [k for k in env if k.startswith(pat[:-1])]:
+                del env[k]
+        else:
+            env.pop(pat, None)
     env['PYTHONPATH'] = os.pathsep.join(parts)
     if extra:
         env.update({str(key): str(value) for key, value in extra.items()})

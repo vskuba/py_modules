@@ -93,9 +93,10 @@ def web_drive_eval(src, script, wait_ms=5000, storage=(), shot='',
         chrome: путь к бинарю браузера; пусто — поиск как в `web_shot`.
 
     Returns:
-        {'value': результат скрипта, 'console': [{'level','text'}] (падение
-        страницы — здесь же с level 'page-error'), 'storage': {ключ: строка
-        или None}, 'shot': путь или ''}.
+        {'value': результат скрипта, 'console': [{'level','text'}], у падающей
+        страницы — ещё 'где' ('url:строка') и 'кусок' (эта строка; у битого
+        модуля стек пуст, и адрес с куском — единственный след), 'storage':
+        {ключ: строка или None}, 'shot': путь или ''}.
 
     Raises:
         FileNotFoundError: страницы нет, браузера нет в PATH.
@@ -261,7 +262,12 @@ def _drain(sock, console: list) -> None:
 
 
 def _record(answer: dict, console: list) -> None:
-    """Событие DevTools → строка консоли; посторонние — мимо."""
+    """Событие DevTools → строка консоли; посторонние — мимо.
+
+    Падение страницы и ошибки журнала получают ещё и 'где'/'кусок': у
+    неразобранного модуля стек пуст (модуль не исполнился вовсе), и без url+line
+    с куском исходчика поломку ищут наугад по всей странице.
+    """
     method = answer.get('method', '')
     p = answer.get('params', {})
     if method == 'Runtime.consoleAPICalled':
@@ -270,13 +276,31 @@ def _record(answer: dict, console: list) -> None:
                         'text': ' '.join(str(x) for x in parts).strip()})
     elif method == 'Runtime.exceptionThrown':
         d = p.get('exceptionDetails', {})
+        frames = (d.get('stackTrace') or {}).get('callFrames') or [{}]
+        where, line = d.get('url') or frames[0].get('url', ''), \
+            (d.get('lineNumber') if d.get('lineNumber') is not None
+             else frames[0].get('lineNumber', 0)) or 0
         console.append({'level': 'page-error',
                         'text': (d.get('exception', {}).get('description')
-                                 or d.get('text', ''))})
+                                 or d.get('text', '')),
+                        'где': f'{where}:{line + 1}' if where else '',
+                        'кусок': _snippet(where, line)})
     elif method == 'Log.entryAdded':
         e = p.get('entry', {})
         if e.get('level') in ('error', 'warning'):
-            console.append({'level': e['level'], 'text': e.get('text', '')})
+            console.append({'level': e['level'], 'text': e.get('text', ''),
+                            'где': (f"{e['url']}:{e.get('lineNumber', 0) + 1}"
+                                    if e.get('url') else '')})
+
+
+def _snippet(url: str, line: int) -> str:
+    """Строка исходника под номером из CDP (0-based); сеть не дошла — пусто."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            return r.read().decode('utf-8', 'replace').splitlines()[line].strip()
+    except (OSError, ValueError, IndexError):
+        return ''
 
 
 def _terminate(proc) -> None:
@@ -320,4 +344,6 @@ if __name__ == '__main__':
         for k, v in res['storage'].items():
             print(f'{k}: {v}')
         for line in res['console']:
-            print(f"[{line['level']}] {line['text']}")
+            print(f"[{line['level']}] {line['text']}"
+                  + (f"\n    {line.get('где', '')}: {line.get('кусок', '')[:160]}"
+                     if line.get('кусок') else ''))

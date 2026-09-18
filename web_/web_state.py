@@ -13,7 +13,7 @@ import httpx
 
 
 def web_state(url, *, params=None, method='GET', json_body=None,
-              login=None, login_url='/auth/login') -> object:
+              login=None, login_url='/auth/login', field='') -> object:
     """Спросить живую панель и вернуть поле ответа (из-под конверта `result`).
 
     Args:
@@ -24,13 +24,17 @@ def web_state(url, *, params=None, method='GET', json_body=None,
         login: {'username','password'} или None — тогда `ADMIN_USERNAME`/
             `ADMIN_PASSWORD` из `.env`; False — ручка без входа.
         login_url: адрес ручки входа панели.
+        field: точечный путь внутри ответа (`'план.параметры.шаги'`; числа —
+            индексы списка, `'*'` — пройтись по всему списку); пусто — всё.
 
     Returns:
-        значение `result` ответа (или весь ответ, если конверта нет).
+        с `field` — вырезанный по пути фрагмент `result`; без него — весь
+        `result` (или весь ответ, если конверта нет).
 
     Raises:
         RuntimeError: вход не прошёл или ручка ответила не 2xx — словами, как
         ответила.
+        KeyError: поля по пути `field` в ответе нет — с именем сегмента.
     """
     if login is None:
         from config.config import config_get
@@ -51,7 +55,30 @@ def web_state(url, *, params=None, method='GET', json_body=None,
             raise RuntimeError(f'{method} {url} ответил {r.status_code}: '
                               f'{r.text[:300]}')
         body = r.json()
-    return body.get('result', body) if isinstance(body, dict) else body
+    got = body.get('result', body) if isinstance(body, dict) else body
+    return _cut(got, field.split('.')) if field else got
+
+
+def _cut(v, segs: list):
+    """Вырезает из значения поле по сегментам: ключ словаря, число — индекс
+    списка, '*' — пройтись по списку целиком; ошибка — словами о пути."""
+    if not segs:
+        return v
+    s, rest = segs[0], segs[1:]
+    if s == '*':
+        return [_cut(x, rest) for x in v]
+    if isinstance(v, list):
+        try:
+            nxt = v[int(s)]
+        except IndexError:
+            raise KeyError(f'индекса {s!r} в ответе нет') from None
+    elif isinstance(v, dict):
+        if s not in v:
+            raise KeyError(f'поля {s!r} в ответе нет')
+        nxt = v[s]
+    else:
+        raise KeyError(f'дальше пути {s!r} в ответе нет (там не объект)')
+    return _cut(nxt, rest)
 
 
 def _json(value) -> bytes:
@@ -76,7 +103,10 @@ if __name__ == '__main__':
                     metavar='ключ=значение', help='query-параметр, повторять')
     ap.add_argument('--method', default='GET')
     ap.add_argument('--body', default='', help='тело JSON для пишущих ручек')
+    ap.add_argument('--field', default='',
+                    help='точечный путь внутри ответа, например план.параметры.шаги')
     ns = ap.parse_args()
     print(_json.dumps(web_state(
         ns.url, params=dict(p.split('=', 1) for p in ns.params) or None,
-        method=ns.method, json_body=ns.body or None), ensure_ascii=False))
+        method=ns.method, json_body=ns.body or None, field=ns.field),
+        ensure_ascii=False))

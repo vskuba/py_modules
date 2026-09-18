@@ -9,7 +9,9 @@
   из `.env` (`config`) в момент вызова, а не в момент сочинения скрипта;
 * встроенный импорт в одном шаблоне в двойных кавычках, в другом в одинарных —
   regex с одними кавычками на странице с другими даёт `reading '1' of null`;
-  здесь имена и аргумент вынимаются из HTML без угадывания кавычек;
+  здесь имена и аргумент вынимаются из HTML без угадывания кавычек; а где
+  угадывать нечего — там `init=` с модулем и вызовом прямо (автопоиск остался
+  запасным: на странице с двумя модулями он норовит иницировать не тот);
 * `wait` без базовой линии довольствовался СТАРОЙ таблицей: строка уже стояла
   в DOM от прежнего рендера, условие «строка появилась» было истинно сразу, и
   скрипт уходил читать прежние числа, пока страница ещё перерисовывала новые;
@@ -34,22 +36,28 @@ const wait = async (fn, ms = 9000, base) => { const t0 = Date.now();
     return null; };
 %(login)s
 const pg = await (await fetch(%(url)s, {credentials: 'same-origin'})).text();
-// ⚠ берём НЕ первый импорт: шаблоны зовут и `api.js`, и модуль страницы;
-// верен тот, чьё имя здесь же ВЫЗВАНО со строковым аргументом (`xInit("…")`).
-const imps = [...pg.matchAll(/import\\s*\\{([^}]+)\\}\\s*from\\s*(["'])(([^"']+)\\2)/g)];
-let src = '', nm = '', ia = null;
-for (const m of imps) {
-    for (const n of m[1].split(',').map(s => s.trim()).filter(Boolean)) {
-        const c = pg.match(new RegExp(n + '\\\\s*\\\\(\\\\s*(["\\'])((.|\\\\n)*?)\\\\1'));
-        if (c) { src = m[3]; nm = n; ia = c; break; }
-    }
-    if (nm) break;
-}
-if (!nm) return {err: 'на странице нет вызова инициализации — нечего подключать'};
+%(scan)s
 document.body.innerHTML =
     new DOMParser().parseFromString(pg, 'text/html').body.innerHTML;
 const mod = await import(src);
-await mod[nm](ia[2]);
+await mod[nm](ia);
+"""
+
+# Запасной путь, когда `init` не передан: модуль инициализации угадывается по
+# разметке. ⚠ шаблоны зовут и `api.js`, и модуль страницы, и `notification.js`;
+# верен обычно не первый — поэтому угадывание лишь запас, `init` точнее.
+_SCAN = """
+const imps = [...pg.matchAll(/import\\s*\\{([^}]+)\\}\\s*from\\s*(["'])(([^"']+)\\2)/g)];
+let src = '', nm = '', ia;
+for (const m of imps) {
+    for (const n of m[1].split(',').map(s => s.trim()).filter(Boolean)) {
+        const c = pg.match(new RegExp(n + '\\\\s*\\\\(\\\\s*(["\\'])((.|\\\\n)*?)\\\\1'));
+        if (c) { src = m[3]; nm = n; ia = c[2]; break; }
+    }
+    if (nm) break;
+}
+if (!nm) return {err: 'на странице нет вызова инициализации — нечего ' +
+                     'подключать (зачем подключают — скажи init)'};
 """
 
 _LOGIN = """
@@ -61,7 +69,7 @@ if (!l.ok) return {err: 'вход', status: l.status};
 
 
 def web_drive_page(url, script, *, login=None, login_url='/auth/login',
-                   wait_ms=20000, chrome='') -> dict:
+                   wait_ms=20000, chrome='', init=None) -> dict:
     """Прогнать скрипт на живой странице без бойлерплейта входа и разметки.
 
     До тела `script` оболочка сама: входит (учётка берётся из `.env` —
@@ -82,6 +90,9 @@ def web_drive_page(url, script, *, login=None, login_url='/auth/login',
         login_url: адрес ручки входа панели.
         wait_ms: потолок ожидания в web_drive_eval.
         chrome: путь к бинарю браузера.
+        init: {'файл': 'url модуля', 'имя': 'функция', 'аргумент': ...} —
+            модуль и вызов инициализации явно; без него модуль угадывается по
+            разметке (см. ⚠ в шапке), и на странице с двумя модулями ошибается.
 
     Returns:
         как `web_drive_eval`: {'value', 'console', 'storage', 'shot'}.
@@ -95,8 +106,15 @@ def web_drive_page(url, script, *, login=None, login_url='/auth/login',
                            'password': login.get('password', '')})
         login_js = _LOGIN % {'url': json.dumps(login.get('url', login_url)),
                              'body': body}
-    full = _BOOT % {'login': login_js, 'url': json.dumps(url,
-                                                         ensure_ascii=False)}
+    if init:
+        arg = ('undefined' if 'аргумент' not in init
+               else json.dumps(init['аргумент'], ensure_ascii=False))
+        scan = (f"const src = {json.dumps(init['файл'])}, "
+                f"nm = {json.dumps(init['имя'], ensure_ascii=False)}, ia = {arg};")
+    else:
+        scan = _SCAN
+    full = _BOOT % {'login': login_js,
+                    'url': json.dumps(url, ensure_ascii=False), 'scan': scan}
     # ⚠ Браузер сажаем на СТАРТОВУЮ страницу, а не на целевую: без сессии целевая
     # редиректом уходит на `/login?next=…`, и цель DevTools ищется уже по чужому
     # URL. Под учёткой стартовая — сама ручка входа: оболочка затем сама
@@ -118,6 +136,14 @@ if __name__ == '__main__':
     ap.add_argument('-e', '--js', required=True,
                     help='тело async-функции — самое дело (с return)')
     ap.add_argument('--wait-ms', type=int, default=20000)
+    ap.add_argument('--init', default='',
+                    help='модуль инициализации явно: "файл|имя|аргумент" '
+                         '(третья часть — текст, не JSON; пусто — автопоиск)')
     ns = ap.parse_args()
-    res = web_drive_page(ns.url, ns.js, wait_ms=ns.wait_ms)
+    init = None
+    if ns.init:
+        mod_file, mod_fn, *mod_arg = ns.init.split('|', 2)
+        init = {'файл': mod_file, 'имя': mod_fn,
+                **({'аргумент': mod_arg[0]} if mod_arg else {})}
+    res = web_drive_page(ns.url, ns.js, wait_ms=ns.wait_ms, init=init)
     print(json.dumps(res['value'], ensure_ascii=False))

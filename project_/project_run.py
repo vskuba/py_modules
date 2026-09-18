@@ -39,7 +39,7 @@ PROJECT_RUN_DEFAULT_TIMEOUT = 300.0
 
 def project_run_python(source: str = '', path: str = '', module: str = '',
                        argv: list | None = None, is_async: bool = False,
-                       timeout: float = 0) -> int:
+                       timeout: float = 0, strip: tuple = ()) -> int:
     """
     Запустить код, файл или модуль интерпретатором проекта из корня проекта.
 
@@ -55,6 +55,9 @@ def project_run_python(source: str = '', path: str = '', module: str = '',
         is_async: обернуть `source` в `async def` и `asyncio.run` — тело пишется
             так, будто оно уже внутри корутины.
         timeout: секунды; 0 — без ограничения.
+        strip: имена унаследованных переменных окружения (или `ПРЕФИКС*`), которые
+            дочернему процессу не достаются — чтобы шум окружения агента не
+            вытеснял значения из `.env` проекта.
 
     Returns:
         Код возврата процесса; 124 — не уложился в `timeout` (как у `timeout(1)`).
@@ -78,7 +81,8 @@ def project_run_python(source: str = '', path: str = '', module: str = '',
     done = ['-u', *command, *[str(item) for item in (argv or [])]]
     try:
         return subprocess.run([str(project_python()), *done], cwd=str(root),
-                              env=project_env(), timeout=timeout or None).returncode
+                              env=project_env(strip=strip),
+                              timeout=timeout or None).returncode
     except subprocess.TimeoutExpired:
         print(f"project_run: не уложился в {timeout:g} с — процесс снят", file=sys.stderr)
         return 124
@@ -105,6 +109,9 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--module', default='', help='запустить модуль, как `python -m`')
     parser.add_argument('-t', '--timeout', type=float, default=PROJECT_RUN_DEFAULT_TIMEOUT,
                         help=f'секунды, 0 — без ограничения (по умолчанию {PROJECT_RUN_DEFAULT_TIMEOUT:g})')
+    parser.add_argument('--strip', default='',
+                        help='не передавать дочернему процессу эти переменные '
+                             '(или ПРЕФИКСЫ с *) унаследованного окружения, через запятую')
     parser.add_argument('args', nargs=argparse.REMAINDER, help='аргументы программе')
     args = parser.parse_args()
 

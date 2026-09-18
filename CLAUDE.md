@@ -55,6 +55,8 @@ namespace-папок, которые проекты импортируют на�
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) и про страницу панели без бойлерплейта (`web_drive_page`: вход из `.env`, модуль с любыми кавычками, `wait` с базой) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `web_/web_gallery.py` | `docs/web_gallery.md` — полноразмерные фото страницы-галереи: ленивая разметка, оригиналы без суффиксов |
+| `web_/web_grab.py` | `docs/web_grab.md` — пачка ссылок в честные файлы: тип по голове, UA, JSON-API в ссылки; ⚠ страница вместо файла — отказ, не `.jpg` с `<html>` |
+| `js_/js_check.py` | `docs/js_check.md` — цел ли JS как браузерный ESM-модуль: парсинг node, адрес поломки, граф импортов; ⚠ `node --check` по `.js` молчит там, где браузер умер бы |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
 | `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
 | `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
@@ -199,6 +201,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
 | `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
 | `file_.file_check` | `файл... [--size --sha]` → цел ли файл: пустышка, огрызок, подмена головы |
+| `js_.js_check` | `файл… (.js/.mjs/.html)` → распарсится ли код как браузерный ESM-модуль, адрес поломки, граф импортов |
 | `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
 | `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
 | `project_.project_` | `root`, `main-root`, `python`, `env [--only ПРЕФИКС,…]` |
@@ -231,9 +234,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `web_.web_peek` | `<URL> [--markers a,b] [--method --body --show]` → сырой ответ без браузера |
 | `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
 | `web_.web_gallery` | `<URL> [--out каталог]` → полноразмерные фото страницы-галереи (без `--out` — только список) |
+| `web_.web_grab` | `<URL…> [--to каталог --ua «UA» --path путь]` → пачка ссылок честными файлами: тип по голове, страница вместо файла — отказ |
 | `web_.web_drive` | `СТРАНИЦА --js «тело async-функции» [--js-file --storage КЛЮЧ --shot --size]` → исполнение страницы по CDP |
-| `web_.web_drive_page` | `<адрес панели> -e 'return …'` → то же без бойлерплейта: вход из `.env`, модуль страницы, `wait` с базой |
-| `web_.web_state` | `<ручка> [--params к=в] [--method --body]` → поле ответа из-под конверта `result`, учётка из `.env` |
+| `web_.web_drive_page` | `<адрес панели> -e 'return …' [--init файл|имя|арг]` → то же без бойлерплейта: вход из `.env`, модуль страницы (с `--init` — явно, без угадывания), `wait` с базой |
+| `web_.web_state` | `<ручка> [--params к=в] [--method --body] [--field путь.в.result]` → поле ответа из-под конверта `result`, учётка из `.env` |
 | `uvicorn_.uvicorn_panel` | `GET /health`, `POST /api/... --body '{...}'` — под учёткой из `.env`, автоперелогин |
 | `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
 | `uvicorn_.uvicorn_stale` | `[--root --service]` → панель бежит правку или старый код; мёртвые `.pyc` |
