@@ -12,7 +12,7 @@
 from docker_.compose_x import compose_x
 
 
-def tool_echo(path, must, *, service, app_dir='/app') -> dict:
+def docker_echo(path, must, *, service, app_dir='/app') -> dict:
     """Сколько раз каждый признак правки виден в файле внутри сервиса.
 
     Args:
@@ -48,5 +48,5 @@ if __name__ == '__main__':
     ap.add_argument('--service', required=True,
                     help='имя сервиса, который исполняет этот код')
     ns = ap.parse_args()
-    print(json.dumps(tool_echo(ns.path, ns.must, service=ns.service),
+    print(json.dumps(docker_echo(ns.path, ns.must, service=ns.service),
                      ensure_ascii=False))

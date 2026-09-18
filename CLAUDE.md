@@ -92,7 +92,7 @@ namespace-папок, которые проекты импортируют на�
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
 | `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
-| `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `tool_/tool_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
+| `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
@@ -198,7 +198,6 @@ CLI есть у модулей, которыми пользуются «рука
 | `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose` → следы неудачной правки в прозе |
 | `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
 | `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
-| `tool_.tool_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `file_.file_check` | `файл... [--size --sha]` → цел ли файл: пустышка, огрызок, подмена головы |
 | `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
 | `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
@@ -210,6 +209,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `setting_.setting_state` | `read`/`patch`/`clear <ключ> [--defaults '{}'] [--patch '{}']` → состояние JSON |
 | `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
 | `docker_.compose_x` | `СЕРВИС команда… [-a флаг=значение] [--no-quiet]` → `{'код','вывод','ошибка'}`; `$ИМЯ` в `-a` подставляется из окружения проекта |
+| `docker_.docker_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
 | `ai.ai_vision` | `describe`, `normalize` |
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
