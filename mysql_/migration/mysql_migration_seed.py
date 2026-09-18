@@ -10,7 +10,7 @@
 """
 
 
-def tool_seed(rows, table: str, *, column: str = 'слово') -> dict:
+def mysql_migration_seed(rows, table: str, *, column: str = 'слово') -> dict:
     """Расставить строки наполнения в текст `INSERT IGNORE` для миграции.
 
     Args:
@@ -64,4 +64,4 @@ if __name__ == '__main__':
     ap.add_argument('table', help='имя таблицы')
     ap.add_argument('--column', default='слово', help='колонка для скаляров')
     ns = ap.parse_args()
-    print(tool_seed(json.load(sys.stdin), ns.table, column=ns.column)['sql'])
+    print(mysql_migration_seed(json.load(sys.stdin), ns.table, column=ns.column)['sql'])
