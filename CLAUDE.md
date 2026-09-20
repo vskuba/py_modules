@@ -97,6 +97,7 @@ namespace-папок, которые проекты импортируют на�
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
 | `http_/http_rest.py`, `http_/http_watch.py`, `mcp_/mcp_client.py` | `docs/rest_probe.md` — вызов чужого API с угаданным заголовком, схема из zod-ошибки, сторож JSON-эндпоинта, MCP-клиент; ⚠ MCP не пробрасывает ключ в апстрим |
+| `crypto_/crypto_ed25519.py`, `crypto_/crypto_pow.py` | `docs/crypto_primitives.md` — Ed25519 и PoW вне цепочек; ⚠ seed ровно 32 байта, кодирование ключа/подписи у платформ разное |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
@@ -218,6 +219,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
 | `evm_.evm_keys` | `address КЛЮЧ` / `sign КЛЮЧ --digest …` → адрес EIP-55; подпись с самопроверкой signer==recovered |
 | `http_.http_watch` | `URL [--field путь.в.json --header к=в --format value]` → значение поля сейчас + проба сторожу |
+| `crypto_.crypto_pow` | `SEED --bits N [--check NONCE]` → nonce с N ведущими нулями sha256(seed+nonce); сверка готового nonce |
 | `ai.ai_vision` | `describe`, `normalize` |
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
