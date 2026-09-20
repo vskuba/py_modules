@@ -37,7 +37,7 @@ def file_check(path: str, size: int = 0, sha256: str = '') -> dict:
     from pathlib import Path
     p = Path(path)
     if not p.is_file():
-        return {'цел': False, 'байт': 0, 'почему': 'нет файла'}
+        return {'intact': False, 'bytes': 0, 'why': 'нет файла'}
     data = p.read_bytes()
     n = len(data)
     ext = p.suffix.lower().lstrip('.')
@@ -58,7 +58,7 @@ def file_check(path: str, size: int = 0, sha256: str = '') -> dict:
         why = f'размер {n} ≠ ожидаемый {size}'
     if not why and sha256 and hashlib.sha256(data).hexdigest() != sha256:
         why = 'хеш не сходится'
-    return {'цел': not why, 'байт': n, 'почему': why}
+    return {'intact': not why, 'bytes': n, 'why': why}
 
 
 if __name__ == '__main__':
@@ -71,5 +71,5 @@ if __name__ == '__main__':
     ns = ap.parse_args()
     for f in ns.files:
         r = file_check(f, ns.size, ns.sha)
-        print(f'{"цел" if r["цел"] else "НЕ ЦЕЛ"} {f}: {r["байт"]} байт '
-              f'{r["почему"]}'.rstrip())
+        print(f'{"цел" if r["intact"] else "НЕ ЦЕЛ"} {f}: {r["bytes"]} байт '
+              f'{r["why"]}'.rstrip())

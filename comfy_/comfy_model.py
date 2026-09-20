@@ -39,28 +39,28 @@ def comfy_model_present(models_dir: str, pattern: str, *,
     found = []
     for path in sorted(glob_.glob(os.path.join(models_dir, pattern))):
         chk = file_check(path)
-        found.append({'файл': os.path.basename(path), 'байт': chk['байт'],
-                      'цел': chk['цел'], 'почему': chk['почему'],
-                      'куда': (os.readlink(path)
+        found.append({'file': os.path.basename(path), 'bytes': chk['bytes'],
+                      'intact': chk['intact'], 'why': chk['why'],
+                      'dest': (os.readlink(path)
                                if os.path.islink(path) else '')})
     алиас = {}
     if alias:
         path = os.path.join(models_dir, alias)
-        whole = next((f for f in found if f['цел']), None)
+        whole = next((f for f in found if f['intact']), None)
         if os.path.islink(path):
-            алиас = {'имя': alias, 'на': os.readlink(path), 'статус': 'был'}
+            алиас = {'name': alias, 'target': os.readlink(path), 'status': 'был'}
         elif whole:
             tmp = path + '.tmp'
             try:
-                os.symlink(whole['файл'], tmp)
+                os.symlink(whole['file'], tmp)
                 os.replace(tmp, path)
-                алиас = {'имя': alias, 'на': whole['файл'], 'статус': 'создан'}
+                алиас = {'name': alias, 'target': whole['file'], 'status': 'создан'}
             except OSError as e:
-                алиас = {'имя': alias, 'на': whole['файл'],
-                         'статус': f'не создался: {e}'}
+                алиас = {'name': alias, 'target': whole['file'],
+                         'status': f'не создался: {e}'}
         else:
-            алиас = {'имя': alias, 'на': '', 'статус': 'нет цельного файла'}
-    return {'найдено': found, 'всего': len(found), 'алиас': алиас}
+            алиас = {'name': alias, 'target': '', 'status': 'нет цельного файла'}
+    return {'found': found, 'total': len(found), 'alias': алиас}
 
 
 def comfy_model_get(folder: str, url: str, *, name: str = '', size: int = 0,
@@ -93,13 +93,13 @@ def comfy_model_get(folder: str, url: str, *, name: str = '', size: int = 0,
     except Exception as e:
         if os.path.exists(tmp):
             os.remove(tmp)
-        return {'цел': False, 'файл': '', 'байт': 0,
-                'почему': f'не скачался: {e}'}
+        return {'intact': False, 'file': '', 'bytes': 0,
+                'why': f'не скачался: {e}'}
     chk = file_check(tmp, size, sha256)
-    if chk['цел']:
+    if chk['intact']:
         os.replace(tmp, path)
-    return {'цел': chk['цел'], 'файл': path if chk['цел'] else '',
-            'байт': chk['байт'], 'почему': chk['почему']}
+    return {'intact': chk['intact'], 'file': path if chk['intact'] else '',
+            'bytes': chk['bytes'], 'why': chk['why']}
 
 
 if __name__ == '__main__':

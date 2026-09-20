@@ -112,10 +112,10 @@ def web_drive_page(url, script, *, login=None, login_url='/auth/login',
         login_js = _LOGIN % {'url': json.dumps(login.get('url', login_url)),
                              'body': body}
     if init:
-        arg = ('undefined' if 'аргумент' not in init
-               else json.dumps(init['аргумент'], ensure_ascii=False))
-        scan = (f"const src = {json.dumps(init['файл'])}, "
-                f"nm = {json.dumps(init['имя'], ensure_ascii=False)}, ia = {arg};")
+        arg = ('undefined' if 'argument' not in init
+               else json.dumps(init['argument'], ensure_ascii=False))
+        scan = (f"const src = {json.dumps(init['file'])}, "
+                f"nm = {json.dumps(init['name'], ensure_ascii=False)}, ia = {arg};")
     else:
         scan = _SCAN
     full = _BOOT % {'login': login_js,
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     init = None
     if ns.init:
         mod_file, mod_fn, *mod_arg = ns.init.split('|', 2)
-        init = {'файл': mod_file, 'имя': mod_fn,
-                **({'аргумент': mod_arg[0]} if mod_arg else {})}
+        init = {'file': mod_file, 'name': mod_fn,
+                **({'argument': mod_arg[0]} if mod_arg else {})}
     res = web_drive_page(ns.url, ns.js, wait_ms=ns.wait_ms, init=init)
     print(json.dumps(res['value'], ensure_ascii=False))

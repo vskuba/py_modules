@@ -69,11 +69,11 @@ def js_check(path) -> dict:
         bad = _check(body, line0, str(path))
         if bad:
             found.append(bad)
-    return {'цел': not found,
-            'что': found[0]['что'] if found else '',
-            'где': found[0]['где'] if found else '',
-            'кусок': found[0]['кусок'] if found else '',
-            'импортируют': sorted(set(edges))}
+    return {'intact': not found,
+            'what': found[0]['what'] if found else '',
+            'where': found[0]['where'] if found else '',
+            'chunk': found[0]['chunk'] if found else '',
+            'imported_by': sorted(set(edges))}
 
 
 # ── детали реализации ──
@@ -107,9 +107,9 @@ def _check(body: str, line0: int, where: str) -> dict:
     number = int(at.group(2)) if at else 0
     lines = body.splitlines()
     i = number - line0  # temp-файл дополнен строк до line0, строка тела сдвинута
-    return {'что': errm.group(0) if errm else err.strip()[:200],
-            'где': (f'{where}:{number}' if at else where),
-            'кусок': lines[i].strip() if 0 <= i < len(lines) else ''}
+    return {'what': errm.group(0) if errm else err.strip()[:200],
+            'where': (f'{where}:{number}' if at else where),
+            'chunk': lines[i].strip() if 0 <= i < len(lines) else ''}
 
 
 if __name__ == '__main__':
@@ -124,9 +124,9 @@ if __name__ == '__main__':
             r = js_check(f)
         except (ValueError, FileNotFoundError, RuntimeError) as err:
             raise SystemExit(f'ошибка: {err}')
-        broken += not r['цел']
-        if r['цел']:
-            print(f"цел {f} · импортируют: {', '.join(r['импортируют']) or '—'}")
+        broken += not r['intact']
+        if r['intact']:
+            print(f"цел {f} · импортируют: {', '.join(r['imported_by']) or '—'}")
         else:
-            print(f"НЕ ЦЕЛ {r['где']}: {r['что']}\n    {r['кусок'][:160]}")
+            print(f"НЕ ЦЕЛ {r['where']}: {r['what']}\n    {r['chunk'][:160]}")
     raise SystemExit(1 if broken else 0)

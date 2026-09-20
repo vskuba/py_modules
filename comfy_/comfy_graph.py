@@ -20,7 +20,7 @@ import json
 import urllib.parse
 
 
-def _узел(нода: dict) -> str:
+def _node(нода: dict) -> str:
     """Класс узла в обеих разметках: проект (`_cls`) или API (`class_type`)."""
     return нода.get('_cls') or нода.get('class_type') or ''
 
@@ -51,54 +51,54 @@ def comfy_graph_check(граф: dict | str, base: str = '') -> dict:
     узлы = {к: в for к, в in граф.items() if isinstance(в, dict)}
     проблемы = []
     for к, нода in узлы.items():
-        cls = _узел(нода)
+        cls = _node(нода)
         if not cls:
-            проблемы.append({'узел': к, 'почему': 'узел без класса'})
+            проблемы.append({'node': к, 'why': 'узел без класса'})
             continue
         try:
             info = comfy_node_info(cls, base)
         except ValueError as e:
-            проблемы.append({'узел': к, 'почему': str(e)})
+            проблемы.append({'node': к, 'why': str(e)})
             continue
-        контракт = dict(info['обязательные'])
-        контракт.update(info['необязательные'])
+        контракт = dict(info['required'])
+        контракт.update(info['optional'])
         вход_узла = нода.get('inputs', {})
         for имя in контракт:
             if имя not in вход_узла:
-                проблемы.append({'узел': f'{к} ({cls})', 'почему':
+                проблемы.append({'node': f'{к} ({cls})', 'why':
                                 f'не подан вход «{имя}»: нода ждёт '
-                                f'{контракт[имя]["тип"]}'})
+                                f'{контракт[имя]["type"]}'})
         for имя, значение in вход_узла.items():
             if имя not in контракт:
-                проблемы.append({'узел': f'{к} ({cls})',
-                                 'почему': f'у входа «{имя}» такой ноды нет'})
+                проблемы.append({'node': f'{к} ({cls})',
+                                 'why': f'у входа «{имя}» такой ноды нет'})
                 continue
-            ждём = ([контракт[имя]['тип']]
-                    if контракт[имя]['тип'] != 'COMBO'
-                    else контракт[имя].get('значения', []))
+            ждём = ([контракт[имя]['type']]
+                    if контракт[имя]['type'] != 'COMBO'
+                    else контракт[имя].get('values', []))
             if isinstance(значение, list) and значение:
                 исток, idx = str(значение[0]), int(значение[1])
                 if исток not in узлы:
-                    проблемы.append({'узел': f'{к}.{имя}', 'почему':
+                    проблемы.append({'node': f'{к}.{имя}', 'why':
                                     f'линия с узла «{исток}», а такого узла нет'})
                     continue
-                выходы = _выходы(узлы[исток], base) if исток in узлы else []
+                выходы = _outputs(узлы[исток], base) if исток in узлы else []
                 if not выходы or idx >= len(выходы):
-                    проблемы.append({'узел': f'{к}.{имя}', 'почему':
+                    проблемы.append({'node': f'{к}.{имя}', 'why':
                                     f'у «{исток}» нет выхода {idx}'})
                     continue
                 дано = выходы[idx] if выходы[idx] else 'COMBO'
                 if ждём and дано != 'COMBO' and дано not in ждём:
-                    проблемы.append({'узел': f'{к}.{имя}', 'почему':
+                    проблемы.append({'node': f'{к}.{имя}', 'why':
                                     f'вход ждёт {"/".join(map(str, ждём))}, '
                                     f'линия с «{исток}» даёт {дано}'})
             elif isinstance(значение, str) and '__' not in значение:
-                enum = контракт[имя].get('значения') or []
+                enum = контракт[имя].get('values') or []
                 if enum and значение not in enum:
-                    проблемы.append({'узел': f'{к}.{имя}', 'почему':
+                    проблемы.append({'node': f'{к}.{имя}', 'why':
                                     f'файл «{значение}» ферма не видит; видит '
                                     f'{enum[:5]}{"…" if len(enum) > 5 else ""}'})
-    return {'годен': not проблемы, 'узлы': проблемы}
+    return {'fit': not проблемы, 'nodes': проблемы}
 
 
 def comfy_graph_stale(шаблон: dict | str, копия: dict | str) -> dict:
@@ -118,29 +118,29 @@ def comfy_graph_stale(шаблон: dict | str, копия: dict | str) -> dict:
         if not (isinstance(шаблон.get(к), dict) or isinstance(копия.get(к), dict)):
             continue
         if к not in шаблон or к not in копия:
-            отличия.append({'узел': к, 'поле': 'узел целиком',
-                            'в шаблоне': 'есть' if к in шаблон else '',
-                            'в копии': 'есть' if к in копия else ''})
+            отличия.append({'node': к, 'field': 'узел целиком',
+                            'in_template': 'есть' if к in шаблон else '',
+                            'in_copy': 'есть' if к in копия else ''})
             continue
         а, б = шаблон[к], копия[к]
-        if _узел(а) != _узел(б):
-            отличия.append({'узел': к, 'поле': 'класс',
-                            'в шаблоне': _узел(а), 'в копии': _узел(б)})
+        if _node(а) != _node(б):
+            отличия.append({'node': к, 'field': 'класс',
+                            'in_template': _node(а), 'in_copy': _node(б)})
         поля = set(а.get('inputs', {})) | set(б.get('inputs', {}))
         for поле in sorted(поля):
             в_шаблоне = а.get('inputs', {}).get(поле, '')
             в_копии = б.get('inputs', {}).get(поле, '')
             if в_шаблоне != в_копии:
-                отличия.append({'узел': к, 'поле': поле,
-                                'в шаблоне': в_шаблоне, 'в копии': в_копии})
-    return {'такой_же': not отличия, 'отличия': отличия}
+                отличия.append({'node': к, 'field': поле,
+                                'in_template': в_шаблоне, 'in_copy': в_копии})
+    return {'same': not отличия, 'diffs': отличия}
 
 
-def _выходы(нода: dict, base: str) -> list:
+def _outputs(нода: dict, base: str) -> list:
     """Типы выходов узла с той же фермы (для сверки линии)."""
     from comfy_.comfy_node import comfy_node_info
     try:
-        return comfy_node_info(_узел(нода), base)['выходы']
+        return comfy_node_info(_node(нода), base)['outputs']
     except ValueError:
         return []
 

@@ -38,18 +38,18 @@ def comfy_model_hf_expect(repo: str, файл: str, *, ref: str = 'main',
         with urllib.request.urlopen(req, timeout=20) as r:
             файлы = json.load(r)
     except Exception as e:
-        return {'url': '', 'байт': 0, 'sha256': '', 'почему': f'HF API молчит: {e}'}
+        return {'url': '', 'bytes': 0, 'sha256': '', 'why': f'HF API молчит: {e}'}
     имя = файл.rsplit('/', 1)[-1]
     entry = next((f for f in файлы if f.get('path') == файл), None) or next(
         (f for f in файлы if f.get('path', '').rsplit('/', 1)[-1] == имя), None)
     if entry is None:
-        return {'url': '', 'байт': 0, 'sha256': '',
-                'почему': f'файла «{файл}» в {repo}@{ref} нет'}
+        return {'url': '', 'bytes': 0, 'sha256': '',
+                'why': f'файла «{файл}» в {repo}@{ref} нет'}
     return {'url': f'https://huggingface.co/{repo}/resolve/{ref}/'
             + urllib.request.quote(файл),
-            'байт': entry.get('size', 0),
+            'bytes': entry.get('size', 0),
             'sha256': (entry.get('lfs') or {}).get('oid', ''),
-            'почему': '' if entry.get('lfs') else
+            'why': '' if entry.get('lfs') else
             'файл вне lfs — sha в API нет, сверяй только размер'}
 
 

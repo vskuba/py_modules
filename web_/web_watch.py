@@ -46,7 +46,7 @@ def web_watch(src, watch, steps=(), *, login=None, init=None, chrome='',
     for ш in steps:
         блоки.append('log.length = 0; %s;\nшаги.push({шаг: %s, изменения: '
                      'log.slice(), видно: свод()});'
-                     % (ш['js'], json.dumps(ш.get('шаг', ''), ensure_ascii=False)))
+                     % (ш['js'], json.dumps(ш.get('step', ''), ensure_ascii=False)))
     body = """
 const q = s => document.querySelector(s);
 const факт = s => { const n = q(s); if (!n) return {видно: false, почему: 'нет узла'};
@@ -71,7 +71,7 @@ const шаги = [];
 %(шаги)s
 return {до, шаги};
 """ % {'watch': json.dumps(list(watch), ensure_ascii=False),
-       'шаги': '\n'.join(блоки)}
+       'steps': '\n'.join(блоки)}
     return web_drive_page(src, body, login=login, init=init, chrome=chrome,
                           size=size)['value']
 
@@ -91,7 +91,7 @@ if __name__ == '__main__':
     and_init = {}
     if ns.init:
         ч = ns.init.split('|', 2)
-        and_init = {'файл': ч[0], 'имя': ч[1]} if len(ч) < 3 else {'файл': ч[0], 'имя': ч[1], 'аргумент': ч[2]}
-    out = web_watch(ns.url, ns.watch, [{'шаг': j, 'js': j} for j in ns.step],
+        and_init = {'file': ч[0], 'name': ч[1]} if len(ч) < 3 else {'file': ч[0], 'name': ч[1], 'argument': ч[2]}
+    out = web_watch(ns.url, ns.watch, [{'step': j, 'js': j} for j in ns.step],
                     init=and_init or None)
     print(json.dumps(out, ensure_ascii=False, indent=1))

@@ -90,9 +90,9 @@ def image_unique_diff(before, after) -> dict:
     bits = {k: _hamming(ha[k], hb[k]) for k in ('ahash', 'dhash', 'phash')}
     mid = round(sum(bits.values()) / 3, 1)
     pts = _points(before, after)
-    return {**bits, 'средний': mid, **pts,
-            'узнаваем': mid < IMAGE_UNIQUE_FAR,
-            'порог': IMAGE_UNIQUE_FAR}
+    return {**bits, 'mean_of': mid, **pts,
+            'recognizable': mid < IMAGE_UNIQUE_FAR,
+            'threshold': IMAGE_UNIQUE_FAR}
 
 
 def image_unique_cost(before, after) -> dict:
@@ -124,13 +124,13 @@ def image_unique_cost(before, after) -> dict:
     sa, sb = _sigma(ga), _sigma(gb)
     ra = float(cv2.Laplacian(ga, cv2.CV_64F).var())
     rb = float(cv2.Laplacian(gb, cv2.CV_64F).var())
-    return {'зерно было': round(sa, 2), 'зерно стало': round(sb, 2),
-            'зерно': round(sb / sa, 2) if sa else 0.0,
-            'резкость было': round(ra, 1), 'резкость стало': round(rb, 1),
-            'резкость': round(rb / ra, 2) if ra else 0.0,
-            'яркость было': round(float(np.median(ga)), 1),
-            'яркость стало': round(float(np.median(gb)), 1),
-            'фотореалистично': bool(0.8 <= (sb / sa if sa else 0) <= 1.4
+    return {'grain_before': round(sa, 2), 'grain_after': round(sb, 2),
+            'grain': round(sb / sa, 2) if sa else 0.0,
+            'sharpness_before': round(ra, 1), 'sharpness_after': round(rb, 1),
+            'sharpness': round(rb / ra, 2) if ra else 0.0,
+            'brightness_before': round(float(np.median(ga)), 1),
+            'brightness_after': round(float(np.median(gb)), 1),
+            'photoreal': bool(0.8 <= (sb / sa if sa else 0) <= 1.4
                                     and (rb / ra if ra else 0) >= 0.8)}
 
 
@@ -210,12 +210,12 @@ def _points(before, after) -> dict:
     ka, da = orb.detectAndCompute(a, None)
     kb, db = orb.detectAndCompute(b, None)
     if da is None or db is None or not len(ka) or not len(kb):
-        return {'точек': 0, 'совпало': 0, 'доля точек': 0.0}
+        return {'points': 0, 'matched': 0, 'points_share': 0.0}
     pairs = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(da, db)
     good = [m for m in pairs if m.distance <= IMAGE_UNIQUE_MATCH]
     base = min(len(ka), len(kb))
-    return {'точек': base, 'совпало': len(good),
-            'доля точек': round(len(good) / base, 3) if base else 0.0}
+    return {'points': base, 'matched': len(good),
+            'points_share': round(len(good) / base, 3) if base else 0.0}
 
 
 if __name__ == '__main__':
@@ -230,5 +230,5 @@ if __name__ == '__main__':
         print(json.dumps(image_unique_hash(ns.before), ensure_ascii=False, indent=1))
     else:
         out = {**image_unique_diff(ns.before, ns.after),
-               'цена': image_unique_cost(ns.before, ns.after)}
+               'cost': image_unique_cost(ns.before, ns.after)}
         print(json.dumps(out, ensure_ascii=False, indent=1))

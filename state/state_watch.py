@@ -39,8 +39,8 @@ def state_watch(table, where: dict, column) -> dict:
     shown = sql
     for v in where.values():
         shown = shown.replace('%s', "'" + str(v).replace("'", "''") + "'", 1)
-    return {'значение': rows[0][column] if rows else None,
-            'проба': f"python -m mysql_.mysql_query sql \"{shown}\" "
+    return {'value_of': rows[0][column] if rows else None,
+            'probe': f"python -m mysql_.mysql_query sql \"{shown}\" "
                      f"--format json"}
 
 
@@ -56,4 +56,4 @@ if __name__ == '__main__':
     ns = ap.parse_args()
     out = state_watch(ns.table, dict(w.split('=', 1) for w in ns.where),
                       ns.column)
-    print(out['проба'])
+    print(out['probe'])

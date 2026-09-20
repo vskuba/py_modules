@@ -41,8 +41,8 @@ def compose_x(service, cmd, *, args=None, quiet=('[Warning]',)) -> dict:
         argv += [flag, os.environ.get(v[1:], '') if v.startswith('$') else v]
     argv += parts
     r = subprocess.run(argv, capture_output=True, text=True)
-    return {'код': r.returncode,
-            'вывод': _quiet(r.stdout, quiet), 'ошибка': _quiet(r.stderr, quiet)}
+    return {'code': r.returncode,
+            'output': _quiet(r.stdout, quiet), 'error': _quiet(r.stderr, quiet)}
 
 
 def _quiet(text: str, marks) -> str:

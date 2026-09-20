@@ -41,19 +41,17 @@ def comfy_node_info(name: str, base: str = '') -> dict:
     if нода is None:
         raise ValueError(f'узел «{name}» на ферме {base} не объявлен; '
                          'спроси имя из /object_info целиком')
-    входы = {'обязательные': {}, 'необязательные': {}}
-    for метка in ('обязательные', 'необязательные'):
-        for имя, v in (нода.get('input', {}).get(
-                {'обязательные': 'required',
-                 'необязательные': 'optional'}[метка], {}) or {}).items():
+    входы = {'required': {}, 'optional': {}}
+    for метка in ('required', 'optional'):
+        for имя, v in (нода.get('input', {}).get(метка, {}) or {}).items():
             тип = v[0] if isinstance(v, list) and v else v
             extra = v[1] if isinstance(v, list) and len(v) > 1 and v[1] else {}
-            entry = ({'тип': тип, 'значения': []} if isinstance(тип, str)
-                     else {'тип': 'COMBO', 'значения': тип})
+            entry = ({'type': тип, 'values': []} if isinstance(тип, str)
+                     else {'type': 'COMBO', 'values': тип})
             if 'default' in extra:
                 entry['default'] = extra['default']
             входы[метка][имя] = entry
-    return {'узел': name, 'выходы': нода.get('output', []), **входы}
+    return {'node': name, 'outputs': нода.get('output', []), **входы}
 
 
 def comfy_node_sees(name: str, файл: str, base: str = '') -> dict:
@@ -63,12 +61,12 @@ def comfy_node_sees(name: str, файл: str, base: str = '') -> dict:
     где именно имя видно или почему нет.
     """
     info = comfy_node_info(name, base)
-    for метка in ('обязательные', 'необязательные'):
+    for метка in ('required', 'optional'):
         for имя, вход in info[метка].items():
-            if файл in вход.get('значения', []):
-                return {'виден': True, 'вход': имя,
-                        'значения': len(вход['значения'])}
-    return {'виден': False, 'вход': '', 'значения': 0}
+            if файл in вход.get('values', []):
+                return {'visible': True, 'input': имя,
+                        'values': len(вход['values'])}
+    return {'visible': False, 'input': '', 'values': 0}
 
 
 if __name__ == '__main__':

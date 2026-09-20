@@ -25,17 +25,17 @@ def image_probe_zones(box, kps=None, body=0.45):
     """{'имя зоны': (x0,y0,x1,y1)} по боксу и точкам — те же доли, что маска."""
     x0, y0, x1, y1 = (int(v) for v in box)
     if not kps:
-        return {'верх': (x0, y0, x1, y0 + int((y1 - y0) * 0.3)),
-                'ядро': (x0 + int((x1 - x0) * .25), y0 + int((y1 - y0) * .3),
+        return {'top': (x0, y0, x1, y0 + int((y1 - y0) * 0.3)),
+                'core': (x0 + int((x1 - x0) * .25), y0 + int((y1 - y0) * .3),
                          x1 - int((x1 - x0) * .25), y0 + int((y1 - y0) * .85)),
-                'низ': (x0, y1 - int((y1 - y0) * .15), x1, y1)}
+                'bottom': (x0, y1 - int((y1 - y0) * .15), x1, y1)}
     ex, my = (kps[0][1] + kps[1][1]) / 2, (kps[3][1] + kps[4][1]) / 2
     fh = kps[4][1] - kps[0][1]
-    return {'над овалом': (x0, y0, x1, int(ex - fh * 0.35)),
-            'лоб': (x0 + 60, int(ex - fh * 0.35), x1 - 60, int(my - fh * 0.1)),
-            'щёки': (x0 + 60, int(my), x1 - 60, y1 - 40),
-            'под овалом': (x0, int(my + fh * 0.6), x1, y1),
-            'тело': (x0, y1, x1, int(y1 + (y1 - y0) * body))}
+    return {'above_oval': (x0, y0, x1, int(ex - fh * 0.35)),
+            'forehead': (x0 + 60, int(ex - fh * 0.35), x1 - 60, int(my - fh * 0.1)),
+            'cheeks': (x0 + 60, int(my), x1 - 60, y1 - 40),
+            'below_oval': (x0, int(my + fh * 0.6), x1, y1),
+            'body_zone': (x0, y1, x1, int(y1 + (y1 - y0) * body))}
 
 
 def image_probe_diff(composite, source, box=None, kps=None):

@@ -59,11 +59,11 @@ def web_grab(urls, to='.', *, ua=WEB_GRAB_UA, path='') -> list:
                 continue
             typ = _sniff(data)
             name = unquote(urlsplit(u).path).rsplit('/', 1)[-1]
-            entry = {'адрес': u, 'файл': '', 'тип': typ or 'не опознан',
-                     'байт': len(data), 'почему': ''}
+            entry = {'address': u, 'file': '', 'type': typ or 'не опознан',
+                     'bytes': len(data), 'why': ''}
             if head == b'<':
-                entry['тип'] = 'html'
-                entry['почему'] = ('страница вместо файла (сайт отрезал UA? '
+                entry['type'] = 'html'
+                entry['why'] = ('страница вместо файла (сайт отрезал UA? '
                                    'url не про файл?)')
             else:
                 if not Path(name).suffix and typ:
@@ -71,11 +71,11 @@ def web_grab(urls, to='.', *, ua=WEB_GRAB_UA, path='') -> list:
                 p = Path(to) / name
                 p.write_bytes(data)
                 got = file_check(p)
-                if not got['цел']:
+                if not got['intact']:
                     p.unlink(missing_ok=True)
-                    entry['почему'] = got['почему']
+                    entry['why'] = got['why']
                 else:
-                    entry['файл'], entry['тип'] = str(p), typ or entry['тип']
+                    entry['file'], entry['type'] = str(p), typ or entry['type']
             out.append(entry)
     return out
 

@@ -114,7 +114,7 @@ if __name__ == '__main__':
             ns.base, poll=ns.poll)
         got.pop('result', None)
         got.update(comfy_mem_fits(got['peak'], got['total']))
-        got.update({'кадров': len(ns.files), 'бюджет': ns.budget, 'шагов': ns.steps})
+        got.update({'frames_count': len(ns.files), 'budget': ns.budget, 'steps_count': ns.steps})
         print(json.dumps(got, ensure_ascii=False))
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as err:
         raise SystemExit(f'ошибка: {err}')

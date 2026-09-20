@@ -52,8 +52,8 @@ def ssh_x(target: str, script, *, container: str = '', args: dict = None,
     r = subprocess.run(['ssh', *str(target).split(), remote], input=stdin_data,
                        capture_output=True, text=True, encoding='utf-8',
                        errors='replace')
-    return {'код': r.returncode, 'вывод': _quiet(r.stdout, quiet),
-            'ошибка': _quiet(r.stderr, quiet)}
+    return {'code': r.returncode, 'output': _quiet(r.stdout, quiet),
+            'error': _quiet(r.stderr, quiet)}
 
 
 def _quiet(text: str, marks) -> str:

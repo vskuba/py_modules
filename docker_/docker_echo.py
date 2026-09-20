@@ -31,9 +31,9 @@ def docker_echo(path, must, *, service, app_dir='/app') -> dict:
     counts = {}
     for m in must:
         r = compose_x(service, ['grep', '-c', '-e', m, inside])
-        counts[m] = int(r['вывод'].strip() or 0) if r['код'] in (0, 1) \
-            and r['вывод'].strip().isdigit() else None
-    return {'файл': path, 'сервис': service, 'совпадений': counts}
+        counts[m] = int(r['output'].strip() or 0) if r['code'] in (0, 1) \
+            and r['output'].strip().isdigit() else None
+    return {'file': path, 'service': service, 'matches': counts}
 
 
 if __name__ == '__main__':

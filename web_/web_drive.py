@@ -283,13 +283,13 @@ def _record(answer: dict, console: list) -> None:
         console.append({'level': 'page-error',
                         'text': (d.get('exception', {}).get('description')
                                  or d.get('text', '')),
-                        'где': f'{where}:{line + 1}' if where else '',
-                        'кусок': _snippet(where, line)})
+                        'where': f'{where}:{line + 1}' if where else '',
+                        'chunk': _snippet(where, line)})
     elif method == 'Log.entryAdded':
         e = p.get('entry', {})
         if e.get('level') in ('error', 'warning'):
             console.append({'level': e['level'], 'text': e.get('text', ''),
-                            'где': (f"{e['url']}:{e.get('lineNumber', 0) + 1}"
+                            'where': (f"{e['url']}:{e.get('lineNumber', 0) + 1}"
                                     if e.get('url') else '')})
 
 
@@ -345,5 +345,5 @@ if __name__ == '__main__':
             print(f'{k}: {v}')
         for line in res['console']:
             print(f"[{line['level']}] {line['text']}"
-                  + (f"\n    {line.get('где', '')}: {line.get('кусок', '')[:160]}"
-                     if line.get('кусок') else ''))
+                  + (f"\n    {line.get('where', '')}: {line.get('chunk', '')[:160]}"
+                     if line.get('chunk') else ''))

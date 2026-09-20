@@ -40,8 +40,8 @@ def mysql_migration_seed(rows, table: str, *, column: str = 'слово') -> dic
     sql = (f'INSERT IGNORE INTO `{table}` ('
            + ', '.join(f'`{c}`' for c in cols) + ') VALUES\n'
            + ',\n'.join(values) + ';') if values else ''
-    return {'sql': sql, 'было': len(items), 'стало': len(values),
-            'колонки': cols}
+    return {'sql': sql, 'before': len(items), 'after': len(values),
+            'columns': cols}
 
 
 def _lit(value) -> str:
