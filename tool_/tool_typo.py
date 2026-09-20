@@ -14,6 +14,9 @@
 
 Настоящая вычитка — дело человека или языковой модели: `--prose` отдаёт всю прозу
 репозитория одним потоком, готовым к отправке (например, `| gx10 "найди опечатки"`).
+
+Отдельный режим `--cyrillic` — уже не проза, а код: дерево `*.py`, и в нём имена
+функций и ключи словарей на кириллице, чего правило (`code_rules.md` §1.2) не терпит.
 """
 import ast
 import re
@@ -85,20 +88,78 @@ def tool_typo_prose(root=None) -> str:
     return '\n'.join(lines)
 
 
+def tool_typo_cyrillic(root=None) -> list[dict]:
+    """Имена и ключи на кириллице — код, а не проза; правило `code_rules.md` §1.2.
+
+    Смотрит `*.py` синтаксическим деревом: имена функций, ключи литералов-
+    словарей и строковые ключи в скобках (`словарь['ключ']`). Что не дерево
+    (js, html, sql) деревом не видно — там остаются grep-шаблоны §1.2.
+
+    Args:
+        root: корень репозитория; пусто — тот, где лежит этот файл.
+
+    Returns:
+        list[dict]: находки с полями `kind` (`cyrillic`), `word`, `where`,
+        `line`, `hint`.
+
+    ⚠ Ловит и смешанные имена (`test_metadata_строкой`), а не только целиком
+    кирилличные: их набираешь руками с той же раскладки, что и всё вокруг.
+    """
+    base = Path(root) if root else TOOL_TYPO_ROOT
+    out = []
+    for path in sorted(base.rglob('*.py')):
+        if any(part in TOOL_TYPO_SKIP for part in path.parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+        except (SyntaxError, UnicodeDecodeError, OSError):
+            continue
+
+        where = path.relative_to(base).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = [(node.name, 'имя функции — по правилу только латиницей')]
+            elif isinstance(node, ast.Dict):
+                names = [(k.value, 'ключ словаря на кириллице')
+                         for k in node.keys
+                         if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+            elif (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, str)):
+                names = [(node.slice.value, 'ключ словаря на кириллице')]
+            else:
+                continue
+            for name, tip in names:
+                if TOOL_TYPO_CYRILLIC.search(name):
+                    out.append({'kind': 'cyrillic', 'word': name[:60], 'where': where,
+                                'line': getattr(node, 'lineno', 1), 'hint': tip})
+    return sorted(out, key=lambda r: (r['where'], r['line']))
+
+
 def main() -> None:
-    """CLI: `python -m tool_.tool_typo [--kind mixed|doubled] [--prose]`."""
+    """CLI: `python -m tool_.tool_typo [--kind mixed|doubled] [--prose] [--cyrillic]`."""
     import argparse
 
     ap = argparse.ArgumentParser(
         description='Следы неудачной правки в прозе репозитория: слипшиеся слова, '
-                    'подмена буквы из другого алфавита, повтор слова.')
-    ap.add_argument('--kind', default='', choices=['', 'mixed', 'doubled'])
+                    'подмена буквы из другого алфавита, повтор слова. Плюс — '
+                    'кириллица в именах функций и ключах (--cyrillic).')
+    ap.add_argument('--kind', default='', choices=['', 'mixed', 'doubled', 'cyrillic'])
     ap.add_argument('--prose', action='store_true',
                     help='не искать, а выдать всю прозу для вычитки моделью')
+    ap.add_argument('--cyrillic', action='store_true',
+                    help='имена функций и ключи словарей на кириллице в *.py')
     ns = ap.parse_args()
 
     if ns.prose:
         print(tool_typo_prose())
+        return
+
+    if ns.cyrillic or ns.kind == 'cyrillic':
+        rows = tool_typo_cyrillic()
+        print(f'🔴 ИМЕНА И КЛЮЧИ НА КИРИЛЛИЦЕ — {len(rows)}' if rows
+              else 'кириллицы в именах и ключах нет')
+        for row in rows:
+            print(f"  {row['where']}:{row['line']}  «{row['word']}»  {row['hint']}")
         return
 
     found = [f for f in tool_typo() if not ns.kind or f['kind'] == ns.kind]
