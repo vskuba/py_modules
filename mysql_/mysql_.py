@@ -17,6 +17,23 @@ pool_lock = asyncio.Lock()
 # Позволяет по логам сопоставить acquire/release одного и того же чекаута и найти висящий "хвост".
 _conn_seq = 0
 
+# ⚠⚠ **Печать каждого запроса и каждого чекаута пула — трассировка отладки, и на
+# проде она стоит гигабайтов.** Замерено на живом сервере: воркер писал 6832 строки
+# в минуту, из них 6809 — эти две печати. Полтора гигабайта логов в сутки с одного
+# контейнера, при полезных двадцати трёх строках в минуту.
+#
+# ⚠ **Умолчание — как было, «печатать».** Выключатель заводится в общей библиотеке,
+# и молчаливая смена поведения застала бы врасплох соседние проекты: человек ищет
+# запрос в журнале, а его там больше нет, и причина — в чужом коммите.
+#
+# Гасят их **порознь**, потому что отлаживают ими разное: `QUERIES` — что именно
+# спросили у базы, `POOL` — куда делись соединения. Второе нужно редко и только
+# при подозрении на утечку.
+LOG_QUERIES = str(config_get('MYSQL_LOG_QUERIES', '1')).strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+LOG_POOL = str(config_get('MYSQL_LOG_POOL', '1')).strip().lower() \
+    not in ('0', 'false', 'no', 'off')
+
 host = config_get('MYSQL_HOST', 'mysql')
 port = int(config_get('MYSQL_PORT', '3306'))
 user = config_get('MYSQL_USER', 'developer')
@@ -42,7 +59,8 @@ class MySQLConnectionManager:
         global _conn_seq
         _conn_seq += 1
         self._seq = _conn_seq
-        logger_info(f"[MySQL POOL] acquire #{self._seq}: used={len(self.pool._used)} free={self.pool.freesize} size={self.pool.size}")
+        if LOG_POOL:
+            logger_info(f"[MySQL POOL] acquire #{self._seq}: used={len(self.pool._used)} free={self.pool.freesize} size={self.pool.size}")
 
         # Если что-то после acquire() упадет (в т.ч. asyncio.CancelledError при обрыве
         # запроса клиентом) — __aenter__ не вернет self, и Python НЕ вызовет __aexit__
@@ -54,6 +72,8 @@ class MySQLConnectionManager:
             self.cursor_ctx = self.conn.cursor()
             self._cursor = await self.cursor_ctx.__aenter__()
         except BaseException:
+            # ⚠ Эта печать **остаётся всегда**: она не про поток запросов, а про
+            # сорвавшийся чекаут — то есть про беду, из-за которой пул течёт.
             logger_info(f"[MySQL POOL] acquire #{self._seq} failed before enter, releasing")
             await self.pool.release(self.conn)
             self.conn = None
@@ -67,7 +87,8 @@ class MySQLConnectionManager:
         finally:
             if self.conn and self.pool:
                 await self.pool.release(self.conn)
-                logger_info(f"[MySQL POOL] release #{self._seq}: used={len(self.pool._used)} free={self.pool.freesize} size={self.pool.size}")
+                if LOG_POOL:
+                    logger_info(f"[MySQL POOL] release #{self._seq}: used={len(self.pool._used)} free={self.pool.freesize} size={self.pool.size}")
 
     def __getattr__(self, name):
         # Если курсор еще не создан (вызов до async with), отдаем понятное исключение
@@ -84,8 +105,8 @@ class MySQLConnectionManager:
         if self._cursor is None:
             raise RuntimeError("Попытка выполнить execute() вне контекста 'async with db:'")
 
-        log_msg = mysql_log_line(query, args)
-        logger_info(log_msg)
+        if LOG_QUERIES:
+            logger_info(mysql_log_line(query, args))
         try:
             return await self._cursor.execute(query, args)
         except Exception as e:
@@ -96,7 +117,8 @@ class MySQLConnectionManager:
         if self._cursor is None:
             raise RuntimeError("Попытка выполнить executemany() вне контекста 'async with db:'")
 
-        logger_info(f"[MySQL SQL Many]: {query} | Count: {len(args)}")
+        if LOG_QUERIES:
+            logger_info(f"[MySQL SQL Many]: {query} | Count: {len(args)}")
         try:
             return await self._cursor.executemany(query, args)
         except Exception as e:
@@ -122,8 +144,8 @@ class LoggingCursor:
         return getattr(self._cursor, name)
 
     async def execute(self, query, args=None):
-        log_msg = mysql_log_line(query, args)
-        logger_info(log_msg)
+        if LOG_QUERIES:
+            logger_info(mysql_log_line(query, args))
 
         try:
             return await self._cursor.execute(query, args)
@@ -133,7 +155,8 @@ class LoggingCursor:
             raise  # Пробрасываем исключение дальше, чтобы оно обрабатывалось в приложении
 
     async def executemany(self, query, args):
-        logger_info(f"[MySQL SQL Many]: {query} | Count: {len(args)}")
+        if LOG_QUERIES:
+            logger_info(f"[MySQL SQL Many]: {query} | Count: {len(args)}")
         try:
             return await self._cursor.executemany(query, args)
         except Exception as e:
