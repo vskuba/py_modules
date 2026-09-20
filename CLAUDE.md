@@ -98,6 +98,7 @@ namespace-папок, которые проекты импортируют на�
 | `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
 | `http_/http_rest.py`, `http_/http_watch.py`, `mcp_/mcp_client.py` | `docs/rest_probe.md` — вызов чужого API с угаданным заголовком, схема из zod-ошибки, сторож JSON-эндпоинта, MCP-клиент; ⚠ MCP не пробрасывает ключ в апстрим |
 | `crypto_/crypto_ed25519.py`, `crypto_/crypto_pow.py` | `docs/crypto_primitives.md` — Ed25519 и PoW вне цепочек; ⚠ seed ровно 32 байта, кодирование ключа/подписи у платформ разное |
+| `x402_/x402_serve.py` | `docs/x402_serve.md` — платный 402-челлендж на FastAPI-маршрутах; ⚠ network каноническим id (eip155:84532 — testnet), price строкой |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |

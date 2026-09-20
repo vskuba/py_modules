@@ -64,6 +64,7 @@
 | `evm_signing.md` | EVM без eth-библиотек: ключ/адрес/подпись (`evm_keys`), EIP-712 (`evm_typed`), authorization'ы EIP-3009 (`evm_eip3009`); грабли: 3·x², −z в recovery, четыре кандидата rec |
 | `rest_probe.md` | Разведка чужого API: вызов с угаданным заголовком ключа и схемой из zod-ошибки (`http_rest`), сторож JSON-эндпоинта с пробой (`http_watch`), MCP-клиент streamable-HTTP (`mcp_client`); ⚠ MCP не пробрасывает ключ в апстрим |
 | `crypto_primitives.md` | Примитивы вне цепочек: Ed25519 пара/подпись (`crypto_ed25519`), подбор nonce под ведущие нули хеша (`crypto_pow`); ⚠ кодирование ключа/подписи у платформ разное |
+| `x402_serve.md` | Платный HTTP (x402 v2): 402-челлендж на FastAPI-маршрутах (`x402_serve`); ⚠ network каноническим id (eip155:84532=Base Sepolia, публичный facilitator — testnet), price строкой («$0.01») |
 | `uvicorn_panel.md` | Вошедший клиент запущенной панели: адрес из факта, JSON-вход, автоперелогин на 401, домен куки; точка «что отвечает ручка» одним вызовом под учёткой из `.env` (`web_state`) |
 | `uvicorn_dev.md` | Цикл правки: рестарт сервиса смены и ожидание `/health`, а не `sleep 3` |
 | `uvicorn_mirror.md` | Копия страницы панели как полноценный исток: тело по своему пути, прочее прокси; URL копии для probe/shot/drive |
