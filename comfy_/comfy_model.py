@@ -43,24 +43,24 @@ def comfy_model_present(models_dir: str, pattern: str, *,
                       'intact': chk['intact'], 'why': chk['why'],
                       'dest': (os.readlink(path)
                                if os.path.islink(path) else '')})
-    алиас = {}
+    alias_ = {}
     if alias:
         path = os.path.join(models_dir, alias)
         whole = next((f for f in found if f['intact']), None)
         if os.path.islink(path):
-            алиас = {'name': alias, 'target': os.readlink(path), 'status': 'был'}
+            alias_ = {'name': alias, 'target': os.readlink(path), 'status': 'был'}
         elif whole:
             tmp = path + '.tmp'
             try:
                 os.symlink(whole['file'], tmp)
                 os.replace(tmp, path)
-                алиас = {'name': alias, 'target': whole['file'], 'status': 'создан'}
+                alias_ = {'name': alias, 'target': whole['file'], 'status': 'создан'}
             except OSError as e:
-                алиас = {'name': alias, 'target': whole['file'],
+                alias_ = {'name': alias, 'target': whole['file'],
                          'status': f'не создался: {e}'}
         else:
-            алиас = {'name': alias, 'target': '', 'status': 'нет цельного файла'}
-    return {'found': found, 'total': len(found), 'alias': алиас}
+            alias_ = {'name': alias, 'target': '', 'status': 'нет цельного файла'}
+    return {'found': found, 'total': len(found), 'alias': alias_}
 
 
 def comfy_model_get(folder: str, url: str, *, name: str = '', size: int = 0,

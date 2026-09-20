@@ -42,11 +42,11 @@ def web_watch(src, watch, steps=(), *, login=None, init=None, chrome='',
         высота), `почему` — виновник, когда факта нет у атрибута: правило,
         перебившее `hidden`, называется прямо там.
     """
-    блоки = []
-    for ш in steps:
-        блоки.append('log.length = 0; %s;\nшаги.push({шаг: %s, изменения: '
+    blocks = []
+    for w in steps:
+        blocks.append('log.length = 0; %s;\nшаги.push({шаг: %s, изменения: '
                      'log.slice(), видно: свод()});'
-                     % (ш['js'], json.dumps(ш.get('step', ''), ensure_ascii=False)))
+                     % (w['js'], json.dumps(w.get('step', ''), ensure_ascii=False)))
     body = """
 const q = s => document.querySelector(s);
 const факт = s => { const n = q(s); if (!n) return {видно: false, почему: 'нет узла'};
@@ -71,7 +71,7 @@ const шаги = [];
 %(шаги)s
 return {до, шаги};
 """ % {'watch': json.dumps(list(watch), ensure_ascii=False),
-       'steps': '\n'.join(блоки)}
+       'steps': '\n'.join(blocks)}
     return web_drive_page(src, body, login=login, init=init, chrome=chrome,
                           size=size)['value']
 
@@ -90,8 +90,8 @@ if __name__ == '__main__':
     ns = ap.parse_args()
     and_init = {}
     if ns.init:
-        ч = ns.init.split('|', 2)
-        and_init = {'file': ч[0], 'name': ч[1]} if len(ч) < 3 else {'file': ч[0], 'name': ч[1], 'argument': ч[2]}
+        c = ns.init.split('|', 2)
+        and_init = {'file': c[0], 'name': c[1]} if len(c) < 3 else {'file': c[0], 'name': c[1], 'argument': c[2]}
     out = web_watch(ns.url, ns.watch, [{'step': j, 'js': j} for j in ns.step],
                     init=and_init or None)
     print(json.dumps(out, ensure_ascii=False, indent=1))

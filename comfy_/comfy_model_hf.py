@@ -15,8 +15,8 @@ import urllib.request
 HF_API = 'https://huggingface.co/api'
 
 
-def comfy_model_hf_expect(repo: str, файл: str, *, ref: str = 'main',
-                         токен: str = '') -> dict:
+def comfy_model_hf_expect(repo: str, file: str, *, ref: str = 'main',
+                         token: str = '') -> dict:
     """Ожидание файла из репо HF: url докачки, размер, sha256 (lfs oid).
 
     Args:
@@ -32,21 +32,21 @@ def comfy_model_hf_expect(repo: str, файл: str, *, ref: str = 'main',
     """
     url = f'{HF_API}/models/{repo}/tree/{ref}?recursive=true'
     req = urllib.request.Request(url)
-    if токен:
-        req.add_header('Authorization', f'Bearer {токен}')
+    if token:
+        req.add_header('Authorization', f'Bearer {token}')
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
-            файлы = json.load(r)
+            files = json.load(r)
     except Exception as e:
         return {'url': '', 'bytes': 0, 'sha256': '', 'why': f'HF API молчит: {e}'}
-    имя = файл.rsplit('/', 1)[-1]
-    entry = next((f for f in файлы if f.get('path') == файл), None) or next(
-        (f for f in файлы if f.get('path', '').rsplit('/', 1)[-1] == имя), None)
+    name = file.rsplit('/', 1)[-1]
+    entry = next((f for f in files if f.get('path') == file), None) or next(
+        (f for f in files if f.get('path', '').rsplit('/', 1)[-1] == name), None)
     if entry is None:
         return {'url': '', 'bytes': 0, 'sha256': '',
-                'why': f'файла «{файл}» в {repo}@{ref} нет'}
+                'why': f'файла «{file}» в {repo}@{ref} нет'}
     return {'url': f'https://huggingface.co/{repo}/resolve/{ref}/'
-            + urllib.request.quote(файл),
+            + urllib.request.quote(file),
             'bytes': entry.get('size', 0),
             'sha256': (entry.get('lfs') or {}).get('oid', ''),
             'why': '' if entry.get('lfs') else
@@ -59,9 +59,9 @@ if __name__ == '__main__':
         description='что просит файл веса с HF: размер и sha256 до скачки — '
                     'в той форме, в какой их ждёт comfy_model_get.')
     ap.add_argument('repo', help='репо HF')
-    ap.add_argument('файл', help='путь к файлу в репо')
+    ap.add_argument('file', help='путь к файлу в репо')
     ap.add_argument('--ref', default='main', help='ветка/ревизия')
-    ap.add_argument('--токен', default='', help='Bearer для гейтнутых репо')
+    ap.add_argument('--token', default='', help='Bearer для гейтнутых репо')
     ns = ap.parse_args()
-    print(json.dumps(comfy_model_hf_expect(ns.repo, ns.файл, ref=ns.ref,
-                                           токен=ns.токен), ensure_ascii=False))
+    print(json.dumps(comfy_model_hf_expect(ns.repo, ns.file, ref=ns.ref,
+                                           token=ns.token), ensure_ascii=False))
