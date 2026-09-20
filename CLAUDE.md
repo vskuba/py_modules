@@ -95,6 +95,8 @@ namespace-папок, которые проекты импортируют на�
 | `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
+| `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
+| `http_/http_rest.py`, `http_/http_watch.py`, `mcp_/mcp_client.py` | `docs/rest_probe.md` — вызов чужого API с угаданным заголовком, схема из zod-ошибки, сторож JSON-эндпоинта, MCP-клиент; ⚠ MCP не пробрасывает ключ в апстрим |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
 | `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
@@ -214,6 +216,8 @@ CLI есть у модулей, которыми пользуются «рука
 | `docker_.compose_x` | `СЕРВИС команда… [-a флаг=значение] [--no-quiet]` → `{'код','вывод','ошибка'}`; `$ИМЯ` в `-a` подставляется из окружения проекта |
 | `docker_.docker_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
+| `evm_.evm_keys` | `address КЛЮЧ` / `sign КЛЮЧ --digest …` → адрес EIP-55; подпись с самопроверкой signer==recovered |
+| `http_.http_watch` | `URL [--field путь.в.json --header к=в --format value]` → значение поля сейчас + проба сторожу |
 | `ai.ai_vision` | `describe`, `normalize` |
 | `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
 | `adb_.adb_ui` | `map`, `find`, `dump` |
