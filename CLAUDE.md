@@ -96,6 +96,7 @@ namespace-папок, которые проекты импортируют на�
 | `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
 | `file_/file_walk.py` | `docs/file_walk.md` — обход дерева без `.venv`/`.git`/`node_modules`: общий низ описи, вычитки и поиска по слоям; ⚠ фильтр после обхода не экономит ничего |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
+| `text_/text_emoji.py` | `docs/text_emoji.md` — эмодзи, разобранные чужим кодом неверно: зовётся на границе входа; ⚠ греческий с цифрой вплотную |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
 | `http_/http_rest.py`, `http_/http_watch.py`, `mcp_/mcp_client.py` | `docs/rest_probe.md` — вызов чужого API с угаданным заголовком, схема из zod-ошибки, сторож JSON-эндпоинта, MCP-клиент; ⚠ MCP не пробрасывает ключ в апстрим |
@@ -376,7 +377,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | Фундамент | `config`, `logging_` |
 | Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_`, `redis_queue`, `qdrant_`, `sqllite3`, `queue_`, `state` |
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/ai_vision`, `mcp_` |
-| Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_` |
+| Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_`, `text_` |
 | Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `datetime_`, `json_`, `async_`, `thread_` |
 | Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `apk_` (разбор APK на машине), `translator`, `flux_schnell`, `microphone` |
 
