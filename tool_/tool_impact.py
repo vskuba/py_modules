@@ -11,12 +11,27 @@ JS и шаблоны страниц, тесты, доки. Обход одним
 """
 import argparse
 import re
+import sys
+
 from pathlib import Path
 
-TOOL_IMPACT_SKIP = ('.venv', '__pycache__', '.git', 'node_modules', '.idea')
+# Файл запускают и путём (`python3 py_modules/tool_/tool_impact.py`). Тогда первым в путях
+# лежит каталог файла, и соседний namespace (`file_`) не находится вовсе.
+if __package__ in (None, ''):
+    _here = str(Path(__file__).resolve().parent)
+    sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from file_.file_walk import file_walk
+
 # Порядок слоёв = порядок правки: сначала код, за ним разметка, тесты, доки.
 TOOL_IMPACT_ORDER = ('код', 'разметка', 'тесты', 'док')
-TOOL_IMPACT_SUFFIXES = ('.py', '.js', '.html', '.md')
+# Слои, в которых имя живёт строкой: питон, фронтенд, схема базы, доки.
+# Миграция и `.sql` здесь не для полноты: имя колонки правят тем же
+# изменением, что и код, который её читает, — а `grep` по `*.py` его не видит.
+TOOL_IMPACT_SUFFIXES = ('.py', '.js', '.mjs', '.ts', '.tsx', '.vue',
+                        '.html', '.css', '.md', '.sql', '.json', '.yml',
+                        '.yaml', '.toml')
 
 
 def tool_impact(name: str, root='.') -> list[dict]:
@@ -37,11 +52,7 @@ def tool_impact(name: str, root='.') -> list[dict]:
     word = re.compile(rf'(?<!\w){re.escape(name)}(?!\w)')
     base = Path(root)
     hits = []
-    for path in sorted(base.rglob('*')):
-        if not path.is_file() or path.suffix not in TOOL_IMPACT_SUFFIXES:
-            continue
-        if any(part in TOOL_IMPACT_SKIP for part in path.parts):
-            continue
+    for path in file_walk(base, TOOL_IMPACT_SUFFIXES):
         try:
             text = path.read_text(encoding='utf-8')
         except (UnicodeDecodeError, OSError):
@@ -88,3 +99,4 @@ if __name__ == '__main__':
             last = h['layer']
         print(f'  {h["file"]}:{h["line"]}  {h["text"]}')
     print(f'\n{len(found)} мест')
+    raise SystemExit(0 if found else 1)

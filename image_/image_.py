@@ -26,6 +26,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 # Pillow по умолчанию пишет JPEG с качеством 75 — на цельноэкранной графике
@@ -118,14 +119,9 @@ def image_measure(path: str, box: tuple = None, top: int = 0) -> dict:
          пикселей}; при top>0 добавлен 'top': [(краска, сколько раз)].
     """
     pixels = _window(_load(path), box)
-    mode = Counter(pixels).most_common(1)[0][0]
-    lumas = sorted(_luma(p) for p in pixels)
-    result = {'mode': mode, 'luma': _luma(mode),
-              'mean_luma': round(sum(lumas) / len(lumas)),
-              'spread': lumas[int(0.95 * (len(lumas) - 1))] - lumas[int(0.05 * (len(lumas) - 1))],
-              'samples': len(pixels)}
+    result = _stats(pixels)
     if top > 0:
-        result['top'] = Counter(pixels).most_common(top)
+        result['top'] = _counts(pixels)[:top]
     return result
 
 
@@ -166,18 +162,15 @@ def image_audit(path: str, grid: tuple = (3, 3)) -> dict:
     for r in range(rows):
         for c in range(cols):
             box = (c / cols, r / rows, (c + 1) / cols, (r + 1) / rows)
-            pixels = _window(img, box)
-            lumas = sorted(_luma(p) for p in pixels)
+            got = _stats(_window(img, box))
             zones.append({'box': tuple(round(v, 3) for v in box),
-                          'luma': _luma(Counter(pixels).most_common(1)[0][0]),
-                          'mean_luma': round(sum(lumas) / len(lumas)),
-                          'spread': lumas[int(0.95 * (len(lumas) - 1))] - lumas[int(0.05 * (len(lumas) - 1))]})
+                          'luma': got['luma'], 'mean_luma': got['mean_luma'],
+                          'spread': got['spread']})
     edges = {}
     for name, box in IMAGE_AUDIT_EDGES.items():
-        pixels = _window(img, box)
+        got = _stats(_window(img, box))
         edges[name] = {'box': tuple(round(v, 3) for v in box),
-                       'luma': _luma(Counter(pixels).most_common(1)[0][0]),
-                       'spread': _spread(pixels)}
+                       'luma': got['luma'], 'spread': got['spread']}
     samples = ([ (z['luma'], f'зона {i + 1}') for i, z in enumerate(zones) ] +
                [ (e['luma'], _EDGE_NAMES[name]) for name, e in edges.items() ])
     tones = _tones(samples)
@@ -222,8 +215,8 @@ def image_diff_zones(path_a: str, path_b: str, grid: tuple = (3, 3),
     for r in range(rows):
         for c in range(cols):
             box = (c / cols, r / rows, (c + 1) / cols, (r + 1) / rows)
-            la = _luma(Counter(_window(img_a, box)).most_common(1)[0][0])
-            lb = _luma(Counter(_window(img_b, box)).most_common(1)[0][0])
+            la = _luma(_mode(_window(img_a, box)))
+            lb = _luma(_mode(_window(img_b, box)))
             zones.append({'box': tuple(round(v, 3) for v in box),
                           'a': la, 'b': lb, 'delta': la - lb,
                           'edge': abs(la - lb) >= tol})
@@ -565,8 +558,8 @@ def image_expose(path_a: str, path_b: str, pairs: list, colors: list = None) -> 
         raise ValueError('без окон-референсов переносить не на чём')
     refs = []
     for box in pairs:
-        a = Counter(_window(img_a, box)).most_common(1)[0][0]
-        b = Counter(_window(img_b, box)).most_common(1)[0][0]
+        a = _mode(_window(img_a, box))
+        b = _mode(_window(img_b, box))
         refs.append({'box': tuple(box), 'a': a, 'b': b,
                      'a_luma': _luma(a), 'b_luma': _luma(b)})
     lumas = [r['a_luma'] for r in refs]
@@ -666,7 +659,7 @@ def image_contract(path: str, tol: int = IMAGE_CONTRACT_TOL,
                 entry['status'] = 'missing'
             else:
                 entry['file'] = str(found)
-                mode = Counter(_window(_load(str(found)), near[3])).most_common(1)[0][0]
+                mode = _mode(_window(_load(str(found)), near[3]))
                 entry['measured'], entry['measured_luma'] = mode, _luma(mode)
                 entry['status'] = 'ok' if all(abs(a - b) <= tol
                                               for a, b in zip(rgb, mode)) else 'drifted'
@@ -747,10 +740,7 @@ def _seam_measure(img: Image.Image, pos: int, mid: int, axis: str, span: int,
     along, across = (w, h) if axis == 'x' else (h, w)
     lo, hi = max(0, mid - band // 2), min(across, mid + band // 2 + 1)
     start, stop = max(0, pos - span), min(along, pos + span)
-    if axis == 'x':
-        profile = [_median_luma(img.crop((i, lo, i + 1, hi))) for i in range(start, stop)]
-    else:
-        profile = [_median_luma(img.crop((lo, i, hi, i + 1))) for i in range(start, stop)]
+    profile = _band_profile(img, axis, lo, hi, start, stop)
     k = pos - start  # сколько точек профиля до границы
     steps = [abs(y - x) for x, y in zip(profile, profile[1:])]
     near = [s for i, s in enumerate(steps)
@@ -786,6 +776,37 @@ def _seam_scan(img: Image.Image, pos: int, axis: str, span: int, band: int,
     return best
 
 
+def _band_profile(img: Image.Image, axis: str, lo: int, hi: int,
+                  start: int, stop: int) -> list:
+    """
+    Профиль яркости вдоль оси: медиана поперёк полосы на каждой точке.
+
+    Полоса режется и считается **одним куском**, а не столбиком за столбиком:
+    `_seam_scan` перебирает до 96 положений полосы, и на каждом кроп-на-точку
+    стоил отдельного обращения к Pillow. Медиана берётся нижняя (элемент
+    `n//2` отсортированного) — та же, что у `_median_luma_profile`, иначе
+    вердикты разъехались бы на полосе чётной толщины.
+    """
+    if axis == 'x':
+        crop = img.crop((start, lo, stop, hi))
+        px = np.asarray(crop.convert('RGB'), dtype=np.uint8)   # (полоса, вдоль, 3)
+        lumas = np.round(0.299 * px[:, :, 0] + 0.587 * px[:, :, 1]
+                         + 0.114 * px[:, :, 2])
+        across_axis = 0
+    else:
+        crop = img.crop((lo, start, hi, stop))
+        px = np.asarray(crop.convert('RGB'), dtype=np.uint8)   # (вдоль, полоса, 3)
+        lumas = np.round(0.299 * px[:, :, 0] + 0.587 * px[:, :, 1]
+                         + 0.114 * px[:, :, 2])
+        across_axis = 1
+    if lumas.size == 0:
+        return []
+    ordered = np.sort(lumas, axis=across_axis)
+    middle = ordered.shape[across_axis] // 2
+    picked = (ordered[middle, :] if across_axis == 0 else ordered[:, middle])
+    return [int(v) for v in picked]
+
+
 def _load(path: str) -> Image.Image:
     """Картинка в RGB: режим P и альфа замерам не нужны, а в LUT лягут криво."""
     return Image.open(path).convert('RGB')
@@ -800,15 +821,19 @@ def _split_alpha(image: Image.Image) -> tuple:
     return image.convert('RGB'), None
 
 
-def _window(img: Image.Image, box: tuple = None) -> list:
+def _window(img: Image.Image, box: tuple = None):
     """
-    Пиксели окна (доли кадра) списком RGB-кортежей.
+    Пиксели окна (доли кадра) массивом `(N, 3)` uint8.
 
-    Вырожденное окно — отказ, а не пустой список. Пустой уезжает вглубь,
-    к `Counter(...).most_common(1)[0]`, и возвращается оттуда `IndexError:
-    list index out of range` — по нему не видно ни кадра, ни окна. Так
-    ломался `image_audit` на мелкой картинке: доли кромки (0.005–0.035)
-    после `int()` схлопывались в ноль пикселей.
+    Массив, а не список кортежей: замер идёт по всему окну сразу, и на кадре
+    телефона (1080x2400 — 2.6 млн пикселей) список кортежей стоит 0.67 c и
+    220 МБ объектов против 0.05 c и 60 МБ у массива. Соседние модули `image_`
+    считают так же — numpy в ядре зависимостей.
+
+    Вырожденное окно — отказ, а не пустой массив. Пустой уезжает вглубь, к
+    `_mode`, и возвращается оттуда `IndexError` — по нему не видно ни кадра,
+    ни окна. Так ломался `image_audit` на мелкой картинке: доли кромки
+    (0.005–0.035) после `int()` схлопывались в ноль пикселей.
     """
     if box:
         w, h = img.size
@@ -819,11 +844,52 @@ def _window(img: Image.Image, box: tuple = None) -> list:
                 f'окно {tuple(round(v, 3) for v in box)} на кадре {w}x{h} — '
                 f'это {crop[2] - crop[0]}x{crop[3] - crop[1]} px: мерить нечего')
         img = img.crop(crop)
-    # Pillow 14 объявил getdata устаревшим в пользу get_flattened_data,
-    # а в старых версиях нового имени нет — берём то, что есть.
-    if hasattr(img, 'get_flattened_data'):
-        return list(img.get_flattened_data())
-    return list(img.getdata())
+    return np.asarray(img.convert('RGB'), dtype=np.uint8).reshape(-1, 3)
+
+
+def _counts(px):
+    """
+    Краски окна по убыванию частоты: `[((r,g,b), сколько), …]`.
+
+    Тройка пакуется в одно 24-битное число — так `np.unique` считает частоты
+    за один проход вместо словаря на миллион ключей. Порядок при равенстве
+    частот — по первому появлению в кадре, как у `Counter.most_common`:
+    вердикты, снятые до перехода на массивы, обязаны сойтись байт в байт.
+    """
+    packed = (px[:, 0].astype(np.uint32) << 16 | px[:, 1].astype(np.uint32) << 8
+              | px[:, 2].astype(np.uint32))
+    values, first, counts = np.unique(packed, return_index=True,
+                                      return_counts=True)
+    order = np.lexsort((first, -counts))
+    return [((int(v) >> 16 & 255, int(v) >> 8 & 255, int(v) & 255), int(c))
+            for v, c in zip(values[order], counts[order])]
+
+
+def _mode(px) -> tuple:
+    """Самая частая краска окна — то, что здесь называют фоном."""
+    return _counts(px)[0][0]
+
+
+def _lumas(px):
+    """Яркости Rec.601 всех пикселей окна, округлённые поштучно — как `_luma`."""
+    return np.round(0.299 * px[:, 0] + 0.587 * px[:, 1] + 0.114 * px[:, 2])
+
+
+def _stats(px) -> dict:
+    """
+    Замер окна одной вещью: мода, её яркость, средняя и разброс.
+
+    Три места (`image_measure`, зоны и кромки `image_audit`) считали это
+    одинаковым куском кода — один паттерн вместо трёх копий: разъехавшись,
+    они дали бы три разных ответа на один вопрос.
+    """
+    mode = _mode(px)
+    lumas = np.sort(_lumas(px))
+    last = len(lumas) - 1
+    return {'mode': mode, 'luma': _luma(mode),
+            'mean_luma': int(np.round(lumas.mean())),
+            'spread': int(lumas[int(0.95 * last)] - lumas[int(0.05 * last)]),
+            'samples': int(len(lumas))}
 
 
 def _levels_lut(bg: int, target: int) -> tuple:
@@ -846,7 +912,7 @@ def _luma(rgb: tuple) -> int:
 
 def _median_luma(img: Image.Image) -> int:
     """Медианная яркость области: устойчива к одиночным пикселям текста."""
-    return _median_luma_profile([_luma(p) for p in _window(img)])
+    return _median_luma_profile(_lumas(_window(img)).tolist())
 
 
 def _median_luma_profile(lumas: list) -> int:
@@ -857,10 +923,11 @@ def _median_luma_profile(lumas: list) -> int:
     return lumas[len(lumas) // 2]
 
 
-def _spread(pixels: list) -> int:
+def _spread(pixels) -> int:
     """Разброс яркости окна: p95 − p5; у однородной области — единицы."""
-    lumas = sorted(_luma(p) for p in pixels)
-    return lumas[int(0.95 * (len(lumas) - 1))] - lumas[int(0.05 * (len(lumas) - 1))]
+    lumas = np.sort(_lumas(pixels))
+    last = len(lumas) - 1
+    return int(lumas[int(0.95 * last)] - lumas[int(0.05 * last)])
 
 
 _EDGE_NAMES = {'top': 'кромка сверху', 'bottom': 'кромка снизу',
@@ -1025,51 +1092,67 @@ if __name__ == '__main__':
                         help='expose: цвет r,g,b для переноса (повторяемо)')
     parser.add_argument('--crop', default='',
                         help='frac: PIL-box вырезаемого окна x0,y0,x1,y1 целого кадра, как `.crop((0, 91, 1080, 2277))` в конвейере')
+    parser.add_argument('--json', action='store_true',
+                        help='машинный вывод: числа замера уходят в следующий шаг, '
+                             'а не читаются глазами')
     ns = parser.parse_args()
     box = tuple(float(v) for v in ns.box.split(',')) if ns.box else None
+
+    # Человеческие строки и машинный ответ — одна и та же работа, разный вывод:
+    # `say` молчит под --json, результаты копятся в `result`. Иначе пришлось бы
+    # держать две ветки на команду и следить, чтобы они не разъехались.
+    result = []
+
+    def say(*parts, **kw):
+        if not ns.json:
+            print(*parts, **kw)
 
     try:
         if ns.command == 'measure':
             for f in ns.files:
                 m = image_measure(f, box=box, top=ns.top)
+                result.append({'file': f, **m})
                 line = (f'{f}: фон {m["mode"]} L={m["luma"]} (средняя {m["mean_luma"]}, '
                         f'разброс {m["spread"]}, {m["samples"]} px)')
                 if ns.top > 0:
                     line += '\n  ' + '; '.join(f'{c}×{n}' for c, n in m['top'])
-                print(line)
+                say(line)
         elif ns.command == 'audit':
             for f in ns.files:
                 a = image_audit(f)
-                print(f'{f}: ' + '; '.join(f'L={t[0]}×{len(t[1])}' for t in a['tones']))
+                result.append({'file': f, **a})
+                say(f'{f}: ' + '; '.join(f'L={t[0]}×{len(t[1])}' for t in a['tones']))
                 for i, z in enumerate(a['zones']):
-                    print(f'  зона {i + 1} {z["box"]}: L={z["luma"]:>3} '
-                          f'(средняя {z["mean_luma"]}, разброс {z["spread"]})')
+                    say(f'  зона {i + 1} {z["box"]}: L={z["luma"]:>3} '
+                        f'(средняя {z["mean_luma"]}, разброс {z["spread"]})')
                 for name, e in a['edges'].items():
-                    print(f'  {_EDGE_NAMES[name]}: L={e["luma"]:>3} (разброс {e["spread"]})')
+                    say(f'  {_EDGE_NAMES[name]}: L={e["luma"]:>3} (разброс {e["spread"]})')
                 for w in a['warnings']:
-                    print(f'  ВНИМАНИЕ: {w}')
+                    say(f'  ВНИМАНИЕ: {w}')
         elif ns.command == 'seam':
             if ns.pos is None:
                 raise SystemExit('нужен --pos: координата границы, по которой проверяем стык')
             for f in ns.files:
                 s = image_seam(f, ns.pos, at=ns.at, axis=ns.axis, span=ns.span,
                                band=ns.band, best=ns.best)
+                result.append({'file': f, **s})
                 verdict = (f'край виден: ступень {s["max_step"]}' if s['edge']
                            else 'стыка не видно')
                 if ns.best:
                     verdict += f' (согласно {s["agree"]}/{s["scanned"]} проб)'
-                print(f'{f}: {ns.axis}={ns.pos} at={s["at"]} — до {s["a"]}, после {s["b"]} '
-                      f'(Δ {s["delta"]}, max_step {s["max_step"]}) — {verdict}')
+                say(f'{f}: {ns.axis}={ns.pos} at={s["at"]} — до {s["a"]}, после {s["b"]} '
+                    f'(Δ {s["delta"]}, max_step {s["max_step"]}) — {verdict}')
         elif ns.command == 'diff':
             if len(ns.files) != 2:
                 raise SystemExit('нужно ровно два кадра: эталон и проверяемый')
             d = image_diff_zones(ns.files[0], ns.files[1])
-            print(f'{ns.files[0]} vs {ns.files[1]}:')
+            result.append(d)
+            say(f'{ns.files[0]} vs {ns.files[1]}:')
             for i, z in enumerate(d['zones']):
-                print(f'  зона {i + 1} {z["box"]}: L {z["a"]:>3} vs {z["b"]:>3} '
-                      f'(Δ {z["delta"]:>3}) {"≠" if z["edge"] else "="}')
+                say(f'  зона {i + 1} {z["box"]}: L {z["a"]:>3} vs {z["b"]:>3} '
+                    f'(Δ {z["delta"]:>3}) {"≠" if z["edge"] else "="}')
             for w in d['warnings']:
-                print(f'  ВНИМАНИЕ: {w}')
+                say(f'  ВНИМАНИЕ: {w}')
         elif ns.command == 'rect-seams':
             if not ns.rect:
                 raise SystemExit('нужен --rect: x,y,w,h (запись screen из adb_cdp element-rect)')
@@ -1078,38 +1161,42 @@ if __name__ == '__main__':
                 raise SystemExit('--rect: ждём x,y,w,h')
             for f in ns.files:
                 r = image_rect_seams(f, rect)
-                print(f'{f}: rect {r["rect"]} — ' + ('швов нет' if r['ok'] else 'ЕСТЬ ШОВ'))
+                result.append({'file': f, **r})
+                say(f'{f}: rect {r["rect"]} — ' + ('швов нет' if r['ok'] else 'ЕСТЬ ШОВ'))
                 for name, s in r['sides'].items():
                     if 'skip' in s:
-                        print(f'  {name}: {s["skip"]}')
+                        say(f'  {name}: {s["skip"]}')
                     else:
                         verdict = (f'край виден: ступень {s["max_step"]}' if s['edge']
                                    else 'стыка не видно')
-                        print(f'  {name}: at={s["at"]} — до {s["a"]}, после {s["b"]} '
-                              f'(max_step {s["max_step"]}, согласно {s["agree"]}/{s["scanned"]}) — {verdict}')
+                        say(f'  {name}: at={s["at"]} — до {s["a"]}, после {s["b"]} '
+                            f'(max_step {s["max_step"]}, согласно {s["agree"]}/{s["scanned"]}) — {verdict}')
         elif ns.command == 'literals':
             for f in ns.files:
-                for c in image_literals(f)['colors']:
-                    print(f'{f}: {c["color"]} L={c["luma"]:>3} ×{c["count"]}')
+                lit = image_literals(f)
+                result.append({'file': f, **lit})
+                for c in lit['colors']:
+                    say(f'{f}: {c["color"]} L={c["luma"]:>3} ×{c["count"]}')
         elif ns.command == 'stroke':
             rect = tuple(int(v) for v in ns.rect.split(',')) if ns.rect else None
             if rect is not None and len(rect) != 4:
                 raise SystemExit('--rect: ждём x,y,w,h')
             for f in ns.files:
                 s = image_stroke(f, rect=rect, pad=ns.pad, contrast=ns.contrast)
+                result.append({'file': f, **s})
                 head = 'рамка есть' if s['found'] else 'рамки нет'
-                print(f'{f}: rect {s["rect"]} — {head}'
-                      + (f', радиус {s["radius"]}' if s['radius'] is not None else ''))
+                say(f'{f}: rect {s["rect"]} — {head}'
+                    + (f', радиус {s["radius"]}' if s['radius'] is not None else ''))
                 for name, side in s['sides'].items():
                     if 'none' in side:
-                        print(f'  {name}: {side["none"]}')
+                        say(f'  {name}: {side["none"]}')
                     else:
-                        print(f'  {name}: pos={side["pos"]} (сдвиг {side["offset"]:+d}), '
-                              f'ширина {side["width"]} px, ядро {side["rgb"]} L={side["luma"]}')
+                        say(f'  {name}: pos={side["pos"]} (сдвиг {side["offset"]:+d}), '
+                            f'ширина {side["width"]} px, ядро {side["rgb"]} L={side["luma"]}')
                 if s['css']:
-                    print(f'  в CSS: border {s["css"]["border_vw"]}vw'
-                          + (f', radius {s["css"]["radius_vw"]}vw'
-                             if s['css']['radius_vw'] is not None else ''))
+                    say(f'  в CSS: border {s["css"]["border_vw"]}vw'
+                        + (f', radius {s["css"]["radius_vw"]}vw'
+                        if s['css']['radius_vw'] is not None else ''))
         elif ns.command == 'expose':
             if len(ns.files) != 2:
                 raise SystemExit('нужно ровно два кадра: источник и цель')
@@ -1118,18 +1205,20 @@ if __name__ == '__main__':
             pairs = [tuple(float(v) for v in p.split(',')) for p in ns.pair]
             colors = [tuple(int(v) for v in c.split(',')) for c in ns.color] or None
             r = image_expose(ns.files[0], ns.files[1], pairs, colors=colors)
-            print(f'{ns.files[0]} → {ns.files[1]}:')
+            result.append(r)
+            say(f'{ns.files[0]} → {ns.files[1]}:')
             for ref in r['pairs']:
-                print(f'  окно {tuple(round(v, 3) for v in ref["box"])}: '
-                      f'{ref["a"]} L={ref["a_luma"]} → {ref["b"]} L={ref["b_luma"]}')
-            print(f'  усиление {r["gains"]}, нелинейность {r["residual"]}')
+                say(f'  окно {tuple(round(v, 3) for v in ref["box"])}: '
+                    f'{ref["a"]} L={ref["a_luma"]} → {ref["b"]} L={ref["b_luma"]}')
+            say(f'  усиление {r["gains"]}, нелинейность {r["residual"]}')
             for m in r['mapped']:
-                print(f'  {m["from"]} → {m["to"]}')
+                say(f'  {m["from"]} → {m["to"]}')
         elif ns.command == 'contract':
             for f in ns.files:
                 c = image_contract(f)
-                print(f'{f}: ' + ', '.join(f'{k} {v}' for k, v in c['summary'].items())
-                      + (' — контракт цел' if c['ok'] else ' — НАРУШЕН'))
+                result.append({'file': f, **c})
+                say(f'{f}: ' + ', '.join(f'{k} {v}' for k, v in c['summary'].items())
+                    + (' — контракт цел' if c['ok'] else ' — НАРУШЕН'))
                 for e in c['colors']:
                     if e['status'] == 'ok':
                         continue
@@ -1137,20 +1226,21 @@ if __name__ == '__main__':
                     if e.get('measured'):
                         detail += f', измерено {e["measured"]} L={e["measured_luma"]}'
                     detail += ')' if e.get('file') else ''
-                    print(f'  строка {e["line"]}: {e["color"]} L={e["luma"]:>3} — '
-                          f'{e["status"]}{detail}')
+                    say(f'  строка {e["line"]}: {e["color"]} L={e["luma"]:>3} — '
+                        f'{e["status"]}{detail}')
         elif ns.command == 'frac':
             crop = tuple(int(v) for v in ns.crop.split(',')) if ns.crop else None
             rect = tuple(int(v) for v in ns.rect.split(',')) if ns.rect else None
             for f in ns.files:
                 r = image_frac(f, rect=rect, box=box, crop=crop)
-                print(f'{f}: кадр {r["frame"]} −{r["crop"]} → {r["cropped"]}')
+                result.append({'file': f, **r})
+                say(f'{f}: кадр {r["frame"]} −{r["crop"]} → {r["cropped"]}')
                 if 'frac' in r:
-                    print(f'  rect {r["px_cropped"]} → доли {r["frac"]} '
-                          f'→ vw {r["vw"]}')
+                    say(f'  rect {r["px_cropped"]} → доли {r["frac"]} '
+                        f'→ vw {r["vw"]}')
                 else:
-                    print(f'  box {box} → px {r["px"]} (в crop-кадре '
-                          f'{r["px_cropped"]}, vw {r["vw"]})')
+                    say(f'  box {box} → px {r["px"]} (в crop-кадре '
+                        f'{r["px_cropped"]}, vw {r["vw"]})')
         else:
             if not ns.target:
                 raise SystemExit('нужен --target: файл эталона или яркость числом')
@@ -1158,7 +1248,12 @@ if __name__ == '__main__':
             for f in ns.files:
                 out = str(Path(ns.out) / Path(f).name) if ns.out else f
                 r = image_match(f, target, out=out, backup=ns.backup, box=box)
-                print(f'{f}: {r["before"]} → {r["after"]} (цель {r["target"]}, '
-                      f'{"записано" if r["changed"] else "уже в допуске"}) → {r["file"]}')
+                result.append({'file': f, **r})
+                say(f'{f}: {r["before"]} → {r["after"]} (цель {r["target"]}, '
+                    f'{"записано" if r["changed"] else "уже в допуске"}) → {r["file"]}')
+        if ns.json:
+            import json
+            print(json.dumps(result if len(result) != 1 else result[0],
+                             ensure_ascii=False, default=str))
     except (OSError, ValueError) as err:
         raise SystemExit(f'ошибка: {err}')

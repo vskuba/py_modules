@@ -20,10 +20,20 @@
 """
 import ast
 import re
+import sys
+
 from pathlib import Path
 
+# Файл запускают и путём (`python3 py_modules/tool_/tool_typo.py`). Тогда первым в путях
+# лежит каталог файла, и соседний namespace (`file_`) не находится вовсе.
+if __package__ in (None, ''):
+    _here = str(Path(__file__).resolve().parent)
+    sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from file_.file_walk import file_walk
+
 TOOL_TYPO_ROOT = Path(__file__).resolve().parents[1]
-TOOL_TYPO_SKIP = ('.venv', '__pycache__', '.git', 'node_modules', '.idea')
 
 TOOL_TYPO_CYRILLIC = re.compile(r'[а-яёА-ЯЁ]')
 TOOL_TYPO_LATIN = re.compile(r'[a-zA-Z]')
@@ -91,9 +101,10 @@ def tool_typo_prose(root=None) -> str:
 def tool_typo_cyrillic(root=None) -> list[dict]:
     """Имена и ключи на кириллице — код, а не проза; правило `code_rules.md` §1.2.
 
-    Смотрит `*.py` синтаксическим деревом: имена функций, ключи литералов-
-    словарей и строковые ключи в скобках (`словарь['ключ']`). Что не дерево
-    (js, html, sql) деревом не видно — там остаются grep-шаблоны §1.2.
+    Смотрит `*.py` синтаксическим деревом: имена функций, классов, переменных
+    и параметров, ключи литералов-словарей и строковые ключи в скобках
+    (`словарь['ключ']`). Что не дерево (js, html, sql) деревом не видно — там
+    остаются grep-шаблоны §1.2.
 
     Args:
         root: корень репозитория; пусто — тот, где лежит этот файл.
@@ -104,12 +115,15 @@ def tool_typo_cyrillic(root=None) -> list[dict]:
 
     ⚠ Ловит и смешанные имена (`test_metadata_строкой`), а не только целиком
     кирилличные: их набираешь руками с той же раскладки, что и всё вокруг.
+
+    ⚠ **Односимвольный ключ — буква, а не имя**, и он пропускается: таблица
+    транслитерации (`i18n_`) законно ключуется буквами алфавита, и без этого
+    послабления проверка выдавала 97 находок на одном словаре — то есть не
+    выдавала ничего, потому что её переставали читать.
     """
     base = Path(root) if root else TOOL_TYPO_ROOT
     out = []
-    for path in sorted(base.rglob('*.py')):
-        if any(part in TOOL_TYPO_SKIP for part in path.parts):
-            continue
+    for path in file_walk(base, ('.py',)):
         try:
             tree = ast.parse(path.read_text(encoding='utf-8'))
         except (SyntaxError, UnicodeDecodeError, OSError):
@@ -119,6 +133,12 @@ def tool_typo_cyrillic(root=None) -> list[dict]:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 names = [(node.name, 'имя функции — по правилу только латиницей')]
+            elif isinstance(node, ast.ClassDef):
+                names = [(node.name, 'имя класса — по правилу только латиницей')]
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                names = [(node.id, 'имя переменной — по правилу только латиницей')]
+            elif isinstance(node, ast.arg):
+                names = [(node.arg, 'имя параметра — по правилу только латиницей')]
             elif isinstance(node, ast.Dict):
                 names = [(k.value, 'ключ словаря на кириллице')
                          for k in node.keys
@@ -129,14 +149,21 @@ def tool_typo_cyrillic(root=None) -> list[dict]:
             else:
                 continue
             for name, tip in names:
-                if TOOL_TYPO_CYRILLIC.search(name):
+                # Один символ — буква алфавита в таблице перевода, не имя (см. ⚠).
+                if len(name) > 1 and TOOL_TYPO_CYRILLIC.search(name):
                     out.append({'kind': 'cyrillic', 'word': name[:60], 'where': where,
                                 'line': getattr(node, 'lineno', 1), 'hint': tip})
-    return sorted(out, key=lambda r: (r['where'], r['line']))
+    return sorted(out, key=lambda r: (r['where'], r['line'], r['word']))
 
 
-def main() -> None:
-    """CLI: `python -m tool_.tool_typo [--kind mixed|doubled] [--prose] [--cyrillic]`."""
+def main() -> int:
+    """CLI: `python -m tool_.tool_typo [--kind mixed|doubled] [--prose] [--cyrillic]`.
+
+    Код возврата — число находок (0 — чисто, потолок 125): проверку вешают
+    хуком перед коммитом, а хук читает код, а не глазами вывод. Потолок нужен
+    потому, что код возврата живёт в байте — ровно 256 находок иначе выглядели
+    бы успехом.
+    """
     import argparse
 
     ap = argparse.ArgumentParser(
@@ -152,7 +179,7 @@ def main() -> None:
 
     if ns.prose:
         print(tool_typo_prose())
-        return
+        return 0
 
     if ns.cyrillic or ns.kind == 'cyrillic':
         rows = tool_typo_cyrillic()
@@ -160,13 +187,13 @@ def main() -> None:
               else 'кириллицы в именах и ключах нет')
         for row in rows:
             print(f"  {row['where']}:{row['line']}  «{row['word']}»  {row['hint']}")
-        return
+        return min(len(rows), 125)
 
     found = [f for f in tool_typo() if not ns.kind or f['kind'] == ns.kind]
     if not found:
         print('механических следов правки нет '
               '(орфографию это не проверяет — см. --prose)')
-        return
+        return 0
 
     titles = {'mixed': '🔤 БУКВЫ ИЗ РАЗНЫХ АЛФАВИТОВ ИЛИ СЛИПШИЕСЯ СЛОВА',
               'doubled': '👯 СЛОВО ПОВТОРЕНО ДВАЖДЫ'}
@@ -179,14 +206,14 @@ def main() -> None:
         for row in rows:
             print(f"  {row['where']}:{row['line']}  «{row['word']}»  {row['hint']}")
 
+    return min(len(found), 125)
+
 
 def _prose(base: Path) -> list[tuple]:
     """Проза репозитория: (файл, строка, текст) из докстрингов, комментариев и `*.md`."""
     out = []
 
-    for path in sorted(base.rglob('*.py')):
-        if any(part in TOOL_TYPO_SKIP for part in path.parts):
-            continue
+    for path in file_walk(base, ('.py',)):
         try:
             source = path.read_text(encoding='utf-8')
             tree = ast.parse(source)
@@ -211,9 +238,7 @@ def _prose(base: Path) -> list[tuple]:
             if mark >= 0 and line[:mark].count('"') % 2 == 0:
                 out.append((where, number, _clean(line[mark + 1:])))
 
-    for path in sorted(base.rglob('*.md')):
-        if any(part in TOOL_TYPO_SKIP for part in path.parts):
-            continue
+    for path in file_walk(base, ('.md',)):
         try:
             text = path.read_text(encoding='utf-8')
         except (UnicodeDecodeError, OSError):
@@ -257,4 +282,4 @@ def _doubled(prose: list[tuple]) -> list[dict]:
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
