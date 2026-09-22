@@ -30,14 +30,8 @@ class AiProviderOpenai(AiProvider):
             api_key=config_get(self.name.upper() + '_API_KEY'),
             http_client=self.http_client,
         )
-        model = OpenAIChatModel(model_name, provider=provider)
-        if not framework_model.thinking_disabled:
-            return model
-
-        # Пересобираем с настройками: чем именно глушить размышления, зависит от
-        # профиля модели, а он есть только у собранной.
-        return OpenAIChatModel(model_name, provider=provider,
-                               settings=self.thinking_settings(model))
+        return self.model_assemble(OpenAIChatModel, model_name, provider,
+                                   framework_model)
 
 
 class AiProviderClaude(AiProviderOpenai):

@@ -138,7 +138,11 @@ def mysql_seed_split(sql: str) -> list[str]:
 
 
 def _dir(seeds_dir: str) -> str:
-    """Каталог seed-файлов: переданный либо `data/seeds` от корня проекта."""
+    """Каталог seed-файлов: переданный либо `data/seeds` от корня проекта.
+
+    Копия такого же `_base` в `cronicle_/cronicle_log.py` осознанная —
+    причина там же (`code_rules.md`, §4.2).
+    """
     if seeds_dir:
         return os.path.abspath(seeds_dir)
 

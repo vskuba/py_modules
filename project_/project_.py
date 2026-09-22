@@ -30,6 +30,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Потолок на один вопрос к git. Секунды: `rev-parse` отвечает мгновенно, а
+# git в каталоге на сетевой шаре или с битым индексом висит — и вешает точку
+# входа, которая всего лишь спросила, где корень.
+PROJECT_GIT_TIMEOUT = 10.0
+
 
 def project_root() -> Path:
     """
@@ -59,7 +64,7 @@ def project_main_root() -> Path:
     root = project_root()
     # `--git-common-dir` в обычной копии отдаёт относительный `.git`, в выкладке —
     # абсолютный путь к `.git` основной. И то и другое сводится к «родитель `.git`».
-    common = _git_read(root, '--git-common-dir')
+    common = project_git(root, '--git-common-dir')
     if not common:
         return root
 
@@ -131,20 +136,37 @@ def project_env(extra: dict | None = None, strip: tuple = ()) -> dict:
     return env
 
 
+def project_git(cwd, *args: str) -> str:
+    """Спросить git одну строку в этом каталоге; не ответил — пустая строка.
+
+    Args:
+        cwd: каталог, из которого спрашиваем (корень репозитория или чекаут
+            подмодуля — git сам разберётся).
+        *args: аргументы после `git` (`'rev-parse', 'HEAD'`).
+
+    Returns:
+        stdout без хвостовых пробелов; пусто — git не установлен, каталог не
+        репозиторий или команда вернула ненулевой код.
+
+    ⚠ Отказ неотличим от пустого ответа — так задумано: вызывающему здесь
+    нужен факт («вот sha» / «sha нет»), а не разбор причины. Нужна причина —
+    зовите `subprocess` сами.
+
+    ⚠ Потолок 10 с: `git` в каталоге на сетевой шаре или с битым индексом
+    висит, а корень проекта спрашивают из каждой точки входа.
+    """
+    try:
+        done = subprocess.run(['git', *args], cwd=str(cwd), capture_output=True,
+                              text=True, timeout=PROJECT_GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return done.stdout.strip() if done.returncode == 0 else ''
+
+
 # ── детали реализации ──
 
 def _executable(path: Path) -> bool:
     return path.is_file() and os.access(path, os.X_OK)
-
-
-def _git_read(cwd: Path, *args: str) -> str:
-    """Спросить git одну строку; git не установлен или каталог не репозиторий — пусто."""
-    try:
-        done = subprocess.run(['git', *args], cwd=str(cwd), capture_output=True,
-                              text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return ''
-    return done.stdout.strip() if done.returncode == 0 else ''
 
 
 if __name__ == '__main__':

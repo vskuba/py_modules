@@ -114,7 +114,13 @@ def cronicle_log_report(stats: dict, sizes: dict) -> str:
 
 
 def _base(base_dir: str) -> str:
-    """Каталог Cronicle: переданный либо `data/cronicle` от корня проекта."""
+    """Каталог Cronicle: переданный либо `data/cronicle` от корня проекта.
+
+    Тот же приём, что у `_dir` в `mysql_/mysql_seed.py`, — и копия там
+    осознанная: обе четырёхстрочные, обе уже зовут `project_root`, а общий
+    хелпер ради них связал бы журнал Cronicle с наполнением базы
+    (`code_rules.md`, §4.2).
+    """
     if base_dir:
         return os.path.abspath(base_dir)
 
