@@ -10,7 +10,7 @@
 """
 
 
-def mysql_migration_seed(rows, table: str, *, column: str = 'слово') -> dict:
+def mysql_migration_seed(rows, table: str, *, column: str = 'word') -> dict:
     """Расставить строки наполнения в текст `INSERT IGNORE` для миграции.
 
     Args:
@@ -18,12 +18,14 @@ def mysql_migration_seed(rows, table: str, *, column: str = 'слово') -> dic
             список словарей (колонки — ключи первой строки, порядок ключей и
             есть порядок колонок); дубли схлопываются в первое вхождение.
         table: имя таблицы.
-        column: имя колонки для скалярных строк (со словарями не нужна).
+        column: имя колонки для скалярных строк (со словарями не нужна);
+            умолчание — `word`, латиницей: имя колонки уезжает в текст
+            миграции, а кириллица в схеме запрещена (`code_rules.md`, §1.2).
 
     Returns:
         {'sql': текст INSERT IGNORE с VALUES-строками по порядку (пусто, если
-        строк нет), 'было': int, 'стало': int, 'колонки': [имена]}:
-        'было' − 'стало' — сколько дублей схлопнулось, это и есть сверка
+        строк нет), 'before': int, 'after': int, 'columns': [имена]}:
+        `before` − `after` — сколько дублей схлопнулось, это и есть сверка
         счётчика.
     """
     items = list(rows or [])
@@ -62,6 +64,6 @@ if __name__ == '__main__':
         description='строки наполнения (JSON со stdin) → INSERT IGNORE для '
                     'миграции; дубли схлопываются, счётчик строк в ответе.')
     ap.add_argument('table', help='имя таблицы')
-    ap.add_argument('--column', default='слово', help='колонка для скаляров')
+    ap.add_argument('--column', default='word', help='колонка для скаляров')
     ns = ap.parse_args()
     print(mysql_migration_seed(json.load(sys.stdin), ns.table, column=ns.column)['sql'])

@@ -31,47 +31,52 @@ def web_watch(src, watch, steps=(), *, login=None, init=None, chrome='',
         src: URL живой страницы (оболочка `web_drive_page`: вход из `.env`,
             модуль страницы, `wait`).
         watch: списки CSS-селекторов, за которыми следят.
-        steps: шагов список {'шаг': подпись, 'js': код}: код исполняется телом
-            async-функции после предыдущего шага (видит `wait`, `q` — сам).
+        steps: список шагов `{'step': подпись, 'js': код}`: код исполняется
+            телом async-функции после предыдущего шага (видит `wait`, `q` — сам).
         login/init/chrome/size: как в `web_drive_page`.
 
     Returns:
-        {'до': {селектор: {видно, почему}}, 'шаги': [{'шаг', 'изменения':
-        [{селектор, атрибут, было, стало}], 'видно': {селектор: {видно,
-        почему}}}]}. `видно` — факт раскладки (display/visibility по предкам,
-        высота), `почему` — виновник, когда факта нет у атрибута: правило,
-        перебившее `hidden`, называется прямо там.
+        {'before': {селектор: {'visible', 'why'}}, 'steps': [{'step',
+        'changes': [{'selector', 'attribute', 'was', 'now'}], 'visible':
+        {селектор: {'visible', 'why'}}}]}. `visible` — факт раскладки
+        (display/visibility по предкам, высота), `why` — виновник, когда факта
+        нет у атрибута: правило, перебившее `hidden`, называется прямо там.
+
+    ⚠ Ключи ответа — латиницей (правило `code_rules.md`, §1.2), в том числе у
+    вложенного JS: до перевода они были русскими, и код, читавший `r['до']`,
+    обязан перейти на `r['before']`.
     """
-    блоки = []
-    for ш in steps:
-        блоки.append('log.length = 0; %s;\nшаги.push({шаг: %s, изменения: '
-                     'log.slice(), видно: свод()});'
-                     % (ш['js'], json.dumps(ш.get('step', ''), ensure_ascii=False)))
+    blocks = []
+    for step in steps:
+        blocks.append('log.length = 0; %s;\nsteps.push({step: %s, changes: '
+                      'log.slice(), visible: sum()});'
+                      % (step['js'], json.dumps(step.get('step', ''),
+                                                ensure_ascii=False)))
     body = """
 const q = s => document.querySelector(s);
-const факт = s => { const n = q(s); if (!n) return {видно: false, почему: 'нет узла'};
+const fact = s => { const n = q(s); if (!n) return {visible: false, why: 'нет узла'};
     for (let e = n; e && e !== document.documentElement; e = e.parentElement) {
         const cs = getComputedStyle(e);
         if (cs.display === 'none' || cs.visibility === 'hidden')
-            return {видно: false,
-                    почему: (e.id ? '#' + e.id : e.tagName.toLowerCase()) + ': ' + cs.display}; }
+            return {visible: false,
+                    why: (e.id ? '#' + e.id : e.tagName.toLowerCase()) + ': ' + cs.display}; }
     const r = n.getBoundingClientRect();
-    return {видно: r.height > 0, почему: r.height > 0 && n.hasAttribute('hidden')
+    return {visible: r.height > 0, why: r.height > 0 && n.hasAttribute('hidden')
         ? 'атрибут hidden есть, но правило display:' + getComputedStyle(n).display
           + ' перебивает его' : ''}; };
-const св = %(watch)s;
+const sel = %(watch)s;
 const log = [];
-св.forEach(s => { const n = q(s); if (!n) return;
-    new MutationObserver(rs => rs.forEach(r => log.push({селектор: s,
-        атрибут: r.attributeName, было: r.oldValue, стало: n.getAttribute(r.attributeName)})))
+sel.forEach(s => { const n = q(s); if (!n) return;
+    new MutationObserver(rs => rs.forEach(r => log.push({selector: s,
+        attribute: r.attributeName, was: r.oldValue, now: n.getAttribute(r.attributeName)})))
         .observe(n, {attributes: true, attributeOldValue: true}); });
-const свод = () => Object.fromEntries(св.map(s => [s, факт(s)]));
-const до = свод();
-const шаги = [];
-%(шаги)s
-return {до, шаги};
+const sum = () => Object.fromEntries(sel.map(s => [s, fact(s)]));
+const before = sum();
+const steps = [];
+%(steps)s
+return {before, steps};
 """ % {'watch': json.dumps(list(watch), ensure_ascii=False),
-       'steps': '\n'.join(блоки)}
+       'steps': '\n'.join(blocks)}
     return web_drive_page(src, body, login=login, init=init, chrome=chrome,
                           size=size)['value']
 
@@ -90,8 +95,9 @@ if __name__ == '__main__':
     ns = ap.parse_args()
     and_init = {}
     if ns.init:
-        ч = ns.init.split('|', 2)
-        and_init = {'file': ч[0], 'name': ч[1]} if len(ч) < 3 else {'file': ч[0], 'name': ч[1], 'argument': ч[2]}
+        parts = ns.init.split('|', 2)
+        and_init = ({'file': parts[0], 'name': parts[1]} if len(parts) < 3 else
+                    {'file': parts[0], 'name': parts[1], 'argument': parts[2]})
     out = web_watch(ns.url, ns.watch, [{'step': j, 'js': j} for j in ns.step],
                     init=and_init or None)
     print(json.dumps(out, ensure_ascii=False, indent=1))

@@ -17,136 +17,139 @@
 читаются одинаково.
 """
 import json
-import urllib.parse
 
 
-def _node(нода: dict) -> str:
-    """Класс узла в обеих разметках: проект (`_cls`) или API (`class_type`)."""
-    return нода.get('_cls') or нода.get('class_type') or ''
-
-
-def _graph(граф: dict | str) -> dict:
-    if isinstance(граф, str):
-        with open(граф, encoding='utf-8') as f:
-            return json.load(f)
-    return граф
-
-
-def comfy_graph_check(граф: dict | str, base: str = '') -> dict:
+def comfy_graph_check(graph: dict | str, base: str = '') -> dict:
     """Возьмёт ли ферма граф как есть; словами о каждом узле, что не так.
 
     Args:
-        граф: dict (разметка проекта `_cls`/`inputs` или API-`class_type`) или
+        graph: dict (разметка проекта `_cls`/`inputs` или API-`class_type`) или
             путь к json.
         base: адрес ComfyUI; пусто — `comfy_node`-ный дефолт.
 
     Returns:
-        {'годен': bool, 'узлы': [{'узел', 'почему'}]} — проверки структурные:
+        {'fit': bool, 'nodes': [{'node', 'why'}]} — проверки структурные:
         класс объявлен, required-вход подан, линия из узла даёт ждёмый тип,
         строковое имя файла видно в enumerate входа. Значения с маркером `__…__`
         (их подставит исполнитель) не сверяются.
     """
     from comfy_.comfy_node import comfy_node_info
-    граф = _graph(граф)
-    узлы = {к: в for к, в in граф.items() if isinstance(в, dict)}
-    проблемы = []
-    for к, нода in узлы.items():
-        cls = _node(нода)
+    graph = _graph(graph)
+    nodes = {key: value for key, value in graph.items() if isinstance(value, dict)}
+    problems = []
+    for key, node in nodes.items():
+        cls = _node_class(node)
         if not cls:
-            проблемы.append({'node': к, 'why': 'узел без класса'})
+            problems.append({'node': key, 'why': 'узел без класса'})
             continue
         try:
             info = comfy_node_info(cls, base)
         except ValueError as e:
-            проблемы.append({'node': к, 'why': str(e)})
+            problems.append({'node': key, 'why': str(e)})
             continue
-        контракт = dict(info['required'])
-        контракт.update(info['optional'])
-        вход_узла = нода.get('inputs', {})
+        contract = dict(info['required'])
+        contract.update(info['optional'])
+        given = node.get('inputs', {})
         # ⚠ Отсутствие спрашивается только с ОБЯЗАТЕЛЬНЫХ входов. Необязательный
         # ферма подставляет сама, и требовать его значит кричать «не возьмёт»
         # там, где возьмёт: рабочие графы раздела не подают ни `device` у
         # DualCLIPLoader, ни `attn_mask` у ApplyPulidFlux — и прекрасно идут.
         # Инструмент, который ошибается на заведомо годном, перестают читать.
-        # Тип по-прежнему сверяется у всех поданных — `контракт` ниже полный.
-        for имя in info['required']:
-            if имя not in вход_узла:
-                проблемы.append({'node': f'{к} ({cls})', 'why':
-                                f'не подан обязательный вход «{имя}»: нода ждёт '
-                                f'{контракт[имя]["type"]}'})
-        for имя, значение in вход_узла.items():
-            if имя not in контракт:
-                проблемы.append({'node': f'{к} ({cls})',
-                                 'why': f'у входа «{имя}» такой ноды нет'})
+        # Тип по-прежнему сверяется у всех поданных — `contract` ниже полный.
+        for name in info['required']:
+            if name not in given:
+                problems.append({'node': f'{key} ({cls})', 'why':
+                                f'не подан обязательный вход «{name}»: нода ждёт '
+                                f'{contract[name]["type"]}'})
+        for name, value in given.items():
+            if name not in contract:
+                problems.append({'node': f'{key} ({cls})',
+                                 'why': f'у входа «{name}» такой ноды нет'})
                 continue
-            ждём = ([контракт[имя]['type']]
-                    if контракт[имя]['type'] != 'COMBO'
-                    else контракт[имя].get('values', []))
-            if isinstance(значение, list) and значение:
-                исток, idx = str(значение[0]), int(значение[1])
-                if исток not in узлы:
-                    проблемы.append({'node': f'{к}.{имя}', 'why':
-                                    f'линия с узла «{исток}», а такого узла нет'})
+            expected = ([contract[name]['type']]
+                        if contract[name]['type'] != 'COMBO'
+                        else contract[name].get('values', []))
+            if isinstance(value, list) and value:
+                src, idx = str(value[0]), int(value[1])
+                if src not in nodes:
+                    problems.append({'node': f'{key}.{name}', 'why':
+                                    f'линия с узла «{src}», а такого узла нет'})
                     continue
-                выходы = _outputs(узлы[исток], base) if исток in узлы else []
-                if not выходы or idx >= len(выходы):
-                    проблемы.append({'node': f'{к}.{имя}', 'why':
-                                    f'у «{исток}» нет выхода {idx}'})
+                outs = _outputs(nodes[src], base) if src in nodes else []
+                if not outs or idx >= len(outs):
+                    problems.append({'node': f'{key}.{name}', 'why':
+                                    f'у «{src}» нет выхода {idx}'})
                     continue
-                дано = выходы[idx] if выходы[idx] else 'COMBO'
-                if ждём and дано != 'COMBO' and дано not in ждём:
-                    проблемы.append({'node': f'{к}.{имя}', 'why':
-                                    f'вход ждёт {"/".join(map(str, ждём))}, '
-                                    f'линия с «{исток}» даёт {дано}'})
-            elif isinstance(значение, str) and '__' not in значение:
-                enum = контракт[имя].get('values') or []
-                if enum and значение not in enum:
-                    проблемы.append({'node': f'{к}.{имя}', 'why':
-                                    f'файл «{значение}» ферма не видит; видит '
+                got = outs[idx] if outs[idx] else 'COMBO'
+                if expected and got != 'COMBO' and got not in expected:
+                    problems.append({'node': f'{key}.{name}', 'why':
+                                    f'вход ждёт {"/".join(map(str, expected))}, '
+                                    f'линия с «{src}» даёт {got}'})
+            elif isinstance(value, str) and '__' not in value:
+                enum = contract[name].get('values') or []
+                if enum and value not in enum:
+                    problems.append({'node': f'{key}.{name}', 'why':
+                                    f'файл «{value}» ферма не видит; видит '
                                     f'{enum[:5]}{"…" if len(enum) > 5 else ""}'})
-    return {'fit': not проблемы, 'nodes': проблемы}
+    return {'fit': not problems, 'nodes': problems}
 
 
-def comfy_graph_stale(шаблон: dict | str, копия: dict | str) -> dict:
+def comfy_graph_stale(template: dict | str, copy: dict | str) -> dict:
     """Свежая ли копия графа у персоны: чем именно разнится с шаблоном.
 
     Args:
-        шаблон, копия: dict или путь к json.
+        template, copy: dict или путь к json.
 
     Returns:
-        {'такой_же': bool, 'отличия': [{'узел', 'поле', 'в шаблоне',
-        'в копии'}]} — узлы, заведённые лишь в одной из половин, тоже отличия
-        ('в ...' пустое там, где узла нет).
+        {'same': bool, 'diffs': [{'node', 'field', 'in_template', 'in_copy'}]} —
+        узлы, заведённые лишь в одной из половин, тоже отличия (`in_*` пустое
+        там, где узла нет).
     """
-    шаблон, копия = _graph(шаблон), _graph(копия)
-    отличия = []
-    for к in sorted(set(шаблон) | set(копия)):
-        if not (isinstance(шаблон.get(к), dict) or isinstance(копия.get(к), dict)):
+    template, copy = _graph(template), _graph(copy)
+    diffs = []
+    for key in sorted(set(template) | set(copy)):
+        if not (isinstance(template.get(key), dict) or isinstance(copy.get(key), dict)):
             continue
-        if к not in шаблон or к not in копия:
-            отличия.append({'node': к, 'field': 'узел целиком',
-                            'in_template': 'есть' if к in шаблон else '',
-                            'in_copy': 'есть' if к in копия else ''})
+        if key not in template or key not in copy:
+            diffs.append({'node': key, 'field': 'узел целиком',
+                          'in_template': 'есть' if key in template else '',
+                          'in_copy': 'есть' if key in copy else ''})
             continue
-        а, б = шаблон[к], копия[к]
-        if _node(а) != _node(б):
-            отличия.append({'node': к, 'field': 'класс',
-                            'in_template': _node(а), 'in_copy': _node(б)})
-        поля = set(а.get('inputs', {})) | set(б.get('inputs', {}))
-        for поле in sorted(поля):
-            в_шаблоне = а.get('inputs', {}).get(поле, '')
-            в_копии = б.get('inputs', {}).get(поле, '')
-            if в_шаблоне != в_копии:
-                отличия.append({'node': к, 'field': поле,
-                                'in_template': в_шаблоне, 'in_copy': в_копии})
-    return {'same': not отличия, 'diffs': отличия}
+        node_t, node_c = template[key], copy[key]
+        if _node_class(node_t) != _node_class(node_c):
+            diffs.append({'node': key, 'field': 'класс',
+                          'in_template': _node_class(node_t),
+                          'in_copy': _node_class(node_c)})
+        fields = set(node_t.get('inputs', {})) | set(node_c.get('inputs', {}))
+        for field in sorted(fields):
+            val_t = node_t.get('inputs', {}).get(field, '')
+            val_c = node_c.get('inputs', {}).get(field, '')
+            if val_t != val_c:
+                diffs.append({'node': key, 'field': field,
+                              'in_template': val_t, 'in_copy': val_c})
+    return {'same': not diffs, 'diffs': diffs}
 
 
-def _outputs(нода: dict, base: str) -> list:
+# ── детали реализации ──
+
+def _node_class(node: dict) -> str:
+    """Класс узла в обеих разметках: проект (`_cls`) или API (`class_type`)."""
+    return node.get('_cls') or node.get('class_type') or ''
+
+
+def _graph(graph: dict | str) -> dict:
+    """Граф как есть либо прочитанный из json по пути."""
+    if isinstance(graph, str):
+        with open(graph, encoding='utf-8') as f:
+            return json.load(f)
+    return graph
+
+
+def _outputs(node: dict, base: str) -> list:
     """Типы выходов узла с той же фермы (для сверки линии)."""
     from comfy_.comfy_node import comfy_node_info
     try:
-        return comfy_node_info(_node(нода), base)['outputs']
+        return comfy_node_info(_node_class(node), base)['outputs']
     except ValueError:
         return []
 
@@ -155,15 +158,15 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(
         description='график перед очередью: возьмёт ли ферма граф как есть '
-                    '(«проверить») и свежая ли копия у персоны («сверить»).')
-    ap.add_argument('режим', choices=['проверить', 'сверить'])
-    ap.add_argument('граф', help='путь к json графа (проверить) или копии')
-    ap.add_argument('--шаблон', default='', help='путь к шаблону (сверить)')
+                    '(check) и свежая ли копия у персоны (compare).')
+    ap.add_argument('mode', choices=['check', 'compare'])
+    ap.add_argument('graph', help='путь к json графа (check) или копии')
+    ap.add_argument('--template', default='', help='путь к шаблону (compare)')
     ap.add_argument('--base', default='', help='адрес ComfyUI')
     ns = ap.parse_args()
-    if ns.режим == 'проверить':
-        print(json.dumps(comfy_graph_check(ns.граф, ns.base),
+    if ns.mode == 'check':
+        print(json.dumps(comfy_graph_check(ns.graph, ns.base),
                          ensure_ascii=False, indent=1))
     else:
-        print(json.dumps(comfy_graph_stale(ns.шаблон, ns.граф),
-                        ensure_ascii=False, indent=1))
+        print(json.dumps(comfy_graph_stale(ns.template, ns.graph),
+                         ensure_ascii=False, indent=1))

@@ -29,9 +29,9 @@ def comfy_model_present(models_dir: str, pattern: str, *,
             цельный файл; создаётся, если его нет. Пусто — ничего не создаётся.
 
     Returns:
-        {'найдено': [{'файл', 'байт', 'цел', 'почему', 'куда'}], 'всего': int,
-        'алиас': {'имя', 'на', 'статус'} }: 'куда' — на что смотрит симлинк
-        (пусто у обычного файла), 'статус' — 'был', 'создан' или 'нет цельного
+        {'found': [{'file', 'bytes', 'intact', 'why', 'dest'}], 'total': int,
+        'alias': {'name', 'target', 'status'}}: `dest` — на что смотрит симлинк
+        (пусто у обычного файла), `status` — 'был', 'создан' или 'нет цельного
         файла'. Целость сверяет `file_check`: пустышка, огрызок, голова не по
         расширению.
     """
@@ -43,24 +43,25 @@ def comfy_model_present(models_dir: str, pattern: str, *,
                       'intact': chk['intact'], 'why': chk['why'],
                       'dest': (os.readlink(path)
                                if os.path.islink(path) else '')})
-    алиас = {}
+    alias_info = {}
     if alias:
         path = os.path.join(models_dir, alias)
         whole = next((f for f in found if f['intact']), None)
         if os.path.islink(path):
-            алиас = {'name': alias, 'target': os.readlink(path), 'status': 'был'}
+            alias_info = {'name': alias, 'target': os.readlink(path), 'status': 'был'}
         elif whole:
             tmp = path + '.tmp'
             try:
                 os.symlink(whole['file'], tmp)
                 os.replace(tmp, path)
-                алиас = {'name': alias, 'target': whole['file'], 'status': 'создан'}
+                alias_info = {'name': alias, 'target': whole['file'], 'status': 'создан'}
             except OSError as e:
-                алиас = {'name': alias, 'target': whole['file'],
-                         'status': f'не создался: {e}'}
+                alias_info = {'name': alias, 'target': whole['file'],
+                              'status': f'не создался: {e}'}
         else:
-            алиас = {'name': alias, 'target': '', 'status': 'нет цельного файла'}
-    return {'found': found, 'total': len(found), 'alias': алиас}
+            alias_info = {'name': alias, 'target': '',
+                          'status': 'нет цельного файла'}
+    return {'found': found, 'total': len(found), 'alias': alias_info}
 
 
 def comfy_model_get(folder: str, url: str, *, name: str = '', size: int = 0,
@@ -80,7 +81,7 @@ def comfy_model_get(folder: str, url: str, *, name: str = '', size: int = 0,
         sha256: ожидаемый хеш (пусто — не сверять).
 
     Returns:
-        {'цел': bool, 'файл': путь, 'байт': int, 'почему': str} — при провале
+        {'intact': bool, 'file': путь, 'bytes': int, 'why': str} — при провале
         файла на месте нет.
     """
     from file_.file_check import file_check

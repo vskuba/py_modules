@@ -26,10 +26,10 @@ def comfy_node_info(name: str, base: str = '') -> dict:
         base: адрес ComfyUI; пусто — `COMFY_NODE_BASE`.
 
     Returns:
-        {'узел': str, 'обязательные': {имя: вход}, 'необязательные': {имя: вход},
-        'выходы': [типы]}, где вход — {'тип': str|[], 'значения': [] (если
+        {'node': str, 'required': {имя: вход}, 'optional': {имя: вход},
+        'outputs': [типы]}, где вход — {'type': str|[], 'values': [] (если
         enumerate-файл; иначе ''), 'default': что есть}. Для enum-входов
-        'значения' — тот самый список: видно, что файл виден загрузчику без
+        'values' — тот самый список: видно, что файл виден загрузчику без
         прогона. `ValueError` словами — если такого узла на ферме нет: проверять
         граф чужой фермой молча означало бы соврать.
     """
@@ -37,35 +37,41 @@ def comfy_node_info(name: str, base: str = '') -> dict:
     url = f'{base}/object_info/{urllib.request.quote(name)}'
     with urllib.request.urlopen(url, timeout=15) as r:
         body = json.load(r)
-    нода = body.get(name)
-    if нода is None:
+    node = body.get(name)
+    if node is None:
         raise ValueError(f'узел «{name}» на ферме {base} не объявлен; '
                          'спроси имя из /object_info целиком')
-    входы = {'required': {}, 'optional': {}}
-    for метка in ('required', 'optional'):
-        for имя, v in (нода.get('input', {}).get(метка, {}) or {}).items():
-            тип = v[0] if isinstance(v, list) and v else v
+    inputs = {'required': {}, 'optional': {}}
+    for label in ('required', 'optional'):
+        for field, v in (node.get('input', {}).get(label, {}) or {}).items():
+            kind = v[0] if isinstance(v, list) and v else v
             extra = v[1] if isinstance(v, list) and len(v) > 1 and v[1] else {}
-            entry = ({'type': тип, 'values': []} if isinstance(тип, str)
-                     else {'type': 'COMBO', 'values': тип})
+            entry = ({'type': kind, 'values': []} if isinstance(kind, str)
+                     else {'type': 'COMBO', 'values': kind})
             if 'default' in extra:
                 entry['default'] = extra['default']
-            входы[метка][имя] = entry
-    return {'node': name, 'outputs': нода.get('output', []), **входы}
+            inputs[label][field] = entry
+    return {'node': name, 'outputs': node.get('output', []), **inputs}
 
 
-def comfy_node_sees(name: str, файл: str, base: str = '') -> dict:
+def comfy_node_sees(name: str, file: str, base: str = '') -> dict:
     """Видит ли загрузчик этот файл (имя в enumerate его входов) — без прогона.
 
-    Возвращает {'виден': bool, 'вход': имя, 'значения': сколько} словами о том,
-    где именно имя видно или почему нет.
+    Args:
+        name: имя класса ноды-загрузчика.
+        file: имя файла, как его пишут во входе графа.
+        base: адрес ComfyUI; пусто — `COMFY_NODE_BASE`.
+
+    Returns:
+        {'visible': bool, 'input': имя входа, 'values': длина enumerate} —
+        видно, где именно имя нашлось; не нашлось — `input` пуст.
     """
     info = comfy_node_info(name, base)
-    for метка in ('required', 'optional'):
-        for имя, вход in info[метка].items():
-            if файл in вход.get('values', []):
-                return {'visible': True, 'input': имя,
-                        'values': len(вход['values'])}
+    for label in ('required', 'optional'):
+        for field, entry in info[label].items():
+            if file in entry.get('values', []):
+                return {'visible': True, 'input': field,
+                        'values': len(entry['values'])}
     return {'visible': False, 'input': '', 'values': 0}
 
 
@@ -73,13 +79,13 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(
         description='контракт ноды с фермы: входы с типами и файлами, выходы.')
-    ap.add_argument('узел', help='класс ноды (`SUPIRApply`, …)')
+    ap.add_argument('node', help='класс ноды (`SUPIRApply`, …)')
     ap.add_argument('--base', default='', help='адрес ComfyUI (пусто — локальная)')
-    ap.add_argument('--виден', default='', help='файл: видит ли его загрузчик')
+    ap.add_argument('--sees', default='', help='файл: видит ли его загрузчик')
     ns = ap.parse_args()
-    if ns.виден:
-        print(json.dumps(comfy_node_sees(ns.узел, ns.виден, ns.base),
+    if ns.sees:
+        print(json.dumps(comfy_node_sees(ns.node, ns.sees, ns.base),
                          ensure_ascii=False))
     else:
-        print(json.dumps(comfy_node_info(ns.узел, ns.base),
+        print(json.dumps(comfy_node_info(ns.node, ns.base),
                          ensure_ascii=False, indent=1))
