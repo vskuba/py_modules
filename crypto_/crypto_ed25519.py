@@ -53,3 +53,74 @@ def _crypto_ed25519_load(priv):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     return priv if isinstance(priv, Ed25519PrivateKey) else Ed25519PrivateKey.from_private_bytes(priv)
+
+
+if __name__ == '__main__':
+    import argparse
+    import base64
+    import hashlib
+
+    ap = argparse.ArgumentParser(
+        description='Ed25519 руками: пара ключей, подпись челленджа, сверка. '
+                    'Кодирование выбирается флагом — у платформ оно разное.',
+        epilog="pair --seed-text моя-фраза --encoding base58 | "
+               "sign КЛЮЧ 'exact challenge' | verify PUB 'challenge' SIG")
+    ap.add_argument('command', choices=['pair', 'sign', 'verify'])
+    ap.add_argument('args', nargs='*', help='ключ, сообщение, подпись — по команде')
+    ap.add_argument('--seed-text', default='',
+                    help='фраза вместо случайного ключа: seed = sha256(фраза), '
+                         'ровно 32 байта (голую фразу брать нельзя — см. ⚠ у pair)')
+    ap.add_argument('--encoding', default='hex', choices=['hex', 'base64url', 'base58'],
+                    help='как печатать и как читать ключи/подпись')
+    ns = ap.parse_args()
+
+    def _enc(raw: bytes) -> str:
+        if ns.encoding == 'hex':
+            return raw.hex()
+        if ns.encoding == 'base64url':
+            return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+        # ⚠ Ведущий нулевой байт в base58 — это символ '1' в префиксе, и
+        # только он: подстраховка «пусто -> '1'» удваивала бы его на ключе,
+        # начинающемся с нуля (1 ключ из 256), давая чужой адрес Solana.
+        alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+        number = int.from_bytes(raw, 'big')
+        out = ''
+        while number:
+            number, rest = divmod(number, 58)
+            out = alphabet[rest] + out
+        return '1' * (len(raw) - len(raw.lstrip(b'\0'))) + out
+
+    def _dec(text: str) -> bytes:
+        if ns.encoding == 'hex':
+            return bytes.fromhex(text.removeprefix('0x'))
+        if ns.encoding == 'base64url':
+            return base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
+        alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+        number = 0
+        for ch in text:
+            number = number * 58 + alphabet.index(ch)
+        body = number.to_bytes((number.bit_length() + 7) // 8, 'big')
+        return b'\0' * (len(text) - len(text.lstrip('1'))) + body
+
+    try:
+        if ns.command == 'pair':
+            seed = hashlib.sha256(ns.seed_text.encode()).digest() if ns.seed_text else None
+            priv, pub = crypto_ed25519_pair(seed)
+            print(f'priv {_enc(priv)}\npub  {_enc(pub)}')
+        elif ns.command == 'sign':
+            # Самопроверка на каждом вызове — как у `evm_keys sign`: подпись,
+            # которую не принял собственный публичный ключ, наружу не уходит.
+            priv = _dec(ns.args[0])
+            _, pub = crypto_ed25519_pair(priv)
+            signature = crypto_ed25519_sign(priv, ns.args[1])
+            if not crypto_ed25519_verify(pub, ns.args[1], signature):
+                raise SystemExit('ошибка: подпись не сверилась своим же ключом')
+            print(_enc(signature))
+        else:
+            ok = crypto_ed25519_verify(_dec(ns.args[0]), ns.args[1], _dec(ns.args[2]))
+            print('подпись верна' if ok else 'ПОДПИСЬ НЕ СХОДИТСЯ')
+            raise SystemExit(0 if ok else 1)
+    except IndexError:
+        raise SystemExit(f'ошибка: мало аргументов для «{ns.command}»')
+    except ValueError as err:
+        raise SystemExit(f'ошибка: не разобрано как {ns.encoding}: {err}')

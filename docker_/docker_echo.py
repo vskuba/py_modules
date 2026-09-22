@@ -24,7 +24,7 @@ def docker_echo(path, must, *, service, app_dir='/app') -> dict:
         app_dir: корень кода в контейнере (`/app`).
 
     Returns:
-        {'файл': path, 'сервис': service, 'совпадений': {признак: число}};
+        {'file': path, 'service': service, 'matches': {признак: число}};
         у файла, которого в контейнере нет, число — null.
     """
     inside = f"{app_dir.rstrip('/')}/{path.lstrip('/')}"
@@ -48,5 +48,7 @@ if __name__ == '__main__':
     ap.add_argument('--service', required=True,
                     help='имя сервиса, который исполняет этот код')
     ns = ap.parse_args()
-    print(json.dumps(docker_echo(ns.path, ns.must, service=ns.service),
-                     ensure_ascii=False))
+    out = docker_echo(ns.path, ns.must, service=ns.service)
+    print(json.dumps(out, ensure_ascii=False))
+    # Код возврата — сколько признаков контейнер НЕ увидел (null тоже не увидел).
+    raise SystemExit(min(sum(1 for v in out['matches'].values() if not v), 125))

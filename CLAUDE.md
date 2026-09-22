@@ -55,6 +55,7 @@ namespace-папок, которые проекты импортируют на�
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) и про страницу панели без бойлерплейта (`web_drive_page`: вход из `.env`, модуль с любыми кавычками, `wait` с базой) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `web_/web_gallery.py` | `docs/web_gallery.md` — полноразмерные фото страницы-галереи: ленивая разметка, оригиналы без суффиксов |
+| `insta_/insta_.py` | `docs/insta.md` — профиль Instagram: карточка и счётчики без login, осмотр перед загрузкой; ⚠ списки подписок анониму за стеной |
 | `web_/web_grab.py` | `docs/web_grab.md` — пачка ссылок в честные файлы: тип по голове, UA, JSON-API в ссылки; ⚠ страница вместо файла — отказ, не `.jpg` с `<html>` |
 | `js_/js_check.py` | `docs/js_check.md` — цел ли JS как браузерный ESM-модуль: парсинг node, адрес поломки, граф импортов; ⚠ `node --check` по `.js` молчит там, где браузер умер бы |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
@@ -93,6 +94,7 @@ namespace-папок, которые проекты импортируют на�
 | `uvicorn_/uvicorn_mirror.py` | `docs/uvicorn_mirror.md` — копия страницы панели как полноценный исток: тело по своему пути, прочее — прокси |
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
 | `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
+| `file_/file_walk.py` | `docs/file_walk.md` — обход дерева без `.venv`/`.git`/`node_modules`: общий низ описи, вычитки и поиска по слоям; ⚠ фильтр после обхода не экономит ничего |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
@@ -122,6 +124,10 @@ namespace-папок, которые проекты импортируют на�
   обязателен. Подробности — `docs/code_rules.md`, §7; новый инструмент вдобавок приносит
   страницу в `docs/` — `docs/docs_rules.md`, §7.
 - Ориентир по размеру файла — ~150–200 строк; больше — сигнал делить по ответственности.
+- **Разбиение — по GRASP + DDD:** границы по предмету, обязанность там, где данные.
+  Третье похожее место — уже паттерн с точкой различия, а не третья функция; порядок
+  шагов и чужой формат живут внутри модуля, наружу торчит действие. Подробности —
+  `docs/code_rules.md`, §4.1–4.4.
 
 **Исторические исключения не «чинят»** (переименование ломает соседей): `logger_info`,
 `translate_text`, `add_text_to_image`, `auth_*` в `auth_/auth_primitive.py`.
@@ -201,10 +207,12 @@ CLI есть у модулей, которыми пользуются «рука
 | Модуль | Команды |
 |--------|---------|
 | `tool_.tool_find` | `«намерение словами» [--limit N]`, `--map` → функции и темы по запросу |
-| `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose` → следы неудачной правки в прозе |
+| `tool_.tool_catalog` | `[--kind func\|topic --namespace adb_ --cli --json]` → опись слоя машинно |
+| `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose`, `--cyrillic` → следы неудачной правки в прозе; кириллица в именах, параметрах и ключах; код возврата = число находок |
 | `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
 | `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
-| `file_.file_check` | `файл... [--size --sha]` → цел ли файл: пустышка, огрызок, подмена головы |
+| `file_.file_check` | `файл... [--size --sha] [--json]` → цел ли файл: пустышка, огрызок, подмена головы; код возврата = число нецелых |
+| `file_.file_walk` | `[корень] [--suffix .py] [--count]` → что вообще обойдёт инструмент, без служебных веток |
 | `js_.js_check` | `файл… (.js/.mjs/.html)` → распарсится ли код как браузерный ESM-модуль, адрес поломки, граф импортов |
 | `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
 | `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
@@ -215,15 +223,20 @@ CLI есть у модулей, которыми пользуются «рука
 | `project_.project_probe` | `-a «код» [--service uvicorn --root]` → домен окружением поднятой панели снаружи |
 | `setting_.setting_state` | `read`/`patch`/`clear <ключ> [--defaults '{}'] [--patch '{}']` → состояние JSON |
 | `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
-| `docker_.compose_x` | `СЕРВИС команда… [-a флаг=значение] [--no-quiet]` → `{'код','вывод','ошибка'}`; `$ИМЯ` в `-a` подставляется из окружения проекта |
+| `docker_.compose_x` | `СЕРВИС команда… [-a флаг=значение] [--no-quiet --timeout]` → `{'code','output','error'}`; `$ИМЯ` в `-a` подставляется из окружения проекта; таймаут = `code -1`, не исключение |
+| `ssh_.ssh_x` | `ЦЕЛЬ скрипт\|- [--container --var И=З --timeout]` → скрипт удалённому стеку через stdin: кавычки целы, значения не в `ps` |
 | `docker_.docker_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
 | `evm_.evm_keys` | `address КЛЮЧ` / `sign КЛЮЧ --digest …` → адрес EIP-55; подпись с самопроверкой signer==recovered |
-| `http_.http_watch` | `URL [--field путь.в.json --header к=в --format value]` → значение поля сейчас + проба сторожу |
+| `http_.http_watch` | `URL [--field путь.в.json --header к=в --format value\|json --expect Z]` → значение поля сейчас + проба сторожу; индекс списка числом (`items.0.state`); отказ — не трейсбек |
+| `http_.http_rest` | `call URL [--method --body --auth $КЛЮЧ]` / `schema URL` → вызов с угаданным заголовком, схема тела из ошибки валидации |
 | `crypto_.crypto_pow` | `SEED --bits N [--check NONCE]` → nonce с N ведущими нулями sha256(seed+nonce); сверка готового nonce |
+| `crypto_.crypto_ed25519` | `pair [--seed-text]` / `sign КЛЮЧ «челлендж»` / `verify PUB «челлендж» SIG` `[--encoding hex\|base64url\|base58]` |
+| `evm_.evm_typed` | `domain имя версия chain контракт` / `typehash «тип»` / `digest «тип» --fields '{}' --domain 0x…` → EIP-712 руками |
+| `evm_.evm_eip3009` | `КЛЮЧ --token '{}' --chain --to --value --nonce --before` → authorization с самопроверкой signer==recovered |
 | `ai.ai_vision` | `describe`, `normalize` |
-| `adb_.adb_` | `devices`, `info`, `size`, `capture`, `describe` |
-| `adb_.adb_ui` | `map`, `find`, `dump` |
+| `adb_.adb_` | `devices`, `info [--json]`, `size`, `capture`, `describe`; паспорт снимается одной командой, а не пятью |
+| `adb_.adb_ui` | `map`, `find`, `dump`, `wait «надпись» [--timeout]` `[--exact --json]`; find/wait: код возврата 0 — нашлось, 1 — нет |
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake`, `wake-full [no-unlock no-home no-stayon]`, `stayon on\|off` |
 | `adb_.adb_app` | `current`, `list`, `start`, `stop`, `version`, `wait`, `install <apk> [-d]`, `pull-apk <пакет> [--out каталог]` |
 | `adb_.adb_log` | `read`, `crash`, `clear`, `pid` |
@@ -231,15 +244,16 @@ CLI есть у модулей, которыми пользуются «рука
 | `adb_.adb_doc` | `save [--dir Download]` |
 | `adb_.adb_step` | `tap`, `scroll`, `key`, `text`, `look` |
 | `adb_.adb_state` | `read`, `settle`, `last` |
-| `adb_.adb_crop` | `on`, `box`, `part` |
+| `adb_.adb_crop` | `on`, `box`, `part`, `point x y --box … [--seen ШxВ]`, `describe --box … --source кадр` |
 | `adb_.adb_emu` | `up`, `ready`, `sleep`, `kill` |
 | `adb_.adb_cdp` | `connect`, `pages`, `target <часть адреса>`, `eval`, `navigate`, `capture`, `element`, `element-rect`, `element-shot`, `viewport`, `tap <селектор>`, `storage КЛЮЧ='{json}' [--reload]` |
 | `adb_.adb_burst` | `capture [--n --interval --outdir --during «shell»]`, `launch ПАКЕТ [--activity --n --interval]`, `timeline [КАТАЛОГ] [--band Y0 Y1 X0 X1 --probe Y,X] [--serial ...]` |
 | `adb_.adb_rec` | `record [out] [--seconds N --during «shell» --serial S]`, `frames [mp4] [--times 0.5,1.2 │ --fps 2 --out-dir DIR]`, `sheet [mp4] [--out --fps --cols --width]`, `compare <a> <b> --times 0.3,1.4 [--labels A,B --cell-width --out]` |
 | `web_.web_shot` | `<URL или HTML> [--out --size Wxч --budget мс --inject-js --crop x0,ч0,x1,ч1]` |
 | `web_.web_probe` | `<HTML или URL> (--rect CSS …│--probe-js «тело») [--seed-js --size --budget]` → JSON |
-| `web_.web_peek` | `<URL> [--markers a,b] [--method --body --show]` → сырой ответ без браузера |
+| `web_.web_peek` | `<URL> [--markers a,b] [--method --body --show --header к=в --timeout]` → сырой ответ без браузера |
 | `web_.web_insta` | `<URL профиля/поста> [--out каталог]` (без `--out` — только список медиа) |
+| `insta_.insta_` | `<профиль> [--what look\|profile\|followers\|following] [--out --limit --proxy]` → карточка и медиа профиля |
 | `web_.web_gallery` | `<URL> [--out каталог]` → полноразмерные фото страницы-галереи (без `--out` — только список) |
 | `web_.web_grab` | `<URL…> [--to каталог --ua «UA» --path путь]` → пачка ссылок честными файлами: тип по голове, страница вместо файла — отказ |
 | `web_.web_drive` | `СТРАНИЦА --js «тело async-функции» [--js-file --storage КЛЮЧ --shot --size]` → исполнение страницы по CDP |
@@ -255,7 +269,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `ink`, `fit`, `textdiff`, `baseline-top` |
-| `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals` |
+| `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals`, `stroke`, `expose`, `contract`, `frac` `[--json]` |
 | `image_.image_scan` | `runs`, `bbox [--tone --tol --rect --alpha-thresh]`, `rows`, `glyph`, `windows`, `diff` |
 | `image_.image_svg` | `<svg> [-o out] [--size 512 --supersample 3]` |
 | `image_.image_fix` | `erase <файл> --out --box ...`, `inpaint <файл> --out --box ... [--sigma]`, `fill <файл> --out --box --color`, `strokes <файл> --out --box ...` |

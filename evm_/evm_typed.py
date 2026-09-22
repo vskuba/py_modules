@@ -74,3 +74,43 @@ def _encode(t: str, v) -> bytes:
     if t in ('string', 'bytes'):
         return _enc_string(v)
     raise ValueError(f'тип {t!r} не поддержан: расширьте _encode')
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+
+    ap = argparse.ArgumentParser(
+        description='EIP-712 руками: домен, typeHash, digest под подпись. '
+                    'Тем и полезно, что сверяет наш digest с чужим SDK до того, '
+                    'как подпись уедет в чужой API.',
+        epilog="domain 'USD Coin' 2 8453 0xA0b8… | "
+               "typehash 'Permit(address owner,uint256 value)' | "
+               "digest 'Permit(address owner,uint256 value)' "
+               "--fields '{\"owner\":\"0x…\",\"value\":1}' --domain 0x…")
+    ap.add_argument('command', choices=['domain', 'typehash', 'digest'])
+    ap.add_argument('args', nargs='*',
+                    help='domain: имя версия chain_id контракт; '
+                         'typehash/digest: каноническая строка типа')
+    ap.add_argument('--fields', default='{}', help='значения полей JSON-ом (digest)')
+    ap.add_argument('--domain', default='',
+                    help='готовый domainSeparator (digest); пусто — собрать из '
+                         '--name/--version/--chain/--contract')
+    ap.add_argument('--name', default='')
+    ap.add_argument('--version', default='')
+    ap.add_argument('--chain', type=int, default=0)
+    ap.add_argument('--contract', default='')
+    ns = ap.parse_args()
+
+    try:
+        if ns.command == 'domain':
+            print(evm_typed_domain(ns.args[0], ns.args[1], int(ns.args[2]), ns.args[3]))
+        elif ns.command == 'typehash':
+            print(evm_typed_type_hash(ns.args[0]))
+        else:
+            sep = ns.domain or evm_typed_domain(ns.name, ns.version, ns.chain, ns.contract)
+            print(evm_typed_digest(ns.args[0], json.loads(ns.fields), sep))
+    except IndexError:
+        raise SystemExit(f'ошибка: мало аргументов для «{ns.command}»')
+    except (KeyError, ValueError) as err:
+        raise SystemExit(f'ошибка: {err}')

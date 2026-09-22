@@ -11,6 +11,9 @@ import subprocess
 
 COMFYUI_TRAINER_TOOLKIT_PATCH_MARKER = 'config=__import__'
 COMFYUI_TRAINER_TOOLKIT_UNPATCHED = 'config_class'
+# Потолок на проверочный ssh: несколько grep'ов — секунды, а повисший ssh
+# к спящей ферме держит вызывающего до TCP-таймаута ядра.
+COMFYUI_TRAINER_TOOLKIT_TIMEOUT = 120.0
 
 
 def comfyui_trainer_toolkit_check(*, toolkit, base, farm_ssh, farm_container):
@@ -29,7 +32,8 @@ def comfyui_trainer_toolkit_check(*, toolkit, base, farm_ssh, farm_container):
                f"{toolkit}/toolkit/stable_diffusion_model.py) "
                f"$(for d in text_encoder text_encoder_2; do test -e {base}/$d/model.safetensors "
                f"&& echo ok; done | wc -l)\n"),
-        capture_output=True, text=True, check=True, errors='replace').stdout.split()
+        capture_output=True, text=True, check=True, errors='replace',
+        timeout=COMFYUI_TRAINER_TOOLKIT_TIMEOUT).stdout.split()
     patched, unpatched, links = sh[0], sh[1], sh[2]
     bad = []
     if patched != '2':

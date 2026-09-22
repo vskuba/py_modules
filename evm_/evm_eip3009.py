@@ -111,3 +111,48 @@ def _evm_eip3009_keccak(data: bytes) -> bytes:
 def _evm_eip3009_order(type_signature: str) -> list:
     body = type_signature[type_signature.index('(') + 1:-1]
     return [p.strip().rsplit(' ', 1)[1] for p in body.split(',')]
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+
+    ap = argparse.ArgumentParser(
+        description='Authorization EIP-3009 одной командой: подписать перевод '
+                    'токена, который исполнит получатель. Подпись отдаётся с '
+                    'самопроверкой signer==recovered и typeHash — сверить его с '
+                    'константой контракта дешевле, чем словить чужой 400-й.',
+        epilog="КЛЮЧ --token '{\"name\":\"USD Coin\",\"version\":\"2\",\"contract\":\"0x…\"}' "
+               "--chain 8453 --to 0x… --value 2800000 --nonce 0x… --before 1893456000 "
+               "[--calldata]")
+    ap.add_argument('priv', help='приватный ключ подписанта (hex)')
+    ap.add_argument('--token', required=True,
+                    help='домен токена JSON-ом: {"name","version","contract"}')
+    ap.add_argument('--chain', type=int, required=True, help='chain id (Base = 8453)')
+    ap.add_argument('--to', required=True, help='получатель')
+    ap.add_argument('--value', type=int, required=True,
+                    help='целые единицы токена (USDC 6 знаков: 1 USDC = 1000000)')
+    ap.add_argument('--nonce', required=True, help='bytes32 hex')
+    ap.add_argument('--before', type=int, required=True, help='validBefore, unix-секунды')
+    ap.add_argument('--after', type=int, default=0, help='validAfter, unix-секунды')
+    ap.add_argument('--kind', default='receive', choices=['receive', 'transfer'])
+    ap.add_argument('--max-fee', type=int, default=0,
+                    help='только для контрактов, у которых поле maxFee есть в '
+                         'структуре; у FiatToken (USDC/EURC) его нет')
+    ap.add_argument('--calldata', action='store_true',
+                    help='добавить готовую calldata внешней функции токена')
+    ns = ap.parse_args()
+
+    try:
+        out = evm_eip3009_authorize(
+            ns.priv, json.loads(ns.token), ns.chain, ns.to, ns.value, ns.nonce,
+            ns.before, valid_after=ns.after, kind=ns.kind, max_fee=ns.max_fee)
+    except (KeyError, ValueError) as err:
+        raise SystemExit(f'ошибка: {err}')
+    # Самопроверка — часть ответа: подпись, под которой восстановился не тот
+    # адрес, наружу не уходит (см. `evm_signing.md`).
+    if out['signer'].lower() != out['recovered'].lower():
+        raise SystemExit(f"ошибка: signer {out['signer']} != recovered {out['recovered']}")
+    if ns.calldata:
+        out['calldata'] = evm_eip3009_calldata(out)
+    print(json.dumps(out, ensure_ascii=False, indent=1))

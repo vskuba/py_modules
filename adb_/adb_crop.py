@@ -190,16 +190,45 @@ def _crop_path(path: str, name: str = 'adb_crop.jpg') -> str:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Вырезка с экрана в натуральную величину.',
-        epilog="on 'Меню' | box 100 200 500 700 | part top")
-    parser.add_argument('command', choices=['on', 'box', 'part'])
+        epilog="on 'Меню' | box 100 200 500 700 | part top | "
+               "point 60 40 --box 100,200,500,700 [--seen 200x250] | "
+               "describe --box … --source кадр.jpg что на вырезке; "
+               "числа и вопрос идут ДО ключей — иначе argparse забирает их себе")
+    parser.add_argument('command', choices=['on', 'box', 'part', 'point', 'describe'])
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
     parser.add_argument('--out', default='', help='куда сохранить вырезку')
     parser.add_argument('--pad', type=int, default=ADB_CROP_PAD, help='запас вокруг элемента (on)')
     parser.add_argument('--source', default='', help='резать готовый снимок, а не снимать свой')
-    parser.add_argument('args', nargs='*', help='надпись, координаты области или её имя')
+    parser.add_argument('--box', default='',
+                        help='вырезка, с которой читаем: x0,y0,x1,y1 (point/describe)')
+    parser.add_argument('--seen', default='',
+                        help='размер вырезки, каким её увидел читатель: ШxВ (point)')
+    parser.add_argument('--model', default='', help='vision-модель (describe)')
+    parser.add_argument('args', nargs='*',
+                        help='надпись, координаты области, её имя, «x y» (point) '
+                             'или вопрос (describe)')
     ns = parser.parse_args()
 
+    def _crop_arg():
+        # point/describe работают по уже снятой вырезке: её рамка называется
+        # `--box`, картинка — `--source`. Так шаг «снял → прочитал → нажал»
+        # собирается из CLI без питона посередине.
+        if not ns.box:
+            raise SystemExit('нужен --box x0,y0,x1,y1 — рамка вырезки на экране')
+        edges = [int(v) for v in ns.box.replace(',', ' ').split()]
+        return {'path': ns.source, 'box': tuple(edges),
+                'size': (edges[2] - edges[0], edges[3] - edges[1])}
+
     try:
+        if ns.command == 'point':
+            seen = tuple(int(v) for v in ns.seen.lower().replace('x', ' ').split())
+            x, y = adb_crop_point(_crop_arg(), int(ns.args[0]), int(ns.args[1]), seen=seen)
+            print(f'{x} {y}')
+            raise SystemExit(0)
+        if ns.command == 'describe':
+            print(adb_crop_describe(_crop_arg(), ' '.join(ns.args),
+                                    model_name=ns.model))
+            raise SystemExit(0)
         if ns.command == 'on':
             cut = adb_crop_on(' '.join(ns.args), serial=ns.serial, pad=ns.pad, path=ns.out)
         elif ns.command == 'box':
