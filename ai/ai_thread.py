@@ -12,9 +12,16 @@ from queue_.queue_ import queue_get
 # (agent_name) → list of (asyncio.Task, llm_id) — активные слоты на агент
 async_task_running: dict[str, list[tuple[asyncio.Task, int]]] = {}
 
-# Сколько секунд модель может ждать освобождения занятого агента.
+# Сколько секунд заявка может ждать освобождения занятого агента, **когда проект
+# своего срока не задал**.
+#
 # Согласовано с таймаутом ожидания ответа в чате (60 с): дольше ждать нет смысла —
-# HTTP-запрос уже отвалился по 504, а запоздалый ответ собеседнику выдаст бота
+# HTTP-запрос уже отвалился по 504, а запоздалый ответ собеседнику выдаст бота.
+#
+# ⚠⚠ **Это умолчание, а не предел.** Срок берётся из заявки
+# (`llm_workflow_queue_ttl`), и проект задаёт его настройкой: у чата с человеком
+# ждать дольше минуты вправду незачем, а прогон, который сам крутит цикл из
+# десятка вызовов к одному агенту, за минуту в очереди не дожидается никогда.
 AI_FRAMEWORK_QUEUE_TTL = 60.0
 
 
@@ -31,10 +38,11 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
 
     ⚠ Управление не возвращается никогда: запускается задачей в lifespan приложения.
 
-    ⚠ Прождав дольше `AI_FRAMEWORK_QUEUE_TTL` (60 с), заявка **отбрасывается
-    молча**, без ответа собеседнику: чат к этому времени уже отвалился по своему
-    таймауту, а запоздалый ответ выдал бы бота. `on_complete` при этом зовётся
-    обязательно — иначе ожидающая задача повиснет навсегда.
+    ⚠ Прождав дольше своего срока (`llm_workflow_queue_ttl` заявки, по умолчанию
+    `AI_FRAMEWORK_QUEUE_TTL` — 60 с), заявка **отбрасывается молча**, без ответа
+    собеседнику: чат к этому времени уже отвалился по своему таймауту, а
+    запоздалый ответ выдал бы бота. `on_complete` при этом зовётся обязательно —
+    иначе ожидающая задача повиснет навсегда.
 
     ⚠ В работу уходит глубокая копия заявки: у параллельных слотов не должно быть
     общего изменяемого состояния.
@@ -84,7 +92,12 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
                         await asyncio.sleep(0.1)
                         continue
 
-                    if time.monotonic() - queued_at < AI_FRAMEWORK_QUEUE_TTL:
+                    # ⚠ Срок — из самой заявки: у чата и у пакетного прогона он
+                    # разный, и общая константа мерила бы их одной меркой.
+                    ttl = float(getattr(framework_model, 'llm_workflow_queue_ttl', 0)
+                                or AI_FRAMEWORK_QUEUE_TTL)
+
+                    if time.monotonic() - queued_at < ttl:
                         queue_get('ai_framework_model').put(framework_model)
                         await asyncio.sleep(0.1)
                         continue
@@ -93,7 +106,7 @@ async def ai_thread_framework_run(ai_frameworks: list[AbstractAiFramework]):
                     # а запоздалый ответ вреден. Дропаем молча, но обязательно завершаем
                     # future через on_complete — иначе workflow-задача зависнет навсегда
                     logger_info(
-                        f"🗑 Агент '{name}' занят дольше {AI_FRAMEWORK_QUEUE_TTL:.0f} с — "
+                        f"🗑 Агент '{name}' занят дольше {ttl:.0f} с — "
                         f"запрос отброшен без ответа"
                     )
                     if framework_model.on_complete:

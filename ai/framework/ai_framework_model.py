@@ -31,6 +31,15 @@ class AiFrameworkModel:
 
     node_id: int | None = None
     llm_parallel_per_agent_max: int = 1
+    # Сколько секунд заявка может ждать освобождения занятого агента.
+    #
+    # ⚠ Едет **в заявке**, а не читается диспетчером: тот крутится каждые 0,1 с, и
+    # поход в базу на каждом обороте стоил бы дороже самой очереди. Заполняет
+    # проект при сборке модели — тем же приёмом, что `llm_parallel_per_agent_max`.
+    #
+    # ⚠ Умолчание оставлено прежним (`AI_FRAMEWORK_QUEUE_TTL`): проект, который
+    # поле не заполняет, работает как раньше.
+    llm_workflow_queue_ttl: float = 60.0
     tokens_input: int | None = None
     tokens_output: int | None = None
     thinking_enable: bool = False
