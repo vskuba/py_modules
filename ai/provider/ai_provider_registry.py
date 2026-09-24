@@ -14,6 +14,7 @@ from pydantic_ai.models import Model
 
 from ai.framework.ai_framework_model import AiFrameworkModel
 from ai.provider.ai_provider import AiProvider
+from ai.provider.ai_provider_fake import AiProviderFake
 from ai.provider.ai_provider_gemini import AiProviderGemini
 from ai.provider.ai_provider_gx10 import AiProviderGx10
 from ai.provider.ai_provider_openai import (AiProviderCerebras, AiProviderClaude,
@@ -35,6 +36,9 @@ AI_PROVIDER_REGISTRY: dict[str, type[AiProvider]] = {
         AiProviderMistral,
         AiProviderHuggingface,
         AiProviderCerebras,
+        # ⚠ Подменный сервис тестов: сюда попадают, только когда
+        # у сервера включён `LLM_FAKE`. В базе моделей его нет.
+        AiProviderFake,
     )
 }
 
