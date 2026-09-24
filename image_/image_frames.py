@@ -26,7 +26,7 @@
 import argparse
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 # Окно high-pass фильтра профилей строк: дольше самой плотной строки текста,
 # короче заметных перепадов фона; поле профиля постоянные — фильтр не должен
@@ -222,7 +222,8 @@ def image_frames_shift(a, b, band=None, search=IMAGE_FRAMES_SHIFT_SEARCH,
     return result
 
 
-def image_frames_grid(items, out, cols=3, scale=1.0, pad=12):
+def image_frames_grid(items, out, cols=3, scale=1.0, pad=12, labels=None,
+                      tile_width=0):
     """Монтаж кропов с разных кадров в одну картинку для визуальной сверки.
 
     items — список (путь, box) либо путей; box = (x0, y0, x1, y1) — полоса,
@@ -231,6 +232,18 @@ def image_frames_grid(items, out, cols=3, scale=1.0, pad=12):
     шов между разными кадрами не выглядел продолжением картинки. Десять
     «низов слайдов» или «строк точек со всех страниц» одним read — только
     так и сверяются.
+
+    `labels` — подписи по порядку плиток, поверх левого верхнего угла.
+
+    ⚠⚠ `tile_width` — привести КАЖДУЮ плитку к этой ширине, у каждой своим
+    множителем. Нужно, когда исходники разного разрешения: общий `scale` тогда
+    сравнивает не предмет, а масштаб. Замер, на котором это поймано: окно щеки
+    220 px с кадра 2048 покрывает вдвое меньший кусок лица, чем те же 220 px с
+    кадра 1024, — и кожа «выглядит мельче зерном» просто оттого, что ближе.
+    Брать одинаковую ДОЛЮ предмета в box и равнять ширину здесь — тогда глаз
+    сравнивает кожу, а не разрешение.
+
+    ⚠ `tile_width` сильнее `scale`: заданы оба — работает он.
     """
     tiles = []
     for item in items:
@@ -238,12 +251,20 @@ def image_frames_grid(items, out, cols=3, scale=1.0, pad=12):
         im = Image.open(path).convert('RGB')
         if box:
             im = im.crop(tuple(int(v) for v in box))
-        if scale != 1.0:
-            im = im.resize((max(1, int(im.width * scale)),
-                            max(1, int(im.height * scale))), Image.LANCZOS)
+        k = (float(tile_width) / max(1, im.width)) if tile_width else scale
+        if abs(k - 1.0) > 1e-3:
+            im = im.resize((max(1, int(im.width * k)),
+                            max(1, int(im.height * k))), Image.LANCZOS)
         tiles.append(im)
     if not tiles:
         raise ValueError('пустой список плиток')
+    if labels:
+        from image_.image_ import image_font
+        font = image_font(max(12, tiles[0].width // 16))
+        for i, text in enumerate(labels):
+            if i < len(tiles) and text:
+                ImageDraw.Draw(tiles[i]).text((5, 4), str(text), font=font,
+                                              fill=(255, 64, 64))
     rows = [tiles[i:i + cols] for i in range(0, len(tiles), cols)]
     row_h = [max(t.height for t in r) for r in rows]
     width = max(sum(t.width for t in r) + pad * (len(r) - 1) for r in rows)
