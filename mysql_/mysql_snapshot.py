@@ -164,33 +164,6 @@ def mysql_snapshot_sql(table: str, key: str, where: str = '',
             + f' FROM `{table}`' + (f' WHERE {where}' if where else ''))
 
 
-def _columns_of(table: str) -> list:
-    """Имена столбцов таблицы в своей базе."""
-    from mysql_.mysql_query import mysql_query_run
-
-    got = mysql_query_run(
-        'SELECT `column_name` AS nm FROM `information_schema`.`columns`'
-        ' WHERE `table_schema` = DATABASE() AND `table_name` = %s'
-        ' ORDER BY `ordinal_position`', (str(table),))
-    names = [str(row.get('nm')) for row in got['rows']]
-
-    if not names:
-        raise RuntimeError(
-            f'своя база не знает таблицы `{table}` — передай столбцы доводом')
-
-    return names
-
-
-def _key_fields(key: str) -> list:
-    """Поля ключа списком — или отказ, если ключа нет."""
-    fields = [one.strip() for one in str(key).split(',') if one.strip()]
-
-    if not fields:
-        raise RuntimeError('нужен ключ: чем строка опознаётся в обеих базах')
-
-    return fields
-
-
 def mysql_snapshot_diff(left: dict, right: dict, refs: tuple = ()) -> list:
     """
     Чем срезы отличаются по смыслу, с приведением ссылок к ключам.
@@ -415,6 +388,33 @@ def _keys_show(all_keys: list, show: list) -> str:
     tail = len(all_keys) - len(show)
 
     return ', '.join(show) + (f' и ещё {tail}' if tail > 0 else '')
+
+
+def _columns_of(table: str) -> list:
+    """Имена столбцов таблицы в своей базе."""
+    from mysql_.mysql_query import mysql_query_run
+
+    got = mysql_query_run(
+        'SELECT `column_name` AS nm FROM `information_schema`.`columns`'
+        ' WHERE `table_schema` = DATABASE() AND `table_name` = %s'
+        ' ORDER BY `ordinal_position`', (str(table),))
+    names = [str(row.get('nm')) for row in got['rows']]
+
+    if not names:
+        raise RuntimeError(
+            f'своя база не знает таблицы `{table}` — передай столбцы доводом')
+
+    return names
+
+
+def _key_fields(key: str) -> list:
+    """Поля ключа списком — или отказ, если ключа нет."""
+    fields = [one.strip() for one in str(key).split(',') if one.strip()]
+
+    if not fields:
+        raise RuntimeError('нужен ключ: чем строка опознаётся в обеих базах')
+
+    return fields
 
 
 def _rows_read(table: str, fields: list, where: str, source: str) -> dict:
