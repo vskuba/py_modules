@@ -104,8 +104,13 @@ def mysql_rehearse_run(migration: str, dump_cmd: str, apply_cmd: str,
         RuntimeError: подготовка или прогон не удались.
 
     ⚠ Совпадение выводов — **признак, а не доказательство** идемпотентности:
-    миграция может печатать одно, а делать разное. Но расхождение выводов
-    означает беду всегда, и ловится оно здесь бесплатно.
+    миграция может печатать одно, а делать разное. И обратное тоже неверно:
+    расхождение бывает честным — миграция со строкой «ДО» покажет `0` в первый
+    раз и `5` во второй, хотя данные после обоих прогонов одинаковы.
+
+    ⚠⚠ Поэтому сравниваются **строки с «ПОСЛЕ»**, а не весь вывод: «ДО» по
+    смыслу обязано меняться, «ПОСЛЕ» — нет. Поймано на первой же живой
+    миграции, где инструмент закричал о беде, которой не было.
     """
     text = Path(migration).read_text(encoding='utf-8')
 
@@ -119,7 +124,7 @@ def mysql_rehearse_run(migration: str, dump_cmd: str, apply_cmd: str,
     again = _feed(apply_cmd, text)
 
     return {'clean': clean, 'again': again,
-            'idempotent': _norm(clean) == _norm(again)}
+            'idempotent': _after(clean) == _after(again)}
 
 
 def mysql_rehearse_format(result: dict) -> str:
@@ -169,10 +174,30 @@ def _feed(command: str, payload: str) -> str:
     return (got.stdout or '') + (got.stderr or '')
 
 
-def _norm(text: str) -> str:
-    """Вывод без пустых строк и краевых пробелов — для сравнения прогонов."""
-    return '\n'.join(line.rstrip() for line in str(text).splitlines()
-                     if line.strip())
+def _after(text: str) -> str:
+    """Часть вывода, которая обязана совпасть у обоих прогонов.
+
+    ⚠ Берём **итог**, а не весь вывод: строка «ДО» по смыслу разная — первый
+    прогон видит нетронутую базу, второй уже свою работу. Совпасть обязано
+    «ПОСЛЕ»: если оно разное, миграция вправду сделала что-то дважды.
+
+    ⚠ Нет ни одной строки с «ПОСЛЕ» — сравниваем всё: у миграции может не быть
+    проверочных запросов вовсе, и тогда лучше лишняя тревога, чем пропущенная.
+    """
+    lines = [line.rstrip() for line in str(text).splitlines() if line.strip()]
+    tail = [line for line in lines
+            if 'ПОСЛЕ' in line or 'AFTER' in line.upper()]
+    if not tail:
+        return '\n'.join(lines)
+
+    # ⚠ Вместе со строкой берём и следующую: в табличном выводе mysql значения
+    # стоят в той же строке, а в вертикальном (`\G`) — под ней.
+    out = []
+    for i, line in enumerate(lines):
+        if 'ПОСЛЕ' in line or 'AFTER' in line.upper():
+            out.extend(lines[i:i + 2])
+
+    return '\n'.join(out)
 
 
 if __name__ == '__main__':
