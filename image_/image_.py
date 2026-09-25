@@ -98,6 +98,47 @@ _ATTR_FILE_RE = re.compile(r'[\w.\-]*[\w\-]\.(?:png|jpe?g|webp)\b', re.IGNORECAS
 _ATTR_BOX_RE = re.compile(r'\(\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\s*\)')
 
 
+# Где искать шрифт с кириллицей. Порядок — от самого частого размещения.
+IMAGE_FONT_PATHS = ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+                    '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+                    '/usr/share/fonts/TTF/DejaVuSans.ttf',
+                    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf')
+
+
+def image_font(size: int = 15):
+    """Шрифт подписи НА КАРТИНКЕ с кириллицей; нет такого — встроенный растровый.
+
+    Встроенный шрифт Pillow кириллицы не имеет и рисует вместо неё пустые
+    квадраты: подпись «её снимок» превращается в рябь, и монтаж, который для
+    того и собирали — чтобы человек прочёл, — читать нельзя.
+
+    ⚠ Возвращает объект шрифта, а не путь: зовущий передаёт его в
+    `ImageDraw.text(font=…)`.
+
+    ⚠⚠ **В тонком контейнере шрифта может не быть вовсе** — там вернётся
+    встроенный, и кириллица снова станет квадратами. Признак: у объекта нет
+    атрибута `path`. Лечится одной строкой в образе (`fonts-dejavu-core`), а
+    не здесь; пока не вылечено — подписи писать латиницей. Проверено: на хосте
+    DejaVu находится, в `persona_photo_gen` — нет.
+
+    ⚠ Тот же подбор лежит приватным в `adb_/adb_rec.py:_label_font` — он был
+    первым. Свернуть их в один вызов при следующей правке того файла; заводить
+    третью копию нельзя.
+    """
+    import os
+    from PIL import ImageFont
+    for path in IMAGE_FONT_PATHS:
+        if os.path.isfile(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
+    try:
+        return ImageFont.load_default(size)      # Pillow >= 10.1
+    except TypeError:
+        return ImageFont.load_default()
+
+
 def image_measure(path: str, box: tuple = None, top: int = 0) -> dict:
     """
     Замерить фон картинки: моду цвета и её яркость.

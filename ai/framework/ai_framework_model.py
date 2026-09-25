@@ -15,6 +15,11 @@ class AiFrameworkModel:
     user_id: int
     request_uuid: str
     session_uuid: str
+    # ⚠⚠ `companion_id` здесь был и убран: собеседник — не дело прогона модели.
+    # Поле было мёртвым и до удаления — никто его не присваивал (оставался ноль) и
+    # никто не читал, а слой на его основании слал лишний довод в журнал вызовов и
+    # ронял этим каждый заход агента. Кто с кем разговаривает — вопрос отдельной
+    # таблицы разговоров, и переменной прогона он не является.
     tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None

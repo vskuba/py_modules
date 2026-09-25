@@ -51,14 +51,30 @@ IMAGE_GRAIN_KERNEL_R = 6
 IMAGE_GRAIN_SEED = 20260915
 
 
-def image_grain_measure(path, box=None, mask=''):
-    """Замер фактуры области; {'sigma','sharp','luma','n'}.
+def image_grain_measure(path, box=None, mask='', scale_to=0):
+    """Замер фактуры области; {'sigma','sharp','luma','n','box','scale'}.
 
     `sigma` — оценка шума по Иммеркеру (по каналам BGR), `sharp` — дисперсия
     Лапласиана серого, `luma` — медианная яркость, `n` — сколько пикселей
     участвовало. `box` (x0,y0,x1,y1) режет область, `mask` — файл серой маски:
     считаются только пиксели, где маска светлее половины (например «настоящая
     кожа тела рядом с лицом», а не сам подменённый овал).
+
+    `box` и `scale` возвращаются намеренно: **мерка обязана говорить, ГДЕ и в
+    каком масштабе мерила**. Число без этого не проверить глазами, а проверять
+    приходится — окно замера однажды полгода стояло не на щеке, а на глазу, и
+    поймалось только рисованием (`image_hotspot_overlay(boxes=…)`).
+
+    ⚠⚠ `scale_to` — привести окно к этой ширине перед счётом. Без него
+    сравнивать замеры с кадров разного разрешения НЕЛЬЗЯ: и `sigma`, и `sharp`
+    считают частоту в пикселях, и одна и та же кожа на крупном кадре даёт
+    другое число просто потому, что растянута на больше пикселей. Замер, на
+    котором это поймано: одно и то же лицо дало 345 на рождении 1024 и 180 на
+    2048 — разница целиком от масштаба.
+
+    ⚠ Приведение только УМЕНЬШАЕТ. Растянутое окно меряет интерполяцию, а не
+    кожу: лицо 115 px, раздутое до 512, даёт `sharp` 10.2 — число ни о чём.
+    Окно мельче `scale_to` остаётся как есть и помечается `small`.
     """
     import cv2
     import numpy as np
@@ -82,15 +98,34 @@ def image_grain_measure(path, box=None, mask=''):
         sel = m > 127
         if not sel.any():
             raise ValueError('под маской нет пикселей для замера')
+    # Приведение к общей мерке — ДО счёта и только вниз (см. докстринг).
+    # Маска едет тем же множителем, иначе выбор пикселей разъедется с кадром.
+    small, k = False, 1.0
+    if scale_to:
+        k = float(scale_to) / max(1, img.shape[1])
+        if k < 1.0:
+            img = cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+            if sel is not None:
+                sel = cv2.resize(sel.astype('uint8'), (img.shape[1], img.shape[0]),
+                                 interpolation=cv2.INTER_NEAREST) > 0
+                if not sel.any():
+                    raise ValueError('после приведения под маской не осталось пикселей')
+        else:
+            small, k = True, 1.0
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Резкость тоже считается ПОД МАСКОЙ: волосы и край внутри бокса дают
     # лапласиан в разы выше кожи, и без маски «резкость лица» оказывается
     # резкостью причёски (замер 3095684: 325 по боксу против 130 по коже).
     lap = cv2.Laplacian(gray, cv2.CV_64F)
-    return {'sigma': [round(_grain_sigma(img[..., c], sel), 2) for c in range(3)],
-            'sharp': round(float((lap[sel] if sel is not None else lap).var()), 1),
-            'luma': round(float(np.median(gray[sel] if sel is not None else gray)), 1),
-            'n': int(sel.sum()) if sel is not None else int(gray.size)}
+    got = {'sigma': [round(_grain_sigma(img[..., c], sel), 2) for c in range(3)],
+           'sharp': round(float((lap[sel] if sel is not None else lap).var()), 1),
+           'luma': round(float(np.median(gray[sel] if sel is not None else gray)), 1),
+           'n': int(sel.sum()) if sel is not None else int(gray.size),
+           'box': [int(v) for v in box] if box else None,
+           'scale': round(k, 3)}
+    if small:
+        got['small'] = True     # окно мельче мерки — сравнивать не с чем
+    return got
 
 
 def image_grain_match(patch, out, want, ref='', ref_box=None, strength=1.0):
