@@ -27,7 +27,13 @@
 | `migrations`   | `mysql_migration_check_check` | `ALTER` раньше `CREATE`, подкаталоги вне глаз `yoyo` |
 | `collate`      | `mysql_collate_risks` | разные сличения у прода и локально — падение на проде |
 | `pages`        | `page_wire_check` | шаблон, которого нет, и страница вне навигации |
+| `dead`         | `tool_dead`       | имя, которое правка оставила без зовущих |
 | `instead`      | `tool_instead`    | своё поверх готового в общем слое |
+
+⚠⚠ У `dead` отбор **двойной**: мёртвое в уезжающем файле плюс мёртвое, чьё имя
+стояло в **убранных** строках правки. Вторая половина важнее: убрав последний зов в
+файле `A`, мёртвой делаешь функцию в файле `B`, которого правка не касалась, — и это
+самый частый способ завести мёртвый код.
 
 ## ⚠ Две строгости, и разница существенна
 
@@ -45,6 +51,7 @@
 ⚠ `js` требует `node` в системе. Нет его — проверка честно скажется
 непроведённой, а не тихо пройдёт: «проверено» и «проверить не смогли» — разное.
 """
+import re
 import subprocess
 import sys
 import warnings
@@ -64,6 +71,7 @@ from js_.js_check import js_check
 from mysql_.migration.mysql_migration_check import mysql_migration_check_check
 from mysql_.mysql_collate import mysql_collate_risks
 from page_.page_wire import page_wire_check
+from tool_.tool_dead import TOOL_DEAD_GONE, tool_dead
 from tool_.tool_instead import tool_instead
 from variable_.variable_cyrillic import variable_cyrillic
 
@@ -74,7 +82,7 @@ DEPLOY_PRECHECK_LOOK = 'взгляд'
 
 # Порядок проверок в отчёте. ⚠ Имена короткие: ими же пользуются `--only`/`--skip`.
 DEPLOY_PRECHECK_ORDER = ('cyrillic', 'order', 'js', 'migrations', 'collate',
-                         'pages', 'instead')
+                         'pages', 'dead', 'instead')
 
 # Каталог кода по договору проектов.
 DEPLOY_PRECHECK_SRC = 'src'
@@ -106,6 +114,9 @@ DEPLOY_PRECHECK_MIGRATION_STOP = ('alter-before-create', 'shared-label',
 # ⚠ Это решение **показа**, а не самой проверки: `mysql_migration_check` оставлен
 # как есть, и проекту с другим соглашением довод пригодится.
 DEPLOY_PRECHECK_MIGRATION_MUTE = ('non-latin-in-query',)
+
+# Слово в тексте правки — им ищут, что убрали из убранных строк.
+_WORD = re.compile(r'\w+')
 
 
 def deploy_precheck(root='.', only=(), skip=(), whole=False) -> list[dict]:
@@ -362,6 +373,53 @@ def _check_pages(base: Path, going) -> list[dict]:
     return out
 
 
+def _check_dead(base: Path, going) -> list[dict]:
+    """Имена, которых никто не читает, — но только те, что относятся к этой правке.
+
+    ⚠⚠ Отбор здесь **двойной**, и вторая половина важнее первой:
+
+        определено в уезжающем файле  →  правка завела мёртвое
+        упомянуто в убранных строках  →  правка убрала последнего зовущего
+
+    Без второй половины проверка была бы почти бесполезной: убрав последний зов в
+    файле `A`, мёртвой делаешь функцию в файле `B`, которого правка не касалась, —
+    а это и есть самый частый способ завести мёртвый код.
+
+    ⚠ `взгляд`, а не `стоп`: `tool_dead` отдаёт кандидатов (имя может приезжать из
+    базы или из workflow соседа), и держать выкладку догадкой нельзя.
+
+    ⚠ По всему проекту не показываем никогда: на живом дереве это 159 находок
+    накопленного долга. Разовый обход — `python -m tool_.tool_dead src`.
+    """
+    src = base / DEPLOY_PRECHECK_SRC
+    if not src.exists():
+        return [_note('dead', f'{DEPLOY_PRECHECK_SRC}/ нет — пропущено')]
+
+    files = going if going is not None else _changed(base)
+    dropped = _dropped(base)
+
+    if not files and not dropped:
+        return [_note('dead', 'уезжающего не видно — пропущено')]
+
+    out = []
+    for one in tool_dead(str(src)):
+        if one['verdict'] != TOOL_DEAD_GONE:
+            continue
+
+        if _short(base, one['file']) in files:
+            why = 'заведено этой правкой'
+        elif one['name'] in dropped:
+            why = 'правка убрала последнего зовущего'
+        else:
+            continue
+
+        out.append({'check': 'dead', 'level': DEPLOY_PRECHECK_LOOK,
+                    'where': f"{_short(base, one['file'])}:{one['line']}",
+                    'what': f"{one['kind']} {one['name']} — {why}"})
+
+    return out
+
+
 def _check_instead(base: Path, going) -> list[dict]:
     """Своё поверх готового: что из уезжающего кода уже умеет общий слой.
 
@@ -429,6 +487,36 @@ def _going(base: Path, path, going) -> bool:
     return _short(base, path) in going
 
 
+def _dropped(base: Path) -> set:
+    """Слова, встречавшиеся в **убранных** строках этой правки.
+
+    Нужны, чтобы поймать самый частый способ завести мёртвый код: убрать последний
+    зов функции, которая живёт в другом, не тронутом правкой файле.
+
+    ⚠ Берутся слова, а не разобранные вызовы: убранная строка бывает половиной
+    выражения, и разбирать её как код нельзя — она не обязана быть валидной.
+
+    ⚠ Слова добавленных строк вычитаются: строка, лишь переехавшая внутри файла,
+    убранной не считается, иначе каждый перенос функции давал бы находку.
+    """
+    out, back = set(), set()
+
+    for args in (['diff', '-U0', f'{DEPLOY_PRECHECK_BASE}...HEAD'],
+                 ['diff', '-U0', 'HEAD'], ['diff', '-U0', '--cached']):
+        got = subprocess.run(['git', '-C', str(base), *args],
+                             capture_output=True, text=True, check=False)
+        if got.returncode != 0:
+            continue
+
+        for line in got.stdout.split('\n'):
+            if line.startswith('-') and not line.startswith('---'):
+                out |= set(_WORD.findall(line))
+            elif line.startswith('+') and not line.startswith('+++'):
+                back |= set(_WORD.findall(line))
+
+    return out - back
+
+
 def _note(check: str, what: str) -> dict:
     """Сообщение о самой проверке, а не находка: `level` пуст намеренно."""
     return {'check': check, 'level': '', 'where': '', 'what': what}
@@ -446,7 +534,7 @@ def _short(base: Path, path) -> str:
 # бы держать имена строками и терять проверку опечаток при запуске.
 _CHECKS = {'cyrillic': _check_cyrillic, 'order': _check_order, 'js': _check_js,
            'migrations': _check_migrations, 'collate': _check_collate,
-           'pages': _check_pages, 'instead': _check_instead}
+           'pages': _check_pages, 'dead': _check_dead, 'instead': _check_instead}
 
 
 if __name__ == '__main__':
