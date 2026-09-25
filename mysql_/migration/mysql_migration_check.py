@@ -28,7 +28,11 @@ _ALTER = re.compile(r'ALTER\s+TABLE\s+`?(\w+)`?', re.I)
 _GUARD = re.compile(r'IF\s+NOT\s+EXISTS|INFORMATION_SCHEMA', re.I)
 _MUTATES = re.compile(r'\b(?:ADD|DROP|MODIFY|CHANGE)\s+COLUMN|CREATE\s+TABLE',
                      re.I)
-_STAGE = re.compile(r"'(before|after)'\s+AS\s+`?\w+", re.I)
+# Метка этапа в отчёте миграции. ⚠⚠ Русские слова наравне с английскими: проекты
+# пишут `SELECT 'ДО' AS этап`, и, зная только `before`/`after`, проверка объявляла
+# «нет маркеров этапов» у 78 миграций из 78 — то есть у всех до единой. Проверка,
+# срабатывающая всегда, не сообщает ничего.
+_STAGE = re.compile(r"'(before|after|ДО|ПОСЛЕ)'\s+AS\s+`?\w+", re.I | re.U)
 _LABEL = re.compile(r'^(\d{14})_')
 _COMMENT_BLOCK = re.compile(r'/\*.*?\*/', re.S)
 # COMMENT-литерал целиком (обычный '...' и удвоенный ''...'' внутри @sql,
