@@ -60,6 +60,7 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tool_.tool_hook import tool_hook_run
 from tool_.tool_instead import tool_instead, tool_instead_format
 
 # Где помнится показанное. ⚠ Не в проекте: застава общая, а проектов много.
@@ -69,8 +70,8 @@ TOOL_GATE_SEEN = Path.home() / '.cache' / 'tool_gate_seen.json'
 # дважды, а через день о кандидатах стоит напомнить — файл с тех пор изменился.
 TOOL_GATE_SEEN_FOR = 24 * 60 * 60
 
-# Код возврата, которым Claude Code отменяет вызов и отдаёт stderr агенту.
-TOOL_GATE_BLOCK = 2
+# Инструменты, на которые поставлена застава.
+TOOL_GATE_TOOLS = ('Write', 'Edit', 'NotebookEdit')
 
 # Переменная окружения, снимающая заставу целиком.
 TOOL_GATE_PASS = 'TOOL_GATE_PASS'
@@ -144,28 +145,18 @@ def tool_gate_format(verdict) -> str:
 def main() -> int:
     """Хук `PreToolUse` на `Write`/`Edit`: код 2 отменяет запись, 0 — пропускает.
 
-    ⚠ Своя ошибка пропускает запись: сломанный хук, запрещающий писать, останавливает
-    работу целиком и необъяснимо. Непроверенная запись — меньшая беда.
+    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в `tool_hook`,
+    одним местом на обе заставы. Здесь только вопрос: что за запись и стоит ли её
+    задержать.
     """
-    data = _payload()
-    if data.get('tool_name') not in ('Write', 'Edit', 'NotebookEdit'):
-        return 0
+    return tool_hook_run(TOOL_GATE_TOOLS, _look)
 
+
+def _look(data: dict) -> str:
+    """Замечание по этой записи либо пусто. Вид проверки для `tool_hook_run`."""
     where, code = _written(data)
 
-    try:
-        verdict = tool_gate(where, code)
-    except Exception as bad:      # noqa: BLE001 — см. ⚠ выше
-        print(f'застава слоя сорвалась, запись пропущена: {bad}', file=sys.stderr)
-
-        return 0
-
-    if not verdict['block']:
-        return 0
-
-    print(tool_gate_format(verdict), file=sys.stderr)
-
-    return TOOL_GATE_BLOCK
+    return tool_gate_format(tool_gate(where, code))
 
 
 def _seen(where: str, seen_for: int) -> bool:
@@ -201,14 +192,6 @@ def _load() -> dict:
 
         return got if isinstance(got, dict) else {}
     except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _payload() -> dict:
-    """Ввод хука: JSON на stdin. Не JSON — пустой словарь, и застава молчит."""
-    try:
-        return json.loads(sys.stdin.read() or '{}')
-    except (json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
 

@@ -36,7 +36,6 @@
 «не видно базы» должна быть видна в отчёте, а не додумываться.
 """
 import re
-import subprocess
 import sys
 
 from pathlib import Path
@@ -49,6 +48,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mysql_.migration.mysql_migration_check import mysql_migration_check_check
+from mysql_.mysql_source import mysql_source_ask
 
 # Таблица состояния yoyo и столбец, в котором лежит имя применённого файла без `.sql`.
 MYSQL_MIGRATION_PENDING_TABLE = '_yoyo_migration'
@@ -135,18 +135,15 @@ def mysql_migration_pending_applied(source) -> list[str]:
     вызывающий обязан сказать в отчёте «сверка не состоялась» — сам по себе пустой
     список значит только «применённых не видно».
     """
-    sql = (f'SELECT {MYSQL_MIGRATION_PENDING_COLUMN} '
-           f'FROM {MYSQL_MIGRATION_PENDING_TABLE}')
-    # ⚠ `shell=True` намеренно, как в `mysql_collate_of` и `mysql_rehearse_run`:
-    # `source` — команда оператора с `docker exec` и ssh, где кавычки идут в три
-    # слоя. Строка приходит из своей же командной строки, чужого ввода здесь нет.
-    got = subprocess.run(str(source), shell=True, input=sql,
-                         capture_output=True, text=True, check=False)
-
-    if got.returncode != 0:
+    # ⚠ Отказ здесь — не исключение: у этого вопроса «база молчит» законный ответ
+    # (см. ⚠⚠ выше), поэтому берём `mysql_source_ask`, а не `…_rows`.
+    got = mysql_source_ask(source,
+                           f'SELECT {MYSQL_MIGRATION_PENDING_COLUMN} '
+                           f'FROM {MYSQL_MIGRATION_PENDING_TABLE}')
+    if not got['ok']:
         return []
 
-    return [one.strip() for one in got.stdout.split('\n') if one.strip()]
+    return [one.strip() for one in got['out'].split('\n') if one.strip()]
 
 
 def mysql_migration_pending_format(rows, checked=True) -> str:

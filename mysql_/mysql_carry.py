@@ -51,9 +51,6 @@
 увидеть текст до записи дешевле, чем разбирать последствия после. Бэкап получателя
 до записи — обязателен: правило `deploy.md`, §4.5.
 """
-import base64
-import json
-import subprocess
 import sys
 
 from pathlib import Path
@@ -65,6 +62,8 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from mysql_.mysql_source import (mysql_source_ask, mysql_source_json,
+                                 mysql_source_rows)
 from mysql_.sql_export import sql_export_value
 
 # Столбцы, которые не переносятся никогда. ⚠ `id` — см. ⚠⚠ в докстринге модуля.
@@ -154,7 +153,7 @@ def mysql_carry_apply(plan, target) -> dict:
     if not plan.get('sql'):
         return {'applied': False, 'said': 'переносить нечего'}
 
-    got = _ask(target, plan['sql'])
+    got = mysql_source_ask(target, plan['sql'])
 
     return {'applied': got['ok'], 'said': got['said'] or 'записано'}
 
@@ -223,34 +222,15 @@ def main() -> int:
     return 0 if got['applied'] else 1
 
 
-def _ask(source, sql: str) -> dict:
-    """Задать базе запрос её командой. `ok` ложно — база отвергла.
-
-    ⚠ `shell=True` намеренно, как в `mysql_collate_of` и `mysql_rehearse_run`:
-    команда оператора несёт `docker exec` и ssh, где кавычки идут в три слоя.
-    Строка приходит из своей же командной строки, чужого ввода здесь нет.
-    """
-    got = subprocess.run(str(source), shell=True, input=sql, capture_output=True,
-                         text=True, check=False)
-
-    # ⚠ Предупреждение про пароль в командной строке — не сообщение об ошибке:
-    # `mysql` печатает его в stderr всегда, и в отчёте оно читалось так, будто
-    # запись прошла с замечанием базы («Записано: mysql: [Warning] …»).
-    said = '\n'.join(one for one in (got.stderr or '').split('\n')
-                     if one.strip() and '[Warning] Using a password' not in one)
-
-    return {'ok': got.returncode == 0, 'out': got.stdout, 'said': said.strip()}
-
-
 def _columns(source, table: str) -> list:
     """Столбцы таблицы у источника, в порядке объявления."""
-    got = _ask(source, 'SELECT COLUMN_NAME FROM information_schema.COLUMNS '
-                       f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' "
-                       'ORDER BY ORDINAL_POSITION')
-    if not got['ok']:
-        raise RuntimeError(f"{table}: столбцы не спросить — {got['said'][:200]}")
+    rows = mysql_source_rows(
+        source,
+        'SELECT COLUMN_NAME FROM information_schema.COLUMNS '
+        f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' "
+        'ORDER BY ORDINAL_POSITION', what=f'{table}: столбцы')
 
-    return [one.strip() for one in got['out'].split('\n') if one.strip()]
+    return [one[0].strip() for one in rows]
 
 
 def _unique(source, table: str, key: str) -> bool:
@@ -259,60 +239,39 @@ def _unique(source, table: str, key: str) -> bool:
     ⚠ Составной уникальный индекс, где `key` лишь первый столбец, уникальности
     столбцу не даёт — отсюда проверка на индекс **из одного** столбца.
     """
-    got = _ask(source, 'SELECT COUNT(*) FROM information_schema.STATISTICS s '
-                       "WHERE s.TABLE_SCHEMA = DATABASE() "
-                       f"AND s.TABLE_NAME = '{table}' AND s.NON_UNIQUE = 0 "
-                       f"AND s.COLUMN_NAME = '{key}' "
-                       'AND 1 = (SELECT COUNT(*) FROM information_schema.STATISTICS t '
-                       '          WHERE t.TABLE_SCHEMA = s.TABLE_SCHEMA '
-                       '            AND t.TABLE_NAME = s.TABLE_NAME '
-                       '            AND t.INDEX_NAME = s.INDEX_NAME)')
-    if not got['ok']:
-        raise RuntimeError(f"{table}: индексы не спросить — {got['said'][:200]}")
+    rows = mysql_source_rows(
+        source,
+        'SELECT COUNT(*) FROM information_schema.STATISTICS s '
+        'WHERE s.TABLE_SCHEMA = DATABASE() '
+        f"AND s.TABLE_NAME = '{table}' AND s.NON_UNIQUE = 0 "
+        f"AND s.COLUMN_NAME = '{key}' "
+        'AND 1 = (SELECT COUNT(*) FROM information_schema.STATISTICS t '
+        '          WHERE t.TABLE_SCHEMA = s.TABLE_SCHEMA '
+        '            AND t.TABLE_NAME = s.TABLE_NAME '
+        '            AND t.INDEX_NAME = s.INDEX_NAME)', what=f'{table}: индексы')
+    head = rows[0][0].strip() if rows and rows[0] else '0'
 
-    head = (got['out'].strip().split('\n') or ['0'])[0]
-
-    return head.strip().isdigit() and int(head.strip()) > 0
+    return head.isdigit() and int(head) > 0
 
 
 def _rows(source, table: str, columns: list, where: str, chunk: int) -> list:
     """Строки источника словарями — через JSON, а не TSV.
 
-    ⚠⚠ Именно JSON: в TSV `NULL` приходит словом `NULL` и неотличим от строки
-    «NULL», а числа — от строк. Для переноса это разница между пустым полем и
+    ⚠⚠ Именно JSON, а не TSV: в TSV `NULL` приходит словом `NULL` и неотличим от
+    строки «NULL», а числа — от строк. Для переноса это разница между пустым полем и
     полем со словом внутри.
 
-    ⚠⚠ И именно через `TO_BASE64`, а не JSON-ом напрямую. `mysql` в пакетном режиме
-    экранирует в значениях табуляции, переводы строк и обратные слеши — и ломает
-    ими сам JSON: на первой же записи с длинным текстом (`agent.prompt_system`)
-    разбор падал «Expecting ',' delimiter». Base64 не содержит ни одного знака,
-    который бы экранировался, и потому переживает любые флаги команды оператора.
-
-    ⚠⚠ Переводы строк, которые `TO_BASE64` вставляет каждые 76 знаков, снимаются
-    **в SQL** (`REPLACE`), а не в Python. Снимать их после поздно: тот же пакетный
-    режим успевает превратить каждый из них в двузнаковое `\\n` — уже **внутри**
-    base64, — и `b64decode` отдаёт мусор («invalid start byte 0x9c»). Убрав их до
-    выдачи, мы оставляем строку, в которой экранировать просто нечего.
+    ⚠ Обёртку в base64 и разбор делает `mysql_source_json` — там же объяснено, зачем
+    она нужна и почему переводы строк снимаются в SQL. Здесь только запрос.
     """
     said = ', '.join(f"'{one}', `{one}`" for one in columns)
-    sql = ("SELECT REPLACE(TO_BASE64(CAST(COALESCE(JSON_ARRAYAGG(JSON_OBJECT("
-           f"{said})), JSON_ARRAY()) AS CHAR)), '\\n', '') "
-           f'FROM (SELECT * FROM `{table}`'
-           + (f' WHERE {where}' if where else '')
-           + f' LIMIT {int(chunk)}) one')
-    got = _ask(source, sql)
 
-    if not got['ok']:
-        raise RuntimeError(f"{table}: строки не спросить — {got['said'][:200]}")
-
-    packed = ''.join(got['out'].split())
-    if not packed:
-        return []
-
-    try:
-        return json.loads(base64.b64decode(packed).decode('utf-8'))
-    except (json.JSONDecodeError, ValueError) as bad:
-        raise RuntimeError(f'{table}: ответ источника не разобрался — {bad}') from bad
+    return mysql_source_json(
+        source,
+        f'SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT({said})), JSON_ARRAY()) '
+        f'FROM (SELECT * FROM `{table}`'
+        + (f' WHERE {where}' if where else '')
+        + f' LIMIT {int(chunk)}) one', what=f'{table}: строки')
 
 
 def _translation(source, target, table: str, key: str) -> dict:
@@ -324,15 +283,11 @@ def _translation(source, target, table: str, key: str) -> dict:
     here, there = {}, {}
 
     for said, where, into in ((source, 'источник', here), (target, 'получатель', there)):
-        got = _ask(said, f'SELECT `id`, `{key}` FROM `{table}`')
-        if not got['ok']:
-            raise RuntimeError(f"{table}: {where} не отдал ключи — {got['said'][:200]}")
-
-        for line in got['out'].split('\n'):
-            if '\t' not in line:
+        for row in mysql_source_rows(said, f'SELECT `id`, `{key}` FROM `{table}`',
+                                     what=f'{table}: {where} не отдал ключи'):
+            if len(row) < 2:
                 continue
-            row_id, natural = line.split('\t', 1)
-            into[row_id.strip()] = natural.strip()
+            into[row[0].strip()] = row[1].strip()
 
     back = {natural: row_id for row_id, natural in there.items()}
 

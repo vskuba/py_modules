@@ -41,7 +41,6 @@
 Порядок значим только для чтения отчёта: «слева есть, справа нет» читается как
 «уедет и сломается». Поменяй стороны — тот же список прочтётся наоборот.
 """
-import subprocess
 import sys
 
 from pathlib import Path
@@ -52,6 +51,8 @@ if __package__ in (None, ''):
     _here = str(Path(__file__).resolve().parent)
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from mysql_.mysql_source import mysql_source_rows
 
 # Что снимается с базы. ⚠⚠ Один запрос на вид, а не один на всё: `UNION` свёл бы
 # столбцы с индексами в одну плоскую таблицу, и разбор стал бы угадыванием.
@@ -157,24 +158,8 @@ def mysql_schema_diff_read(source) -> dict:
     out = {}
 
     for kind, sql in MYSQL_SCHEMA_DIFF_SQL.items():
-        # ⚠ `shell=True` намеренно, как в `mysql_collate_of` и `mysql_rehearse_run`:
-        # `source` — команда оператора с `docker exec` и ssh, где кавычки идут в три
-        # слоя. Строка приходит из своей же командной строки, чужого ввода здесь нет.
-        got = subprocess.run(str(source), shell=True, input=sql.strip(),
-                             capture_output=True, text=True, check=False)
-
-        if got.returncode != 0:
-            raise RuntimeError(f'{kind}: база не ответила — '
-                               f'{(got.stderr or "").strip()[:200]}')
-
-        rows = {}
-        for line in got.stdout.split('\n'):
-            if not line.strip():
-                continue
-            parts = line.split('\t')
-            rows[parts[0]] = tuple(parts[1:])
-
-        out[kind] = rows
+        out[kind] = {one[0]: tuple(one[1:])
+                     for one in mysql_source_rows(source, sql.strip(), what=kind)}
 
     return out
 

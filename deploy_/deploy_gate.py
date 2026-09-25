@@ -39,7 +39,6 @@
 ⚠ Чего застава не делает: не гоняет сюиту, не смотрит прод, не ходит в базу.
 Она обязана отвечать за секунды — иначе её снимут вместе с пользой.
 """
-import json
 import os
 import re
 import subprocess
@@ -56,13 +55,14 @@ if __package__ in (None, ''):
 
 from deploy_.deploy_precheck import (deploy_precheck, deploy_precheck_format,
                                      deploy_precheck_stopped)
+from tool_.tool_hook import tool_hook_run
 
 # Переменная окружения, снимающая заставу. ⚠ Имя длинное намеренно: короткое
 # однажды окажется выставленным в общем окружении, и застава замолчит навсегда.
 DEPLOY_GATE_PASS = 'DEPLOY_GATE_PASS'
 
-# Код возврата, которым Claude Code отменяет вызов и отдаёт stderr агенту.
-DEPLOY_GATE_BLOCK = 2
+# Инструменты, на которые поставлена застава.
+DEPLOY_GATE_TOOLS = ('Bash',)
 
 # Приметы выкладки в тексте команды.
 #
@@ -163,8 +163,8 @@ def deploy_gate_marks(command) -> str:
 def main() -> int:
     """Хук `PreToolUse`: код 2 отменяет команду, 0 — пропускает.
 
-    ⚠ Своя ошибка заставы пропускает выкладку, а не останавливает её: сломанный
-    хук, запрещающий всё, страшнее непроверенной выкладки — второе видно, первое нет.
+    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в `tool_hook`,
+    одним местом на обе заставы. Здесь только `--marks` и вопрос про команду.
     """
     if len(sys.argv) > 1 and sys.argv[1] == '--marks':
         for one in DEPLOY_GATE_MARKS:
@@ -172,26 +172,14 @@ def main() -> int:
 
         return 0
 
-    data = _payload()
-    if data.get('tool_name') not in (None, 'Bash'):
-        return 0
+    return tool_hook_run(DEPLOY_GATE_TOOLS, _look)
 
+
+def _look(data: dict) -> str:
+    """Замечание по этой команде либо пусто. Вид проверки для `tool_hook_run`."""
     command = (data.get('tool_input') or {}).get('command', '')
-    root = data.get('cwd') or '.'
 
-    try:
-        verdict = deploy_gate(command, root)
-    except Exception as bad:      # noqa: BLE001 — см. ⚠ в докстринге
-        print(f'застава сорвалась, выкладка пропущена: {bad}', file=sys.stderr)
-
-        return 0
-
-    if not verdict['stopped']:
-        return 0
-
-    print(deploy_gate_format(verdict), file=sys.stderr)
-
-    return DEPLOY_GATE_BLOCK
+    return deploy_gate_format(deploy_gate(command, data.get('cwd') or '.'))
 
 
 def _root_of(text: str, cwd) -> str:
@@ -230,18 +218,6 @@ def _mark_of(text: str) -> str:
             return one
 
     return ''
-
-
-def _payload() -> dict:
-    """Ввод хука: JSON на stdin. Не JSON — пустой словарь, и застава молчит.
-
-    ⚠⚠ Сломанный ввод обязан пропускать, а не блокировать: хук стоит на **каждом**
-    `Bash`, и упади он — работа встанет целиком, причём необъяснимо для человека.
-    """
-    try:
-        return json.loads(sys.stdin.read() or '{}')
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return {}
 
 
 if __name__ == '__main__':
