@@ -51,6 +51,11 @@ AI_PROVIDER_FAKE_ENV = 'LLM_FAKE'
 AI_PROVIDER_FAKE_URL_ENV = 'LLM_FAKE_API_URL'
 AI_PROVIDER_FAKE_KEY_ENV = 'LLM_FAKE_API_KEY'
 
+# Заголовок, которым прогон называет себя подменному сервису. ⚠ То же имя, что в
+# `ai_llm_fake.FAKE_SESSION_HEADER`: разойдись они — правила лягут в одну ячейку, а
+# ответы придут из другой, и тест покраснеет на пустых ответах без понятной причины.
+AI_PROVIDER_FAKE_SESSION_HEADER = 'X-Fake-Session'
+
 
 class AiProviderFake(AiProvider):
     """Стратегия подменного сервиса: тот же путь, другой адрес."""
@@ -62,6 +67,23 @@ class AiProviderFake(AiProvider):
     local = True
 
     def model_get(self, model_name: str, framework_model: AiFrameworkModel) -> Model:
+        # ⚠⚠ **Прогон называет себя заголовком.** Сценарий у подменного сервиса
+        # хранится по ключу, и без этой строки правила легли бы в общую ячейку —
+        # два pytest разом затирали бы друг другу ответы.
+        #
+        # Ключом служит `session_uuid`: он уже уникален, уже приходит от теста в
+        # `/chat/ask` и уже идёт до самой модели, включая подпрогоны. Своего
+        # заводить не надо — второй ключ на то же значило бы держать их в согласии.
+        #
+        # ⚠ Клиент правим без опаски: сборка создаёт **новый** на каждый ход
+        # (`ai_framework.llm_model_get`), и он принадлежит этому вызову. Будь он
+        # общим, заголовок протёк бы в соседний прогон — тот самый разнос, от
+        # которого мы здесь и уходим.
+        session = str(getattr(framework_model, 'session_uuid', '') or '').strip()
+
+        if session and self.http_client is not None:
+            self.http_client.headers[AI_PROVIDER_FAKE_SESSION_HEADER] = session
+
         provider = OpenAIProvider(
             base_url=config_get(AI_PROVIDER_FAKE_URL_ENV),
             api_key=config_get(AI_PROVIDER_FAKE_KEY_ENV) or 'fake',

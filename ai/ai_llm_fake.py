@@ -39,6 +39,26 @@ JSON с такими ключами», подставляла заготовки
 проверяет, что шаг вообще спрашивал модель, — и видит настоящий промпт, если
 правило не совпало.
 
+## ⚠⚠ У каждого прогона свой сценарий — заголовком
+
+Сценарий хранится **не один на сервис**, а по ключу из заголовка
+`X-Fake-Session`. Тест кладёт правила с ключом, движок приходит за ответом с тем
+же ключом, и сервис их сводит:
+
+    POST /fixtures          X-Fake-Session: 9f1c…   ← правила этого прогона
+    POST /chat/completions   X-Fake-Session: 9f1c…   ← ответ по ним же
+
+Ключом служит `session_uuid` — тот самый, что тест кладёт в `/chat/ask`, а движок
+несёт до самой модели, включая подпрогоны. Своего заводить не надо: он уже
+уникален и уже идёт насквозь.
+
+⚠⚠ **Вот зачем это.** Пока сценарий был один, два прогона pytest разом затирали
+друг другу правила: второй зеленел на ответах первого либо краснел непонятно. С
+ключом их можно гонять сколько угодно — хоть сотнями, хоть в `xdist`.
+
+⚠ Заголовка нет — работает общая ячейка (ключ пустой). Так ходят проверки живости
+и `curl` руками: ломать их ради разделения незачем.
+
 ## ⚠ Зависимостей нет
 
 Стандартный `http.server`: сервис поднимается рядом с тестами и в CI, и тянуть
@@ -57,28 +77,47 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # ответы ничего не утверждает, и подсовывать ему правдоподобные слова незачем.
 FAKE_TEXT = ''
 
-# Сколько последних вызовов помним. ⚠ Не «все»: сервис живёт между прогонами, и
-# неограниченный список рос бы всю неделю.
+# Сколько последних вызовов помним — на каждый прогон. ⚠ Не «все»: сервис живёт
+# между прогонами, и неограниченный список рос бы всю неделю.
 FAKE_CALLS_MAX = 200
+
+# Заголовок, которым прогон называет себя. ⚠ Имя со своей приставкой: в запросе
+# рядом живут заголовки клиента OpenAI, и `X-Session` среди них не сказал бы, чей он.
+FAKE_SESSION_HEADER = 'X-Fake-Session'
+
+# Сколько прогонов помним разом. ⚠⚠ Предел обязателен: ключ — `session_uuid`,
+# новый на каждый вызов, и без вытеснения сервис за неделю накопил бы десятки
+# тысяч ячеек. Вытесняется самая давняя по последнему обращению.
+FAKE_SESSIONS_MAX = 256
 
 
 class FakeState:
-    """Сценарий и журнал вызовов. Общие на процесс, под замком.
+    """Сценарии и журналы вызовов — по ячейке на прогон, под замком.
 
     ⚠ Замок обязателен: `ThreadingHTTPServer` обслуживает запросы в разных
     потоках, а движок workflow шлёт их подряд, да ещё и из подпрогонов.
+
+    ## ⚠⚠ Ячейка на прогон, а не одна на сервис
+
+    Ключ — значение заголовка `X-Fake-Session`, то есть `session_uuid` прогона.
+    Пока сценарий был один, два pytest разом затирали друг другу правила; теперь
+    их можно гонять сколько угодно.
+
+    ⚠ Ключа нет — работает общая ячейка (пустая строка). Так ходят проверки
+    живости и `curl` руками.
     """
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.rules: list = []
-        self.default = None
-        self.calls: list = []
+        # ключ прогона → {'rules', 'default', 'calls', 'at'}
+        self.cells: dict = {}
 
-    def fixtures_set(self, rules: list, default=None, forget: bool = True) -> None:
-        """Заменить сценарий целиком.
+    def fixtures_set(self, key: str, rules: list, default=None,
+                     forget: bool = True) -> None:
+        """Заменить сценарий этого прогона целиком.
 
         Args:
+            key: чей сценарий — ключ из заголовка.
             rules: правила «примета промпта → ответ».
             default: чем отвечать, когда не совпало ни одно.
             forget: забыть ли прежние вызовы.
@@ -89,29 +128,67 @@ class FakeState:
         ровно в тот момент, когда за ней приходят.
         """
         with self.lock:
-            self.rules = list(rules or [])
-            self.default = default
+            cell = self._cell(key)
+            cell['rules'] = list(rules or [])
+            cell['default'] = default
 
             if forget:
-                self.calls = []
+                cell['calls'] = []
 
-    def answer_for(self, prompt: str) -> str:
-        """Ответ по первому совпавшему правилу; иначе умолчание."""
+    def answer_for(self, key: str, prompt: str) -> str:
+        """Ответ по первому совпавшему правилу этого прогона; иначе умолчание."""
         with self.lock:
-            self.calls.append({'prompt': str(prompt)[:4000], 'at': time.time()})
-            del self.calls[:-FAKE_CALLS_MAX]
+            cell = self._cell(key)
+            cell['calls'].append({'prompt': str(prompt)[:4000], 'at': time.time()})
+            del cell['calls'][:-FAKE_CALLS_MAX]
 
-            for rule in self.rules:
+            for rule in cell['rules']:
                 mark = str((rule or {}).get('when') or '')
 
                 if mark and mark in prompt:
                     return _as_text((rule or {}).get('answer'))
 
-            return _as_text(self.default) if self.default is not None else FAKE_TEXT
+            return (_as_text(cell['default']) if cell['default'] is not None
+                    else FAKE_TEXT)
 
-    def calls_get(self) -> list:
+    def calls_get(self, key: str) -> list:
         with self.lock:
-            return list(self.calls)
+            return list(self._cell(key)['calls'])
+
+    def _cell(self, key: str) -> dict:
+        """Ячейка прогона; нет — завести и вытеснить самую давнюю.
+
+        ⚠ Зовётся **под замком** — своего не берёт.
+
+        ⚠⚠ Вытеснение по последнему обращению, а не по заведению: долгий прогон
+        живёт минуты и за это время успевает пропустить мимо себя сотню чужих
+        ключей. Считай мы по заведению, его собственная ячейка исчезла бы
+        посередине, и правила перестали бы совпадать без единой ошибки.
+        """
+        key = str(key or '')
+        cell = self.cells.get(key)
+
+        if cell is None:
+            # ⚠ Отметка времени ставится **сразу**: вытеснение ниже сравнивает
+            # ячейки по ней, и заведённая без отметки уронила бы сравнение.
+            cell = {'rules': [], 'default': None, 'calls': [], 'at': time.time()}
+            self.cells[key] = cell
+
+            # ⚠ Общая ячейка из отбора исключена, а не прерывает его: окажись она
+            # самой давней, вытеснение останавливалось бы на ней — и предел
+            # перестал бы работать вовсе. Хозяина у неё нет, завести заново её
+            # некому.
+            while len(self.cells) > FAKE_SESSIONS_MAX:
+                older = [k for k in self.cells if k != '' and k != key]
+
+                if not older:
+                    break
+
+                del self.cells[min(older, key=lambda k: self.cells[k]['at'])]
+
+        cell['at'] = time.time()
+
+        return cell
 
 
 STATE = FakeState()
@@ -145,7 +222,7 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.rstrip('/')
 
         if path.endswith('/calls'):
-            self._send({'calls': STATE.calls_get()})
+            self._send({'calls': STATE.calls_get(self._key())})
 
             return
 
@@ -160,15 +237,21 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         # ⚠ Журнал оставляем: за ним приходят уже после теста.
-        STATE.fixtures_set([], None, forget=False)
+        STATE.fixtures_set(self._key(), [], None, forget=False)
         self._send({'status': 'ok'})
 
     def do_POST(self):
         payload = self._payload()
 
         if self.path.rstrip('/').endswith('/fixtures'):
-            STATE.fixtures_set(payload.get('rules') or [], payload.get('default'))
-            self._send({'status': 'ok', 'rules': len(payload.get('rules') or [])})
+            STATE.fixtures_set(self._key(), payload.get('rules') or [],
+                               payload.get('default'))
+            self._send({'status': 'ok', 'rules': len(payload.get('rules') or []),
+                        # ⚠ Ключ возвращаем: по нему тест видит, что сервис его
+                        # **получил**. Потеряйся заголовок по дороге, правила
+                        # легли бы в общую ячейку, а движок искал бы в своей — и
+                        # это была бы тихая беда, а не красное.
+                        'session': self._key()})
 
             return
 
@@ -178,7 +261,7 @@ class _Handler(BaseHTTPRequestHandler):
         """Ответ модели на запрос `/chat/completions`."""
         messages = payload.get('messages') or []
         prompt = '\n'.join(str((one or {}).get('content') or '') for one in messages)
-        content = STATE.answer_for(prompt)
+        content = STATE.answer_for(self._key(), prompt)
 
         self._send({
             'id': f'chatcmpl-{uuid.uuid4().hex[:24]}',
@@ -194,6 +277,14 @@ class _Handler(BaseHTTPRequestHandler):
             # там читался бы как «шаг не ходил к модели».
             'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
         })
+
+    def _key(self) -> str:
+        """Чей это прогон. Пусто — общая ячейка.
+
+        ⚠ Заголовки HTTP регистр не различают, и `self.headers` это учитывает: клиент
+        вправе прислать `x-fake-session`, и найдётся он тем же обращением.
+        """
+        return str(self.headers.get(FAKE_SESSION_HEADER) or '').strip()
 
     def _payload(self) -> dict:
         size = int(self.headers.get('Content-Length') or 0)
