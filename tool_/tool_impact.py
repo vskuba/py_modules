@@ -10,6 +10,7 @@ JS и шаблоны страниц, тесты, доки. Обход одним
 О конкретном проекте не знает ничего: имя — любое, пути передаёт тот, кто зовёт.
 """
 import argparse
+import ast
 import re
 import sys
 
@@ -72,7 +73,65 @@ def tool_impact(name: str, root='.') -> list[dict]:
     return hits
 
 
+def tool_impact_functions(name: str, root='.') -> list[dict]:
+    """В каких **функциях** упомянуто имя: `{file, func, line}`.
+
+    Тот же вопрос, что у `tool_impact`, но мельче: не «в какой строке», а «внутри
+    какой функции». Нужно там, где строка сама по себе ответа не даёт — например,
+    чтобы отличить живого читателя настройки от читателя, который сам мёртв.
+
+    Args:
+        name: имя, ключ или литерал — целое слово.
+        root: откуда искать; смотрит только `.py` — у функций есть тело лишь там.
+
+    Returns:
+        [{'file', 'func', 'line'}, ...] по файлам и строкам. Пусто — имя не
+        упомянуто ни в одной функции (оно может при этом стоять на уровне модуля).
+
+    ⚠⚠ Разбором дерева, а не поиском по строкам: строка не знает, в чьём она теле.
+    Цена — видны только функции; упоминание на уровне модуля (в константе, в
+    списке) сюда не попадает **намеренно**: у него нет вызывающего, а вопрос
+    задают ровно про вызываемость.
+
+    ⚠ Считается и вложенная функция: её тело входит и в неё, и во внешнюю. Так и
+    надо — зовут внешнюю, а живёт упоминание внутри.
+
+    ⚠ Файл с синтаксической ошибкой пропускается молча: инструмент вспомогательный
+    и падать из-за чужой недописанной правки не должен.
+    """
+    word = re.compile(rf'(?<!\w){re.escape(name)}(?!\w)')
+    base = Path(root)
+    out = []
+
+    for path in file_walk(base, ('.py',)):
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+        except (SyntaxError, ValueError, UnicodeDecodeError, OSError):
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            try:
+                body = ast.unparse(node)
+            except (AttributeError, ValueError):
+                continue
+            if word.search(body):
+                out.append({'file': _short(base, path), 'func': node.name,
+                            'line': node.lineno})
+
+    return sorted(out, key=lambda one: (one['file'], one['line']))
+
+
 # ── детали реализации ──
+
+def _short(base: Path, path) -> str:
+    """Путь от корня обхода. ⚠ Не сорвётся, если путь лежит вне корня."""
+    try:
+        return Path(path).relative_to(base).as_posix()
+    except ValueError:
+        return str(path)
+
 
 def _layer(where: str) -> str:
     """Слой по пути: код → разметка → тесты → док — по порядку, а не по алфавиту."""
