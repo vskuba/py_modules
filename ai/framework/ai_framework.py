@@ -66,6 +66,21 @@ class AbstractAiFramework(ABC):
         pass
 
     async def message_history_save(self, framework_model: AiFrameworkModel):
+        """Сложить историю вызова модели в журнал сессии — руками потребителя.
+
+        ⚠⚠ **`companion_id` сюда больше не передаётся, и это не упущение.** Столбец
+        `agent_session.companion_id` у потребителя убран намеренно: журнал отвечает
+        «что спросили у модели и что она ответила», а «кто с кем разговаривает» —
+        вопрос отдельной таблицы разговоров, где у обмена своя строка.
+
+        Слой же продолжал слать этот довод, метод проекта его уже не принимал, и
+        **каждый** заход агента падал `TypeError: … unexpected keyword argument
+        'companion_id'` — причём внутри сохранения истории, то есть уже после
+        удачного ответа модели: работа сделана, деньги потрачены, ответ потерян.
+
+        ⚠ `framework_model.companion_id` остаётся: он нужен как переменная прогона,
+        просто в журнал вызовов не уезжает.
+        """
         if framework_model.session_disabled:
             return
 
@@ -118,8 +133,7 @@ class AbstractAiFramework(ABC):
                         role=role,
                         agent_id=framework_model.entity_agent.get('id'),
                         kind_type=part_kind,
-                        content=str(content).strip(),
-                        companion_id=framework_model.companion_id
+                        content=str(content).strip()
                     )
 
             # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
@@ -148,8 +162,7 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='thinking',
                                 content=part.content.strip(),
-                                token=tokens_count,
-                                companion_id=framework_model.companion_id
+                                token=tokens_count
                             )
 
                         # Текст ответа (Финальный или промежуточный)
@@ -164,8 +177,7 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type=kind,
                                 content=part.content.strip(),
-                                token=tokens_count,
-                                companion_id=framework_model.companion_id
+                                token=tokens_count
                             )
 
                         # Вызовы инструментов
@@ -180,8 +192,7 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='tool-call',
                                 content=tool_content,
-                                token=tokens_count,
-                                companion_id=framework_model.companion_id
+                                token=tokens_count
                             )
 
         self.message_history = {}
