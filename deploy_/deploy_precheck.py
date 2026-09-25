@@ -47,6 +47,7 @@
 """
 import subprocess
 import sys
+import warnings
 
 from pathlib import Path
 
@@ -94,6 +95,18 @@ DEPLOY_PRECHECK_BASE = 'origin/master'
 DEPLOY_PRECHECK_MIGRATION_STOP = ('alter-before-create', 'shared-label',
                                   're-runs-on-start')
 
+# Виды находок миграций, которые не показываются вовсе.
+#
+# ⚠⚠ `non-latin-in-query` — про кириллицу в тексте запроса, а в этих проектах
+# отчётные подписи миграций пишутся по-русски намеренно (`SELECT 'ДО' AS этап`,
+# `AS осталось_старых`): их читает человек в выводе миграции. Проверка честна, но
+# для принятого здесь стиля срабатывает на каждой миграции — 313 строк «взгляда»
+# на один заход, в которых тонет всё остальное.
+#
+# ⚠ Это решение **показа**, а не самой проверки: `mysql_migration_check` оставлен
+# как есть, и проекту с другим соглашением довод пригодится.
+DEPLOY_PRECHECK_MIGRATION_MUTE = ('non-latin-in-query',)
+
 
 def deploy_precheck(root='.', only=(), skip=(), whole=False) -> list[dict]:
     """Быстрые проверки кода перед выкладкой: кириллица, порядок, js, миграции.
@@ -128,6 +141,11 @@ def deploy_precheck(root='.', only=(), skip=(), whole=False) -> list[dict]:
             if (not only or one in only) and one not in skip]
     going = None if whole else _changed(base)
     found = []
+
+    # ⚠ Разбор чужих файлов сыплет `SyntaxWarning` (устаревшая экранировка в чужих
+    # строках), и предупреждения уходили в stderr **вперемешку с отчётом заставы**.
+    # К находкам они отношения не имеют: чинить их — не дело проверки перед выкладкой.
+    warnings.simplefilter('ignore', SyntaxWarning)
 
     for name in want:
         try:
@@ -273,6 +291,8 @@ def _check_migrations(base: Path, going) -> list[dict]:
 
     out = []
     for one in mysql_migration_check_check(where):
+        if one['kind'] in DEPLOY_PRECHECK_MIGRATION_MUTE:
+            continue
         if not _going(base, where / one['file'], going):
             continue
 

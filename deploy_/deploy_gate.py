@@ -42,6 +42,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 
 from pathlib import Path
@@ -74,11 +75,20 @@ DEPLOY_GATE_BLOCK = 2
 # этой точке — последняя, где правка ещё дешева.
 DEPLOY_GATE_MARKS = (
     r'\./deploy\.sh',
-    r'\bmake\s+deploy\b',
-    r'\bgit\s+push\b',
+    r'make\s+deploy\b',
+    r'git\s+(?:-C\s+\S+\s+)?push\b',
     r'docker\s+compose[^\n]*\bup\b[^\n]*-d',
-    r'\bssh\s+\S*prod\S*[^\n]*docker\s+compose',
+    r'ssh\s+\S*prod\S*[^\n]*docker\s+compose',
 )
+
+# Начало команды: строка целиком, либо после разделителя команд оболочки.
+#
+# ⚠⚠ Приметы ищутся **только в позиции команды**, а не где угодно в тексте. Без этого
+# застава ловила сама себя: строка `echo '{"command":"./deploy.sh"}'` — это `echo`, а не
+# выкладка, и первая же проверка заставы оказалась заблокирована собственной приметой.
+# Кавычки при этом не разбираются (полного разбора оболочки здесь не будет), но
+# «выкладка внутри строкового довода» отсекается именно позицией.
+DEPLOY_GATE_HEAD = r'(?:^|\n|;|&&|\|\||\|)\s*(?:[A-Z_]+=\S+\s+)*'
 
 # Проверки, которые застава не гоняет. ⚠ `pages` требует разбора всех роутеров, и
 # на нетронутых шаблонах отвечает шумом; на выкладке её зовут руками.
@@ -90,31 +100,39 @@ def deploy_gate(command, root='.') -> dict:
 
     Args:
         command: текст команды, которую собираются запустить.
-        root: корень проекта, откуда её запускают.
+        root: каталог, из которого её запускают — у хука это каталог **сессии**.
 
     Returns:
-        dict: `{deploy, stopped, found, why}` — выкладка ли это, сколько находок
-        держат, сами находки и одна строка о решении. `deploy` ложно — остальные
-        поля пусты, и это самый частый ответ.
+        dict: `{deploy, stopped, found, why, root}` — выкладка ли это, сколько
+        находок держат, сами находки, строка о решении и репозиторий, который
+        вправду проверен. `deploy` ложно — остальные поля пусты, и это самый
+        частый ответ.
 
     ⚠ Проверки запускаются **только** на приметах выкладки: застава стоит на каждом
     `Bash`, и лишние две секунды на `ls` заметит сразу и человек, и агент.
+
+    ⚠⚠ Проверяется репозиторий, в котором команда **вправду выполнится**, а не
+    каталог сессии. Хук получает `cwd` сессии, и `cd py_modules && git push` из
+    проекта проверялся бы по проекту: первый же пуш общего слоя встал из-за долга
+    чужого репозитория, к выкладке отношения не имеющего.
     """
     text = str(command or '')
     mark = _mark_of(text)
 
     if not mark:
-        return {'deploy': False, 'stopped': 0, 'found': [], 'why': ''}
+        return {'deploy': False, 'stopped': 0, 'found': [], 'why': '', 'root': ''}
+
+    where = _root_of(text, root)
 
     if os.environ.get(DEPLOY_GATE_PASS):
-        return {'deploy': True, 'stopped': 0, 'found': [],
+        return {'deploy': True, 'stopped': 0, 'found': [], 'root': where,
                 'why': f'застава снята через {DEPLOY_GATE_PASS}'}
 
-    found = deploy_precheck(root, skip=DEPLOY_GATE_SKIP)
+    found = deploy_precheck(where, skip=DEPLOY_GATE_SKIP)
     stopped = deploy_precheck_stopped(found)
 
-    return {'deploy': True, 'stopped': stopped, 'found': found,
-            'why': f'примета выкладки: {mark}'}
+    return {'deploy': True, 'stopped': stopped, 'found': found, 'root': where,
+            'why': f'примета выкладки: {mark} (проверен {where})'}
 
 
 def deploy_gate_format(verdict) -> str:
@@ -176,10 +194,39 @@ def main() -> int:
     return DEPLOY_GATE_BLOCK
 
 
+def _root_of(text: str, cwd) -> str:
+    """Репозиторий, в котором команда вправду выполнится.
+
+    Читает из самой команды `cd <путь>` и `git -C <путь>`, затем поднимается до
+    корня git-дерева. Ничего не нашлось — остаётся каталог сессии.
+
+    ⚠ Берётся **последний** `cd` в цепочке: `cd /tmp && cd py_modules && git push`
+    выполнится в `py_modules`, и проверять надо его.
+
+    ⚠ Корень git ищется `rev-parse`, а не поиском `.git` вверх по дереву: у
+    подмодуля `.git` — файл со ссылкой, и наивный поиск отдал бы родителя.
+    """
+    here = Path(str(cwd or '.'))
+    # ⚠ Та же привязка к позиции команды, что у примет: без неё `git -C <путь>`,
+    # попавшийся внутри строкового довода, увёл бы проверку в чужой репозиторий —
+    # именно это и случилось на первой проверке.
+    found = re.findall(DEPLOY_GATE_HEAD + r'cd\s+([^\s&;|]+)', text)
+    found += re.findall(DEPLOY_GATE_HEAD + r'git\s+-C\s+([^\s&;|]+)', text)
+
+    for one in found:
+        step = Path(one.strip('\'"')).expanduser()
+        here = step if step.is_absolute() else here / step
+
+    got = subprocess.run(['git', '-C', str(here), 'rev-parse', '--show-toplevel'],
+                         capture_output=True, text=True, check=False)
+
+    return got.stdout.strip() if got.returncode == 0 else str(here)
+
+
 def _mark_of(text: str) -> str:
-    """Первая совпавшая примета выкладки — она же объяснение решения."""
+    """Первая примета выкладки, стоящая в позиции команды, — она же объяснение."""
     for one in DEPLOY_GATE_MARKS:
-        if re.search(one, text, re.IGNORECASE):
+        if re.search(DEPLOY_GATE_HEAD + one, text, re.IGNORECASE):
             return one
 
     return ''
