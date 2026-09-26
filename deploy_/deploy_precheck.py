@@ -29,6 +29,7 @@
 | `pages`        | `page_wire_check` | шаблон, которого нет, и страница вне навигации |
 | `dead`         | `tool_dead`       | имя, которое правка оставила без зовущих |
 | `instead`      | `tool_instead`    | своё поверх готового в общем слое |
+| `keys`         | разбор dict-реестров | ключ исчез из реестра — выставленное значение на проде молча откатится к умолчанию |
 
 ⚠⚠ У `dead` отбор **двойной**: мёртвое в уезжающем файле плюс мёртвое, чьё имя
 стояло в **убранных** строках правки. Вторая половина важнее: убрав последний зов в
@@ -51,6 +52,7 @@
 ⚠ `js` требует `node` в системе. Нет его — проверка честно скажется
 непроведённой, а не тихо пройдёт: «проверено» и «проверить не смогли» — разное.
 """
+import ast
 import re
 import subprocess
 import sys
@@ -82,7 +84,7 @@ DEPLOY_PRECHECK_LOOK = 'взгляд'
 
 # Порядок проверок в отчёте. ⚠ Имена короткие: ими же пользуются `--only`/`--skip`.
 DEPLOY_PRECHECK_ORDER = ('cyrillic', 'order', 'js', 'migrations', 'collate',
-                         'pages', 'dead', 'instead')
+                         'pages', 'dead', 'instead', 'keys')
 
 # Каталог кода по договору проектов.
 DEPLOY_PRECHECK_SRC = 'src'
@@ -517,6 +519,83 @@ def _dropped(base: Path) -> set:
     return out - back
 
 
+def _check_keys(base: Path, going) -> list[dict]:
+    """Ключи, исчезнувшие из dict-реестров: на проде значение молча откатится к умолчанию.
+
+    Правило проектов: ключ настройки не переименовывают — выставленное человеком
+    значение живёт в базе под **старым** именем, и с переименованием оно теряется
+    для глаза молча: реестр цел, а панель показывает умолчание.
+
+    ⚠ `взгляд`, а не `стоп`: общий слой не знает, какие dict здесь данные
+    (JSON настроек, контракты), а какие — временные структуры. Человек сверяет
+    сам; парный «исчез X — появился Y» в том же dict — почти всегда переименование.
+    """
+    files = [one for one in (going if going is not None else _changed(base))
+             if one.endswith('.py')]
+    if not files:
+        return [_note('keys', 'уезжающих python-файлов нет — пропущено')]
+
+    out = []
+    for one in files:
+        try:
+            now = _dicts((base / one).read_text(encoding='utf-8', errors='replace'))
+        except (OSError, SyntaxError):
+            continue
+
+        for name, (line, was) in _dicts(_show(base, one)).items():
+            became = now.get(name, (0, []))[1]
+            gone = [k for k in was if k not in became]
+            if not gone:
+                continue
+            arrived = [k for k in became if k not in was]
+            hint = f', рядом появились {", ".join(arrived[:2])} — переименованы?' \
+                if arrived else ''
+            out.append({'check': 'keys', 'level': DEPLOY_PRECHECK_LOOK,
+                        'where': f'{one}:{line}',
+                        'what': f'`{name}`: ключи {", ".join(gone[:3])} исчезли{hint}'})
+
+    return out
+
+
+def _dicts(text: str) -> dict:
+    """Dict-реестры верхнего уровня файла: {имя: (строка, строковые ключи)}.
+
+    ⚠ Только уровень модуля и только константные строковые ключи: реестры
+    настроек пишутся именно так, а выдумывать ключ из `f"..."` — находок ради
+    плодить ложь.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return {}
+
+    out = {}
+    for node in tree.body:
+        # `Assign` даёт `targets` — список, `AnnAssign` — один `target`:
+        # имя реестра в обоих случаях на первом месте.
+        value = getattr(node, 'value', None)
+        targets = getattr(node, 'targets', None) or [getattr(node, 'target', None)]
+        target = targets[0] if isinstance(targets, list) and targets else None
+        if not isinstance(value, ast.Dict) or not isinstance(target, ast.Name):
+            continue
+        keys = [k.value for k in value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        if keys:
+            out[target.id] = (node.lineno, keys)
+    return out
+
+
+def _show(base: Path, rel: str) -> str:
+    """Файл по ту сторону диффа — тем же путём; нет в базе — пустой текст.
+
+    Пустой — законно: новый файл не мог потерять ключ, ему неоткуда.
+    """
+    got = subprocess.run(['git', '-C', str(base), 'show',
+                          f'{DEPLOY_PRECHECK_BASE}:{rel}'],
+                         capture_output=True, text=True, check=False)
+    return got.stdout if got.returncode == 0 else ''
+
+
 def _note(check: str, what: str) -> dict:
     """Сообщение о самой проверке, а не находка: `level` пуст намеренно."""
     return {'check': check, 'level': '', 'where': '', 'what': what}
@@ -534,7 +613,8 @@ def _short(base: Path, path) -> str:
 # бы держать имена строками и терять проверку опечаток при запуске.
 _CHECKS = {'cyrillic': _check_cyrillic, 'order': _check_order, 'js': _check_js,
            'migrations': _check_migrations, 'collate': _check_collate,
-           'pages': _check_pages, 'dead': _check_dead, 'instead': _check_instead}
+           'pages': _check_pages, 'dead': _check_dead, 'instead': _check_instead,
+           'keys': _check_keys}
 
 
 if __name__ == '__main__':
