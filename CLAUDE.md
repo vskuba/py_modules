@@ -95,7 +95,13 @@ namespace-папок, которые проекты импортируют на�
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
 | `file_/file_check.py` | `docs/file_check.md` — цел ли файл: пустышка, огрызок, подмена головы; ⚠ `is_file()` ≠ «цел» |
 | `file_/file_walk.py` | `docs/file_walk.md` — обход дерева без `.venv`/`.git`/`node_modules`: общий низ описи, вычитки и поиска по слоям; ⚠ фильтр после обхода не экономит ничего |
-| `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом; ⚠ орфографию без словаря не ловит |
+| `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом (py, js-семейство, md); ⚠ орфографию без словаря не ловит |
+| `ssh_/ssh_fleet.py`, `ssh_/ssh_put.py` | `docs/ssh_fleet.md` — флот разом: параллельно всем целям, мёртвый узел — запись; файл на цель с правами в один поход |
+| `systemd_/` | `docs/systemd_status.md` — состояние юнита словарем, журнал хвостом с фильтром; ⚠ замороженный юнит выглядит живым |
+| `gpu_/gpu_vram.py` | `docs/gpu_vram.md` — видеопамять числами, держатели процессами; ⚠ GB10 по платам отдаёт нули |
+| `proc_/` | `docs/proc_mem.md` — память машины из /proc без колонок `free`, топ держателей по RSS |
+| `net_/net_port.py` | `docs/net_port.md` — порт свободен ли, дождаться занятия/освобождения; ⚠ `up` ≠ «сервис здоров» |
+| `dsh_/dsh_api.py` | `docs/dsh_api.md` — метод хоста harness'а: cookie из секрета на диске, конверт, alive; ⚠ `_request` с подчёркиванием |
 | `text_/text_emoji.py` | `docs/text_emoji.md` — эмодзи, разобранные чужим кодом неверно: зовётся на границе входа; ⚠ греческий с цифрой вплотную |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
@@ -209,7 +215,7 @@ CLI есть у модулей, которыми пользуются «рука
 |--------|---------|
 | `tool_.tool_find` | `«намерение словами» [--limit N]`, `--map` → функции и темы по запросу |
 | `tool_.tool_catalog` | `[--kind func\|topic --namespace adb_ --cli --json]` → опись слоя машинно |
-| `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose`, `--cyrillic` → следы неудачной правки в прозе; кириллица в именах, параметрах и ключах; код возврата = число находок |
+| `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose`, `--cyrillic` → следы неудачной правки в прозе (py, js-семейство, md); кириллица в именах, параметрах и ключах; код возврата = число находок |
 | `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
 | `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
 | `file_.file_check` | `файл... [--size --sha] [--json]` → цел ли файл: пустышка, огрызок, подмена головы; код возврата = число нецелых |
@@ -226,6 +232,15 @@ CLI есть у модулей, которыми пользуются «рука
 | `mysql_.mysql_query` | `address`, `tables`, `columns <таблица>`, `sql '<запрос>' [--write] [--format table\|json\|csv] [--limit N]` |
 | `docker_.compose_x` | `СЕРВИС команда… [-a флаг=значение] [--no-quiet --timeout]` → `{'code','output','error'}`; `$ИМЯ` в `-a` подставляется из окружения проекта; таймаут = `code -1`, не исключение |
 | `ssh_.ssh_x` | `ЦЕЛЬ скрипт\|- [--container --var И=З --timeout]` → скрипт удалённому стеку через stdin: кавычки целы, значения не в `ps` |
+| `ssh_.ssh_fleet` | `ЦЕЛЬ... 'скрипт' [--container --var И=З --timeout]` → JSON-ведомость по узлам, параллельно; код возврата = число неуспешных узлов |
+| `ssh_.ssh_put` | `ФАЙЛ ЦЕЛЬ НАЗНАЧЕНИЕ [--mode 644 --timeout]` → файл на цель с правами в один поход (`rsync`, fallback `scp`) |
+| `systemd_.systemd_status` | `ЮНИТ [--host ЦЕЛЬ --user]` → JSON: жив ли, включён ли, вес, перезапуски |
+| `systemd_.systemd_journal` | `ЮНИТ [-n N] [--since ВРЕМЯ --grep ПОДСТРОКА --host ЦЕЛЬ --user]` → хвост журнала строками |
+| `gpu_.gpu_vram` | `[--gpu N] [--procs --host ЦЕЛЬ]` → JSON: видеопамята плат или держатели; ⚠ GB10 — нули по платам |
+| `proc_.proc_mem` | → JSON-сводка памяти машины из `/proc/meminfo` (байты) |
+| `proc_.proc_top` | `[-n N]` → тяжелейшие процессы по RSS, JSON |
+| `net_.net_port` | `free\|wait PORT [--down --timeout --host]` → свободен ли / дождаться; код возврата 0 — правда |
+| `dsh_.dsh_api` | `alive` / `call МЕТОД [--args '{json}']` / `get ПУТЬ [--base host:port]` → метод хоста harness'а, cookie сама |
 | `docker_.docker_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
 | `evm_.evm_keys` | `address КЛЮЧ` / `sign КЛЮЧ --digest …` → адрес EIP-55; подпись с самопроверкой signer==recovered |
