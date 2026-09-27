@@ -118,6 +118,24 @@ class _Norm(ast.NodeTransformer):
     def __init__(self):
         self.names, self.consts = {}, {}
 
+    @staticmethod
+    def _slot(seen: dict, key) -> str:
+        """Место имени в порядке первого появления: `_0`, `_1`…
+
+        ⚠ Метода не было вовсе — три `visit_*` ниже звали его с первой версии, и
+        `function_twin` падал `AttributeError` на любом непустом теле. То есть
+        проверка «совпавшие тела», обещанная правилами (§4.2, «Автопроверка»), не
+        работала ни разу с момента написания.
+
+        ⚠⚠ Своя таблица на каждый вид имени (`names`, `consts`) — не мелочь:
+        общая свела бы переменную и строковый литерал в одно место, и два тела,
+        различающиеся **только** ключом настройки, стали бы близнецами.
+        """
+        if key not in seen:
+            seen[key] = f'_{len(seen)}'
+
+        return seen[key]
+
     def visit_Name(self, node):
         node = self.generic_visit(node)
         node.id = self._slot(self.names, node.id)
