@@ -456,7 +456,10 @@ def _rows_read(table: str, fields: list, where: str, source: str) -> dict:
         try:
             body = json.loads(_unb64(body_b64))
         except ValueError:
-            body = {'_сырое': _unb64(body_b64)}
+            # ⚠ Тело не разобралось как JSON — кладём как есть, под служебным ключом.
+            # Имя латиницей: кириллица в идентификаторах и ключах запрещена
+            # (`code_rules.md`, §1.2), и проверка `tool_typo --cyrillic` его видела.
+            body = {'_raw': _unb64(body_b64)}
         rows[key] = body
         ids[int(row_id)] = key
 
