@@ -102,8 +102,15 @@ DEPLOY_PRECHECK_BASE = 'origin/master'
 # отдаёт как `взгляд`, и это не мягкость: `unguarded`, `no-stage-markers` и
 # `non-latin-in-query` — про оформление, а `alter-before-create` и `shared-label`
 # означают, что миграция не проедет или проедет не та.
+#
+# ⚠⚠ `merged-statements` держит выкладку по той же причине, и он здесь дороже
+# прочих: миграция со склеенными запросами не просто «не та» — она обрывается на
+# середине, а приложение падает на старте вместе с ней. Один такой файл уже уронил
+# прод-выкладку, и ни глаза, ни репетиция его не увидели: репетиция гоняет файл
+# клиентом `mysql`, а прод — yoyo, и режут они по-разному
+# (`mysql_migration_split_merged`).
 DEPLOY_PRECHECK_MIGRATION_STOP = ('alter-before-create', 'shared-label',
-                                  're-runs-on-start')
+                                  're-runs-on-start', 'merged-statements')
 
 # Виды находок миграций, которые не показываются вовсе.
 #
