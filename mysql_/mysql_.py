@@ -1,4 +1,6 @@
 import asyncio
+import time
+
 import pymysql
 import pymysql.cursors
 import aiomysql
@@ -9,6 +11,7 @@ from aiomysql.pool import _create_pool, Pool
 from config.config import config_get
 from logging_.logging_ import logger_info
 from mysql_.mysql_log import mysql_log_line
+from mysql_.mysql_watch import mysql_watch_note
 
 pool: Optional[aiomysql.Pool] = None
 pool_lock = asyncio.Lock()
@@ -107,11 +110,21 @@ class MySQLConnectionManager:
 
         if LOG_QUERIES:
             logger_info(mysql_log_line(query, args))
+
+        # ⚠ Замер идёт **всегда**, независимо от `LOG_QUERIES`: печать каждого
+        # запроса и счёт запросов — разные вещи, и гасят их порознь. Печать стоит
+        # гигабайтов логов, счётчик — словаря в памяти; выключается он своим
+        # выключателем (`mysql_watch_on/off`), и по умолчанию выключен.
+        started = time.perf_counter()
         try:
-            return await self._cursor.execute(query, args)
+            result = await self._cursor.execute(query, args)
         except Exception as e:
             logger_info(f"[MySQL ERROR]: {str(e)} | Query: {query}")
             raise
+
+        mysql_watch_note(query, args, (time.perf_counter() - started) * 1000,
+                         self._cursor.rowcount)
+        return result
 
     async def executemany(self, query, args):
         if self._cursor is None:
@@ -119,11 +132,19 @@ class MySQLConnectionManager:
 
         if LOG_QUERIES:
             logger_info(f"[MySQL SQL Many]: {query} | Count: {len(args)}")
+
+        started = time.perf_counter()
         try:
-            return await self._cursor.executemany(query, args)
+            result = await self._cursor.executemany(query, args)
         except Exception as e:
             logger_info(f"[MySQL ERROR Many]: {str(e)}")
             raise
+
+        # Значения пачечной вставки в счётчик не кладём: их столько же, сколько
+        # строк, и первая от последней ничем не примечательна.
+        mysql_watch_note(query, None, (time.perf_counter() - started) * 1000,
+                         self._cursor.rowcount)
+        return result
 
 
 class LoggingCursor:
@@ -147,21 +168,32 @@ class LoggingCursor:
         if LOG_QUERIES:
             logger_info(mysql_log_line(query, args))
 
+        started = time.perf_counter()
         try:
-            return await self._cursor.execute(query, args)
+            result = await self._cursor.execute(query, args)
         except Exception as e:
             # Логируем ошибку, если запрос провалился
             logger_info(f"[MySQL ERROR]: {str(e)} | Query: {query}")
             raise  # Пробрасываем исключение дальше, чтобы оно обрабатывалось в приложении
 
+        mysql_watch_note(query, args, (time.perf_counter() - started) * 1000,
+                         self._cursor.rowcount)
+        return result
+
     async def executemany(self, query, args):
         if LOG_QUERIES:
             logger_info(f"[MySQL SQL Many]: {query} | Count: {len(args)}")
+
+        started = time.perf_counter()
         try:
-            return await self._cursor.executemany(query, args)
+            result = await self._cursor.executemany(query, args)
         except Exception as e:
             logger_info(f"[MySQL ERROR Many]: {str(e)}")
             raise
+
+        mysql_watch_note(query, None, (time.perf_counter() - started) * 1000,
+                         self._cursor.rowcount)
+        return result
 
 
 def mysql_get_url() -> str:

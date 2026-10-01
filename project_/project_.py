@@ -64,7 +64,7 @@ def project_main_root() -> Path:
     root = project_root()
     # `--git-common-dir` в обычной копии отдаёт относительный `.git`, в выкладке —
     # абсолютный путь к `.git` основной. И то и другое сводится к «родитель `.git`».
-    common = project_git(root, '--git-common-dir')
+    common = project_git(root, 'rev-parse', '--git-common-dir')
     if not common:
         return root
 

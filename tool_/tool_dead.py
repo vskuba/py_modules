@@ -3,6 +3,7 @@
 
     PYTHONPATH=py_modules python -m tool_.tool_dead src
     PYTHONPATH=py_modules python -m tool_.tool_dead . --private   # только приватные
+    PYTHONPATH=py_modules python -m tool_.tool_dead src --keys    # ключи словарей
 
 Мёртвый код не мешает работать — он мешает читать. Функция с докстрингом, обещающим
 «одно написание имени на три места», выглядит частью устройства, и следующий читатель
@@ -47,6 +48,18 @@
 Отсюда два режима: в проекте судят всё, в библиотеке — только приватные
 (`--private`). Режим выбирается словом, а не угадывается: угадать нельзя, а
 ошибиться — значит предложить удалить чужой рабочий вход.
+
+## ⚠⚠ Определением бывает и постановка (`--keys`)
+
+У ключа словаря и именованного аргумента нет `def` — их местом определения
+становится каждая постановка: `'companion_id': None,` в десятке файлов, аргумент
+вызова. Судится тот же вопрос тем же кругом: имя не встретилось **нигде, кроме
+мест постановки**, — значит читателя нет: ни столбца, ни поля модели, ни ветки.
+Такой ключ пережил собственное поле и молчал до ревизии.
+
+В режиме ключей общий слой из поиска **не** вычёркивается: ставят ключ в проекте,
+а читают его часто в framework общего слоя; вычеркнув `py_modules`, мёртвым
+выглядел бы живой.
 
 ## Три вердикта, и только первый — про удаление
 
@@ -114,8 +127,8 @@ TOOL_DEAD_SKIP = ('py_modules/', 'scratchpad/', 'node_modules/')
 TOOL_DEAD_WORD = re.compile(r'\w+')
 
 
-def tool_dead(root='.', private_only=False, search=None) -> list[dict]:
-    """Определённые имена, которых никто не читает: кандидаты на удаление.
+def tool_dead(root='.', private_only=False, search=None, keys=False) -> list[dict]:
+    """Определённые имена (или ключи словарей), которых никто не читает.
 
     Args:
         root: где **судить** — файл или подкаталог.
@@ -123,10 +136,12 @@ def tool_dead(root='.', private_only=False, search=None) -> list[dict]:
             слоя: его публичные функции зовут из других репозиториев.
         search: где **искать** использование; пусто — весь репозиторий, в котором
             лежит `root`.
+        keys: судить ключи словарей и именованные аргументы, а не `def`;
+            общий слой при этом из поиска не вычёркивается — там их читатели.
 
     Returns:
         list[dict]: записи `{name, kind, file, line, verdict, seen}` — имя, что это
-        (`func`, `class`, `const`), где определено, вердикт из трёх (`TOOL_DEAD_GONE`
+        (`func`, `class`, `const`, `key`), где определено, вердикт из трёх (`TOOL_DEAD_GONE`
         и два «только…») и слои, где имя всё же встретилось. Пусто — мёртвого нет.
 
     ⚠⚠ Два круга разные, и это главное в устройстве: судим подкаталог, а ищем по
@@ -143,14 +158,17 @@ def tool_dead(root='.', private_only=False, search=None) -> list[dict]:
     """
     base = Path(root).resolve()
     whole = Path(search).resolve() if search else _repo_of(base)
+    # Ключи ставят в проекте, а читают — в общем слое: в режиме ключей он судим.
+    keep = ('py_modules/',) if keys else ()
 
-    judged = [one for one in file_walk(base, ('.py',)) if not _skipped(one, base)]
+    judged = [one for one in file_walk(base, ('.py',))
+              if not _skipped(one, base, keep)]
     files = [one for one in file_walk(whole, TOOL_IMPACT_SUFFIXES)
-             if not _skipped(one, whole)]
+             if not _skipped(one, whole, keep)]
 
     defined = {}
     for one in judged:
-        for got in _defs(one):
+        for got in (_key_defs(one) if keys else _defs(one)):
             if private_only and not got['name'].startswith('_'):
                 continue
             defined.setdefault(got['name'], []).append(got)
@@ -160,21 +178,21 @@ def tool_dead(root='.', private_only=False, search=None) -> list[dict]:
 
     for name, places in defined.items():
         # ⚠ Имя, определённое дважды (переопределение, ветка `try/except ImportError`),
-        # не судится: какое из определений мёртвое — вопрос не к счётчику.
-        if len(places) != 1:
+        # не судится: какое из определений мёртвое — вопрос не к счётчику. Ключи же
+        # судятся и в нескольких постановках: своя строка вычитается в каждом слое.
+        if not keys and len(places) != 1:
             continue
 
-        place = places[0]
-        where = {layer for layer, count in seen.get(name, {}).items() if count > 0}
-        own = seen.get(name, {}).get(_layer(place['file']), 0)
-
-        # Своё определение — тоже вхождение; вычитаем его из слоя, где оно стоит.
-        if own <= 1:
-            where.discard(_layer(place['file']))
+        own = {}
+        for place in places:
+            layer = _layer(place['file'])
+            own[layer] = own.get(layer, 0) + 1
+        where = {layer for layer, count in seen.get(name, {}).items()
+                 if count > own.get(layer, 0)}
 
         verdict = _verdict(where)
         if verdict:
-            out.append({**place, 'verdict': verdict, 'seen': sorted(where)})
+            out.append({**places[0], 'verdict': verdict, 'seen': sorted(where)})
 
     return sorted(out, key=lambda one: (one['file'], one['line']))
 
@@ -213,12 +231,14 @@ def main() -> int:
     ap.add_argument('root', nargs='?', default='.', help='корень дерева')
     ap.add_argument('--private', action='store_true',
                     help='только приватные имена — режим общего слоя')
+    ap.add_argument('--keys', action='store_true',
+                    help='судить ключи словарей и именованные аргументы')
     ap.add_argument('--only', default='',
                     help=f'один вердикт: {TOOL_DEAD_GONE}, {TOOL_DEAD_TESTS_ONLY}, '
                          f'{TOOL_DEAD_DOC_ONLY}')
     ns = ap.parse_args()
 
-    found = tool_dead(ns.root, private_only=ns.private)
+    found = tool_dead(ns.root, private_only=ns.private, keys=ns.keys)
     if ns.only:
         found = [one for one in found if one['verdict'] == ns.only]
 
@@ -254,6 +274,35 @@ def _defs(path: Path) -> list[dict]:
             if name.isupper():
                 out.append({'name': name, 'kind': 'const',
                             'file': str(path), 'line': node.lineno})
+
+    return out
+
+
+def _key_defs(path: Path) -> list[dict]:
+    """Места постановки имён: ключи словарей и именованные аргументы вызовов.
+
+    В отличие от `_defs`, здесь судится всё дерево, а не верхний слой: ключи и
+    аргументы ставят внутри функций, и вопрос не «где определено», а «где
+    прочитано». Сигнатура зовущего — тоже вхождение имени, и за счёт него счёт
+    в слое перевешивает число постановок: имя живо.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding='utf-8', errors='replace'))
+    except (SyntaxError, ValueError, UnicodeDecodeError):
+        return []
+
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for one in node.keys:
+                if isinstance(one, ast.Constant) and isinstance(one.value, str):
+                    out.append({'name': one.value, 'kind': 'key',
+                                'file': str(path), 'line': one.lineno})
+        elif isinstance(node, ast.Call):
+            for one in node.keywords:
+                if one.arg:
+                    out.append({'name': one.arg, 'kind': 'key',
+                                'file': str(path), 'line': node.lineno})
 
     return out
 
@@ -359,11 +408,13 @@ def _verdict(where) -> str:
     return ''
 
 
-def _skipped(path, base: Path) -> bool:
-    """Лежит ли файл в ветке, которую не берём. ⚠ Путь — от корня обхода."""
+def _skipped(path, base: Path, keep: tuple = ()) -> bool:
+    """Лежит ли файл в ветке, которую не берём. ⚠ Путь — от корня обхода.
+    `keep` — ветки, не пропускаемые в этом режиме (в режиме ключей — общий слой)."""
     said = _slash(_short(base, path))
 
-    return any(bad.strip('/') in said.split('/') for bad in TOOL_DEAD_SKIP)
+    return any(bad.strip('/') in said.split('/')
+               for bad in TOOL_DEAD_SKIP if bad not in keep)
 
 
 def _repo_of(path: Path) -> Path:
