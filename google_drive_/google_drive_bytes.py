@@ -34,6 +34,17 @@ from http_.http_pool import http_pool_transport
 # как 399 и 400, — две разные картинки для обоих.
 GOOGLE_DRIVE_THUMB_SIZES = (200, 400, 800, 1600)
 
+# Превью **по номеру файла**, без сохранённой ссылки. Снято живьём 01.10.2026:
+# `drive.google.com/thumbnail?id=…` уводит `302` сюда, а здесь ответ приходит
+# сразу — `200 image/png`, точный размер (`=s400` даёт 266×400 у портрета
+# 1768×2656). Без токена тот же адрес отвечает `302`, то есть приватность файла
+# на месте.
+#
+# ⚠ Зачем это нужно отдельно от `thumbnailLink`: та ссылка живёт часы, хранить
+# её негде, а спрашивать запись Диска ради каждой плитки — сорок лишних
+# запросов на одно открытие галереи. По номеру — ноль лишних.
+GOOGLE_DRIVE_THUMB_BY_ID = 'https://lh3.googleusercontent.com/d/{file_id}=s{size}'
+
 
 async def google_drive_bytes(file: dict | str, width: int = 0,
                              key_path: str = '') -> tuple[bytes, str]:
@@ -41,10 +52,10 @@ async def google_drive_bytes(file: dict | str, width: int = 0,
 
     Args:
         file: запись файла из `google_drive_list`/`google_drive_walk` — либо
-            просто его `id`, но тогда превью недоступно (ссылка на него есть
-            только в записи).
-        width: ширина превью из `GOOGLE_DRIVE_THUMB_SIZES`. **Ноль — оригинал**,
-            во всю величину и за весь трафик.
+            просто его `id`: превью берётся и по номеру, без сохранённой
+            ссылки (`GOOGLE_DRIVE_THUMB_BY_ID`).
+        width: **длинная сторона** превью из `GOOGLE_DRIVE_THUMB_SIZES`.
+            **Ноль — оригинал**, во всю величину и за весь трафик.
         key_path: путь к ключу; пусто — из настроек.
 
     Returns:
@@ -52,8 +63,13 @@ async def google_drive_bytes(file: dict | str, width: int = 0,
         файла: расширение врёт чаще, чем заголовок.
 
     Raises:
-        RuntimeError: превью просят у записи без `thumbnailLink`, ширина не из
-            списка, Диск отказал, либо вместо байтов пришла страница входа.
+        RuntimeError: ширина не из списка, Диск отказал, либо вместо байтов
+            пришла страница входа.
+
+    ⚠ `width` ограничивает **длинную** сторону, а не ширину: у портрета
+    1768×2656 размер 400 даёт 266×400. Это суффикс `=s` Диска; суффикс `=w`
+    задавал бы ширину и вернул бы 400×601 — вдвое больше байтов там, где
+    плитка всё равно квадратная.
 
     ⚠ **Видео целиком через себя не гоняют.** У записи видео превью — первый
     кадр, и он здесь же; а сам файл это десятки мегабайт, которым правильная
@@ -68,9 +84,7 @@ async def google_drive_bytes(file: dict | str, width: int = 0,
     headers = {'Authorization': f'Bearer {token}'}
 
     if width:
-        if not isinstance(file, dict) or not file.get('thumbnailLink'):
-            raise RuntimeError('у записи нет thumbnailLink — превью ещё не готово')
-        response = await client.get(_thumb_url(file['thumbnailLink'], width), headers=headers)
+        response = await client.get(_thumb_url(file, width), headers=headers)
     else:
         file_id = file['id'] if isinstance(file, dict) else str(file)
         response = await client.get(f'{GOOGLE_DRIVE_API}/files/{file_id}', headers=headers,
@@ -93,14 +107,21 @@ def google_drive_bytes_wait(file: dict | str, width: int = 0,
     return asyncio.run(google_drive_bytes(file, width, key_path))
 
 
-def _thumb_url(link: str, width: int) -> str:
-    """Подменить размер в ссылке превью.
+def _thumb_url(file: dict | str, width: int) -> str:
+    """Адрес превью нужного размера — из записи Диска либо из одного номера.
 
-    Диск отдаёт её с собственным суффиксом (`=s220`), и просить другой размер
-    означает этот суффикс заменить, а не дописать второй: `=s220=s400` Диск
-    не понимает и отвечает прежней картинкой.
+    Запись несёт `thumbnailLink` с собственным суффиксом (`=s220`), и просить
+    другой размер означает суффикс **заменить**, а не дописать второй:
+    `=s220=s400` Диск не понимает и отвечает прежней картинкой.
+
+    Номера довольно и без записи — см. `GOOGLE_DRIVE_THUMB_BY_ID`. Этой дорогой
+    и ходят показывающие: у них на руках свой индекс, а не свежий ответ Диска.
     """
-    return link.split('=s')[0] + f'=s{width}'
+    if isinstance(file, dict) and file.get('thumbnailLink'):
+        return file['thumbnailLink'].split('=s')[0] + f'=s{width}'
+
+    file_id = file['id'] if isinstance(file, dict) else str(file)
+    return GOOGLE_DRIVE_THUMB_BY_ID.format(file_id=file_id, size=width)
 
 
 if __name__ == '__main__':
