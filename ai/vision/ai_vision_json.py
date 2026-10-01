@@ -23,7 +23,7 @@
 
 import asyncio
 
-from ai.ai_vision import ai_vision_describe
+from ai.vision.ai_vision import ai_vision_describe
 
 # Требование формата дописывается к просьбе вызывающего. Отдельной константой,
 # потому что это часть контракта, а не часть вопроса: вопрос меняет вызывающий,
@@ -105,7 +105,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
         description='Спросить vision-модель о картинке и получить JSON.',
-        epilog="пример: ai.ai_vision_json снимок.png 'поля: description, tags'")
+        epilog="пример: ai.vision.ai_vision_json снимок.png 'поля: description, tags'")
     parser.add_argument('path', help='файл изображения; `-` — байты со stdin')
     parser.add_argument('prompt', nargs='+', help='просьба; назовите поля в ней')
     parser.add_argument('--model', default='', help='модель с префиксом сервиса')

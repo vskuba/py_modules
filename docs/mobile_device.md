@@ -2,7 +2,7 @@
 
 > Телефон подключается по USB и смотрятся **два независимых глаза**: `scrcpy` — живая
 > картинка человеку, `adb` + vision-модель — «что на экране» для кода. Модули `adb_` и
-> `ai/ai_vision` лежат в этом репозитории; один вызов `adb_screen_describe()` возвращает
+> `ai/vision/ai_vision` лежат в этом репозитории; один вызов `adb_screen_describe()` возвращает
 > текстовое описание текущего экрана.
 >
 > Здесь — только **смотреть**. Нажимать, вводить и запускать — `mobile_control.md`;
@@ -139,7 +139,7 @@ CLI: `python -m adb_.adb_file latest /sdcard/Download --pattern 'eVOD*.pdf'`.
 формат toybox — минуты в дате её потолок, имя с пробелами идёт до конца строки,
 `total` и мусор не должны попадать в результат.
 
-### `ai/ai_vision` — зрение (файл `ai/ai_vision.py`)
+### `ai/vision/ai_vision` — зрение (файл `ai/vision/ai_vision.py`)
 
 | Функция | Контракт |
 |---------|----------|
@@ -150,8 +150,8 @@ CLI: `python -m adb_.adb_file latest /sdcard/Download --pattern 'eVOD*.pdf'`.
 CLI — для картинки с диска, не с телефона (снимок из буфера, схема, чужой скриншот):
 
 ```bash
-python -m ai.ai_vision describe [--model ...] [--tokens N] <файл> ["вопрос"]
-python -m ai.ai_vision normalize <файл> --out <файл.jpg>
+python -m ai.vision.ai_vision describe [--model ...] [--tokens N] <файл> ["вопрос"]
+python -m ai.vision.ai_vision normalize <файл> --out <файл.jpg>
 ```
 
 Ключи идут **до** пути, вопрос — последним: между позиционными аргументами разбор ключи не

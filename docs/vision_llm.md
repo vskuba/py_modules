@@ -150,10 +150,10 @@ def vision_ask(image_path: str, prompt: str, max_tokens: int = 1000) -> str:
 `ai_vision_describe` отдаёт прозу. Когда ответ кладут в поля базы — описание и
 теги снимка, перечень найденного, замеры, — нужен объект, и превращение одно и
 то же: попросить JSON, снять обрамление ```json и болтовню вокруг, разобрать,
-а на невнятный ответ переспросить. Это `ai.ai_vision_json`.
+а на невнятный ответ переспросить. Это `ai.vision.ai_vision_json`.
 
 ```bash
-PYTHONPATH=. python -m ai.ai_vision_json снимок.png 'поля: description, tags'
+PYTHONPATH=. python -m ai.vision.ai_vision_json снимок.png 'поля: description, tags'
 ```
 
 ⚠ **Поля называют в просьбе.** Модель не угадывает схему: не назовёшь поля —

@@ -1,7 +1,7 @@
 """
 Андроид-устройство через adb: снимки экрана и их чтение.
 
-Модуль отдельный от `ai/ai_vision` сознательно: adb — про устройство, а не
+Модуль отдельный от `ai/vision/ai_vision` сознательно: adb — про устройство, а не
 про модели. Связь одна и она же причина, почему снимок нельзя отдавать «как
 есть»: `screencap` вернёт RGBA-PNG, который локальные vision-серверы
 отвергают (шапка `ai_vision`), поэтому `adb_capture` нормализует кадр в JPEG
@@ -76,7 +76,7 @@ def adb_capture(serial: str = '', max_side: int = 0) -> bytes:
     Raises:
         RuntimeError: adb/устройство подвело или вывод не похож на PNG.
     """
-    from ai.ai_vision import ai_vision_normalize
+    from ai.vision.ai_vision import ai_vision_normalize
     png = _screencap_png(serial)
     return ai_vision_normalize(png, max_side=max_side)
 
@@ -109,7 +109,7 @@ def adb_screen_describe(prompt: str = '', serial: str = '', model_name: str = ''
     Returns:
         Текст описания экрана.
     """
-    from ai.ai_vision import ai_vision_describe_wait
+    from ai.vision.ai_vision import ai_vision_describe_wait
     return ai_vision_describe_wait(adb_capture(serial=serial), prompt=prompt,
                                    model_name=model_name)
 

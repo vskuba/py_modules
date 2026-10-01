@@ -61,7 +61,7 @@ async def body_passport(paths: list[str], model_name: str = '') -> dict:
         conflicts: поля, где кадры не сошлись ({поле: [значения]})
         error: только при success=false
     """
-    from ai.ai_vision import ai_vision_describe  # лениво: LLM-стек нужен только здесь
+    from ai.vision.ai_vision import ai_vision_describe  # лениво: LLM-стек нужен только здесь
 
     async def one(path: str) -> dict:
         # кадр читаем в две попытки: сетевой сбой модели (ReadTimeout и прочий

@@ -148,7 +148,7 @@ PYTHONPATH=. python -m page_.page_contract --router routes.py --js static/page.j
 Последняя проверка круга — чужими глазами, и для неё годится vision-модель:
 
 ```bash
-python -m ai.ai_vision describe /tmp/ui/after.png \
+python -m ai.vision.ai_vision describe /tmp/ui/after.png \
     "перечисли, какие действия можно выполнить на этой странице и чем именно"
 ```
 
@@ -326,7 +326,7 @@ python -m image_.image_frames grid /tmp/ui/w360.png /tmp/ui/w768.png /tmp/ui/w14
 
 ## 9. Зрение модели — последний судья
 
-`ai.ai_vision describe` отвечает на то, что числами не ловится: «иерархия
+`ai.vision.ai_vision describe` отвечает на то, что числами не ловится: «иерархия
 сломана», «кнопка не выглядит кнопкой», «блоки не связаны в группы», — и на
 вопрос «что здесь можно сделать и чем» из § 2.6. И не
 отвечает на «сколько пикселей» — в координатах и мелких деталях vision-модель
