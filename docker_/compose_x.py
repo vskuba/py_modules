@@ -15,8 +15,15 @@ cut -d= -f2-)" --default-character-set=utf8mb4 …`: пароль грепает
 import os
 import subprocess
 
+# Потолок на команду контейнеру. Дамп базы и миграция идут минутами, поэтому
+# он щедрый; смысл его не в скорости, а в том, что зов из автоматики обязан
+# когда-нибудь вернуться: `docker compose exec` без потолка висит вечно, если
+# сервис не поднялся и демон ждёт его.
+COMPOSE_X_TIMEOUT = 600.0
 
-def compose_x(service, cmd, *, args=None, quiet=('[Warning]',)) -> dict:
+
+def compose_x(service, cmd, *, args=None, quiet=('[Warning]',),
+              timeout: float = COMPOSE_X_TIMEOUT) -> dict:
     """Выполнить команду в сервисе compose-стека из корня проекта.
 
     Args:
@@ -27,9 +34,14 @@ def compose_x(service, cmd, *, args=None, quiet=('[Warning]',)) -> dict:
             значение-строка `'$ИМЯ'` подставляется из окружения проекта
             (`.env`); `True` — голый флаг без значения.
         quiet: подстроки-шум, такие строки вывода выбрасываются.
+        timeout: потолок в секундах; исчерпан — `code` = -1 и слово в `error`.
 
     Returns:
-        {'код': rc, 'вывод': stdout без шума, 'ошибка': stderr без шума}.
+        {'code': rc, 'output': stdout без шума, 'error': stderr без шума}.
+
+    ⚠ Таймаут — такой же ответ, как ненулевой код: `{'code': -1}` и строка
+    в `error`, а не исключение. Иначе цикл, зовущий контейнер по кругу,
+    обрывается на первом же неподнявшемся сервисе.
     """
     argv = ['docker', 'compose', 'exec', '-T', service]
     parts = list(cmd) if isinstance(cmd, (list, tuple)) else [cmd]
@@ -40,12 +52,26 @@ def compose_x(service, cmd, *, args=None, quiet=('[Warning]',)) -> dict:
         v = str(value)
         argv += [flag, os.environ.get(v[1:], '') if v.startswith('$') else v]
     argv += parts
-    r = subprocess.run(argv, capture_output=True, text=True)
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {'code': -1, 'output': '',
+                'error': f'не ответил за {timeout:g} c: сервис «{service}» '
+                         f'не поднят или команда не завершается сама'}
+    except FileNotFoundError:
+        return {'code': -1, 'output': '', 'error': 'docker не найден в PATH'}
     return {'code': r.returncode,
             'output': _quiet(r.stdout, quiet), 'error': _quiet(r.stderr, quiet)}
 
 
 def _quiet(text: str, marks) -> str:
+    """Выбросить шумовые строки вывода.
+
+    Копия такой же в `ssh_/ssh_x.py` осознанная: копий ровно две, и общий файл
+    ради трёх строк связал бы docker с ssh, которые друг о друге знать не
+    должны. Появится третий такой вызывающий — вот тогда паттерн
+    (`code_rules.md`, §4.2).
+    """
     return '\n'.join(line for line in text.splitlines()
                      if not any(m in line for m in marks))
 
@@ -64,11 +90,14 @@ if __name__ == '__main__':
     ap.add_argument('cmd', nargs='+', help='бинарь и аргументы контейнеру')
     ap.add_argument('--no-quiet', action='store_true',
                     help='не выбрасывать шумовые строки из вывода')
+    ap.add_argument('--timeout', type=float, default=COMPOSE_X_TIMEOUT,
+                    help='потолок в секундах; исчерпан — code -1 и слово в error')
     ns = ap.parse_args()
     args = {}
     for a in ns.arg:
         flag, _, value = a.partition('=')
         args[flag] = value or True
-    print(json.dumps(compose_x(ns.service, ns.cmd, args=args,
-                               quiet=() if ns.no_quiet else ('[Warning]',)),
-                     ensure_ascii=False))
+    out = compose_x(ns.service, ns.cmd, args=args, timeout=ns.timeout,
+                    quiet=() if ns.no_quiet else ('[Warning]',))
+    print(json.dumps(out, ensure_ascii=False))
+    raise SystemExit(0 if out['code'] == 0 else 1)

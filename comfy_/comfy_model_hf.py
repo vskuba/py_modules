@@ -3,7 +3,7 @@
 `comfy_model_get` сверяет скачанное с ожиданием, но ожидание два вечера кряду
 приходило из curl: tree-API репо, `lfs.oid`, ещё и «Invalid username or
 password» с чужой машины — и качали вслепую, а огрызок с доехавшим хвостом
-распознавался только постфактум. Здесь та пара чисел — {'байт', 'sha256'} —
+распознавался только постфактум. Здесь та пара чисел — {'bytes', 'sha256'} —
 одним вызовом, ровно в той форме, в какой их ждёт `comfy_model_get`.
 
 Знания о конкретном проекте тут нет: репо и путь к файлу приходят вызывающему.
@@ -16,19 +16,19 @@ HF_API = 'https://huggingface.co/api'
 
 
 def comfy_model_hf_expect(repo: str, file: str, *, ref: str = 'main',
-                         token: str = '') -> dict:
+                          token: str = '') -> dict:
     """Ожидание файла из репо HF: url докачки, размер, sha256 (lfs oid).
 
     Args:
         repo: репозиторий HF (`Comfy-Org/stable-diffusion-v1-5-archive`, …).
-        файл: путь к файлу в репо (`sd_xl_base_1.0.safetensors`, …).
+        file: путь к файлу в репо (`sd_xl_base_1.0.safetensors`, …).
         ref: ветка/ревизия; пусто — main.
-        токен: Bearer для приватных/гейтнутых репо (пусто — без него).
+        token: Bearer для приватных/гейтнутых репо (пусто — без него).
 
     Returns:
-        {'url': resolve-ссылка, 'байт': int, 'sha256': str, 'почему': str} —
+        {'url': resolve-ссылка, 'bytes': int, 'sha256': str, 'why': str} —
         `sha256` пуст для мелких файлов вне lfs (у них хеша в API нет, размер
-        есть); при провале API поля пустые и слово в 'почему'.
+        есть); при провале API поля пустые и слово в 'why'.
     """
     url = f'{HF_API}/models/{repo}/tree/{ref}?recursive=true'
     req = urllib.request.Request(url)
@@ -36,12 +36,12 @@ def comfy_model_hf_expect(repo: str, file: str, *, ref: str = 'main',
         req.add_header('Authorization', f'Bearer {token}')
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
-            files = json.load(r)
+            listing = json.load(r)
     except Exception as e:
         return {'url': '', 'bytes': 0, 'sha256': '', 'why': f'HF API молчит: {e}'}
-    name = file.rsplit('/', 1)[-1]
-    entry = next((f for f in files if f.get('path') == file), None) or next(
-        (f for f in files if f.get('path', '').rsplit('/', 1)[-1] == name), None)
+    tail = file.rsplit('/', 1)[-1]
+    entry = next((f for f in listing if f.get('path') == file), None) or next(
+        (f for f in listing if f.get('path', '').rsplit('/', 1)[-1] == tail), None)
     if entry is None:
         return {'url': '', 'bytes': 0, 'sha256': '',
                 'why': f'файла «{file}» в {repo}@{ref} нет'}

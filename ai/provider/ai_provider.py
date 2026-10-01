@@ -60,6 +60,34 @@ class AiProvider(ABC):
             framework_model: ход целиком; из него берутся настройки размышлений.
         """
 
+    def model_assemble(self, model_cls, model_name: str, provider,
+                       framework_model: AiFrameworkModel) -> Model:
+        """
+        Собрать модель и, если ход просит без размышлений, пересобрать с запретом.
+
+        Три сервиса (OpenAI-совместимые, Gemini, OpenRouter) делали это одним и
+        тем же куском кода, различаясь ровно двумя вещами: каким классом модели
+        и каким провайдером. Куску место здесь — расходясь по трём файлам, он
+        дал бы три разных ответа на один вопрос; в `model_get` наследника
+        остаётся только его отличие.
+
+        Args:
+            model_cls: класс модели pydantic-ai (`OpenAIChatModel`, `GoogleModel`).
+            model_name: имя без префикса сервиса.
+            provider: собранный провайдер pydantic-ai.
+            framework_model: ход целиком; из него берётся запрет размышлений.
+
+        ⚠ Модель собирается дважды намеренно: чем именно глушить размышления,
+        видно только из профиля **собранной** модели. Конструктор по сети не
+        ходит, и это дёшево.
+        """
+        model = model_cls(model_name, provider=provider)
+        if not framework_model.thinking_disabled:
+            return model
+
+        return model_cls(model_name, provider=provider,
+                         settings=self.thinking_settings(model))
+
     def raw_endpoint(self, model_name: str) -> tuple[str, str]:
         """
         Адрес и ключ сервиса для запроса **мимо pydantic-ai**: `(base_url, api_key)`.

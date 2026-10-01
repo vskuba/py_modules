@@ -251,7 +251,7 @@ def ai_look_parts(path, box):
     from pathlib import Path
     from PIL import Image
     import io
-    from ai.ai_vision import ai_vision_describe_wait
+    from ai.vision.ai_vision import ai_vision_describe_wait
     im = Image.open(path).convert('RGB')
     if box:
         im = im.crop(tuple(int(v) for v in box))

@@ -22,10 +22,14 @@ import os
 
 from PIL import Image, ImageDraw
 
+from image_.image_ import image_font
+
 
 def image_hotspot_overlay(path: str, rects: list, out: str = '',
                           crop: tuple = None, color: str = 'red',
-                          width: int = 6, labels: list = None) -> dict:
+                          width: int = 6, labels: list = None,
+                          points: list = None, boxes: list = None,
+                          point_color: str = 'deepskyblue') -> dict:
     """
     Нарисовать прямоугольники хотспотов поверх снимка — проверка «на месте ли».
 
@@ -39,24 +43,45 @@ def image_hotspot_overlay(path: str, rects: list, out: str = '',
         color: цвет рамки (имя или hex PIL).
         width: толщина рамки, пиксели.
         labels: подписи по порядку (у каждого rect'а — свой).
+        points: точки-ориентиры `[(x, y), …]` — рисуются кружками поверх рамок.
+            Нужны, когда проверяется не «попал ли прямоугольник», а «от чего
+            он построен»: окно замера на лице строится от точек детектора, и
+            без них картинка говорит «окно тут», но не говорит почему.
+        boxes: прямоугольники в записи `(x0, y0, x1, y1)` — та же PIL-запись,
+            что у `crop`, `image_grain_measure(box=…)` и `ai_landmark_zones`.
+            Рисуются вместе с `rects`; заводить перевод в `(x, y, w, h)` на
+            каждой стороне значит однажды перепутать ширину с правым краем.
+        point_color: цвет точек; по умолчанию контрастен красным рамкам.
 
     Returns:
-        {'file', 'out', 'drawn', 'crop'} — координаты в 'out' не пересчитаны:
-        рамка рисуется по пикселям входа.
+        {'file', 'out', 'drawn', 'dots', 'crop'} — координаты в 'out' не
+        пересчитаны: рамка рисуется по пикселям входа.
+
+    ⚠ Подписи идут по общему порядку: сначала `rects`, потом `boxes`.
     """
     img = Image.open(path).convert('RGB')
     draw = ImageDraw.Draw(img)
     labels = labels or []
-    boxes = []
-    for i, rect in enumerate(rects):
+    drawn = []
+    for rect in (rects or []):
         x, y, w, h = (int(v) for v in rect)
-        draw.rectangle([x, y, x + w, y + h], outline=color, width=width)
+        drawn.append((x, y, x + w, y + h))
+    for box in (boxes or []):
+        drawn.append(tuple(int(v) for v in box))
+    font = image_font(max(14, img.width // 60)) if labels else None
+    for i, (x0, y0, x1, y1) in enumerate(drawn):
+        draw.rectangle([x0, y0, x1, y1], outline=color, width=width)
         if i < len(labels) and labels[i]:
-            draw.text((x + width + 2, max(0, y - 2)), str(labels[i]), fill=color)
-        boxes.append({'x': x, 'y': y, 'w': w, 'h': h, 'label': labels[i] if i < len(labels) else ''})
+            draw.text((x0 + width + 2, max(0, y0 - 2)), str(labels[i]),
+                      font=font, fill=color)
+    dots = [(int(a), int(b)) for a, b in (points or [])]
+    r = max(3, width)
+    for x, y in dots:
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=point_color,
+                     outline=point_color)
     out = out or (os.path.splitext(path)[0] + '-hotspots.png')
     img.save(out)
-    return {'file': path, 'out': out, 'drawn': len(boxes),
+    return {'file': path, 'out': out, 'drawn': len(drawn), 'dots': len(dots),
             'crop': tuple(crop) if crop else None}
 
 

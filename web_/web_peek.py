@@ -85,13 +85,19 @@ if __name__ == '__main__':
     ap.add_argument('--method', default='GET', help='метод запроса')
     ap.add_argument('--body', default='', help='тело как есть')
     ap.add_argument('--show', action='store_true', help='ещё и тело целиком')
+    ap.add_argument('--header', action='append', default=[], metavar='КЛЮЧ=значение',
+                    help='заголовок запроса, повторять (ключ API, Cookie, свой Content-Type)')
+    ap.add_argument('--timeout', type=float, default=15, help='секунды на запрос')
     ns = ap.parse_args()
+    head = dict(h.split('=', 1) for h in ns.header) or None
     try:
         if ns.markers:
             out = asyncio.run(web_peek_markers(
-                ns.url, ns.markers.split(','), method=ns.method, content=ns.body))
+                ns.url, ns.markers.split(','), method=ns.method, content=ns.body,
+                headers=head, timeout=ns.timeout))
         else:
-            out = asyncio.run(web_peek(ns.url, ns.method, content=ns.body))
+            out = asyncio.run(web_peek(ns.url, ns.method, content=ns.body,
+                                       headers=head, timeout=ns.timeout))
             if not ns.show:
                 out['text'] = out['text'][:500] + ('…' if len(out['text']) > 500
                                                    else '')

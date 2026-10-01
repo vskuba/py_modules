@@ -110,11 +110,21 @@ if __name__ == '__main__':
     p.add_argument('--out', default='', help='куда качать; пусто — только осмотр')
     p.add_argument('--limit', type=int, default=0, help='первые N медиа (0 — все)')
     p.add_argument('--proxy', default='', help='socks5://… если прямой выход упирается в лимит')
+    p.add_argument('--what', default='look',
+                   choices=['look', 'profile', 'followers', 'following'],
+                   help='look — карточка и медиа (умолчание); profile — только '
+                        'карточка без похода за медиа; followers/following — счётчик')
     ns = p.parse_args()
     if ns.out:
         rows = asyncio.run(insta_pull(ns.url, ns.out, ns.proxy, ns.limit))
         print(f'скачано: {len([r for r in rows if "err" not in r])}, '
               f'ошибок: {len([r for r in rows if "err" in r])}')
     else:
-        view = asyncio.run(insta_look(ns.url, ns.proxy, ns.limit))
-        print(json.dumps(view, ensure_ascii=False, indent=1))
+        # Три из пяти публичных функций были доступны только импортом. `profile`
+        # отдельно от `look` не для полноты: `look` всегда идёт ещё и за медиа,
+        # а «кто это и сколько у него подписчиков» — один запрос страницы.
+        ask = {'look': lambda: insta_look(ns.url, ns.proxy, ns.limit),
+               'profile': lambda: insta_profile(ns.url, ns.proxy),
+               'followers': lambda: insta_followers(ns.url, ns.proxy),
+               'following': lambda: insta_following(ns.url, ns.proxy)}[ns.what]
+        print(json.dumps(asyncio.run(ask()), ensure_ascii=False, indent=1))

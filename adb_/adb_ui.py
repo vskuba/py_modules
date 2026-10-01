@@ -316,19 +316,36 @@ def _xml_slice(out: str) -> str:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Карта экрана устройства и поиск на ней.')
-    parser.add_argument('command', choices=['map', 'find', 'dump'])
+    parser.add_argument('command', choices=['map', 'find', 'dump', 'wait'])
     parser.add_argument('--serial', default='', help='устройство; по умолчанию единственное')
-    parser.add_argument('--exact', action='store_true', help='только полное совпадение (find)')
-    parser.add_argument('query', nargs='*', help='искомая надпись (find)')
+    parser.add_argument('--exact', action='store_true', help='только полное совпадение (find/wait)')
+    parser.add_argument('--timeout', type=float, default=ADB_UI_WAIT_TIMEOUT,
+                        help='секунды ожидания элемента (wait)')
+    parser.add_argument('--json', action='store_true', help='машинный вывод (find/wait)')
+    parser.add_argument('query', nargs='*', help='искомая надпись (find/wait)')
     ns = parser.parse_args()
+
+    def _show(node):
+        # Код возврата у find/wait: 0 — нашлось, 1 — нет. Шаг сценария из
+        # оболочки читает его, а не разбирает слово «не найдено».
+        if ns.json:
+            import json
+            print(json.dumps(node, ensure_ascii=False))
+        else:
+            print(node or 'не найдено')
+        raise SystemExit(0 if node else 1)
 
     try:
         if ns.command == 'map':
             print(adb_ui_text(serial=ns.serial) or 'на экране нет ни надписей, ни целей')
         elif ns.command == 'dump':
             print(adb_ui_dump(serial=ns.serial))
+        elif ns.command == 'wait':
+            _show(adb_ui_wait(' '.join(ns.query), serial=ns.serial,
+                              timeout=ns.timeout, exact=ns.exact))
         else:
-            match = adb_ui_find(' '.join(ns.query), serial=ns.serial, exact=ns.exact)
-            print(match or 'не найдено')
-    except (RuntimeError, TimeoutError) as err:
+            _show(adb_ui_find(' '.join(ns.query), serial=ns.serial, exact=ns.exact))
+    except TimeoutError as err:
+        raise SystemExit(f'ошибка: {err}')
+    except RuntimeError as err:
         raise SystemExit(f'ошибка: {err}')

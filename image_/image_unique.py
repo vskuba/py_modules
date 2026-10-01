@@ -82,9 +82,9 @@ def image_unique_hash(path) -> dict:
 def image_unique_diff(before, after) -> dict:
     """Насколько `after` отличим от `before`: расстояния хешей и доля точек.
 
-    Возвращает `{'ahash','dhash','phash','средний','точек','совпало','доля
-    точек','узнаваем','порог'}`. `узнаваем` — вердикт по хешам: средний сдвиг
-    меньше порога, то есть дедупликация сочтёт кадры одним.
+    Возвращает `{'ahash','dhash','phash','mean_of','points','matched',
+    'points_share','recognizable','threshold'}`. `recognizable` — вердикт по
+    хешам: средний сдвиг меньше порога, то есть дедупликация сочтёт кадры одним.
     """
     ha, hb = image_unique_hash(before), image_unique_hash(after)
     bits = {k: _hamming(ha[k], hb[k]) for k in ('ahash', 'dhash', 'phash')}

@@ -15,7 +15,11 @@ class AiFrameworkModel:
     user_id: int
     request_uuid: str
     session_uuid: str
-    companion_id: int = 0
+    # ⚠⚠ `companion_id` здесь был и убран: собеседник — не дело прогона модели.
+    # Поле было мёртвым и до удаления — никто его не присваивал (оставался ноль) и
+    # никто не читал, а слой на его основании слал лишний довод в журнал вызовов и
+    # ронял этим каждый заход агента. Кто с кем разговаривает — вопрос отдельной
+    # таблицы разговоров, и переменной прогона он не является.
     tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
     on_complete: Callable | None = None
@@ -31,6 +35,15 @@ class AiFrameworkModel:
 
     node_id: int | None = None
     llm_parallel_per_agent_max: int = 1
+    # Сколько секунд заявка может ждать освобождения занятого агента.
+    #
+    # ⚠ Едет **в заявке**, а не читается диспетчером: тот крутится каждые 0,1 с, и
+    # поход в базу на каждом обороте стоил бы дороже самой очереди. Заполняет
+    # проект при сборке модели — тем же приёмом, что `llm_parallel_per_agent_max`.
+    #
+    # ⚠ Умолчание оставлено прежним (`AI_FRAMEWORK_QUEUE_TTL`): проект, который
+    # поле не заполняет, работает как раньше.
+    llm_workflow_queue_ttl: float = 60.0
     tokens_input: int | None = None
     tokens_output: int | None = None
     thinking_enable: bool = False

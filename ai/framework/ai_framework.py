@@ -66,6 +66,21 @@ class AbstractAiFramework(ABC):
         pass
 
     async def message_history_save(self, framework_model: AiFrameworkModel):
+        """Сложить историю вызова модели в журнал сессии — руками потребителя.
+
+        ⚠⚠ **`companion_id` сюда больше не передаётся, и это не упущение.** Столбец
+        `agent_session.companion_id` у потребителя убран намеренно: журнал отвечает
+        «что спросили у модели и что она ответила», а «кто с кем разговаривает» —
+        вопрос отдельной таблицы разговоров, где у обмена своя строка.
+
+        Слой же продолжал слать этот довод, метод проекта его уже не принимал, и
+        **каждый** заход агента падал `TypeError: … unexpected keyword argument
+        'companion_id'` — причём внутри сохранения истории, то есть уже после
+        удачного ответа модели: работа сделана, деньги потрачены, ответ потерян.
+
+        ⚠ Убран и из абстрактного объявления, и из полей модели: там он был мёртв —
+        никто не присваивал (значение всегда оставалось нулём) и никто не читал.
+        """
         if framework_model.session_disabled:
             return
 
@@ -118,8 +133,7 @@ class AbstractAiFramework(ABC):
                         role=role,
                         agent_id=framework_model.entity_agent.get('id'),
                         kind_type=part_kind,
-                        content=str(content).strip(),
-                        companion_id=framework_model.companion_id
+                        content=str(content).strip()
                     )
 
             # 2. ОТВЕТЫ (Assistant, Thinking, Tool Calls)
@@ -148,8 +162,7 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='thinking',
                                 content=part.content.strip(),
-                                token=tokens_count,
-                                companion_id=framework_model.companion_id
+                                token=tokens_count
                             )
 
                         # Текст ответа (Финальный или промежуточный)
@@ -164,8 +177,7 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type=kind,
                                 content=part.content.strip(),
-                                token=tokens_count,
-                                companion_id=framework_model.companion_id
+                                token=tokens_count
                             )
 
                         # Вызовы инструментов
@@ -180,8 +192,7 @@ class AbstractAiFramework(ABC):
                                 agent_id=framework_model.entity_agent.get('id'),
                                 kind_type='tool-call',
                                 content=tool_content,
-                                token=tokens_count,
-                                companion_id=framework_model.companion_id
+                                token=tokens_count
                             )
 
         self.message_history = {}
@@ -219,11 +230,19 @@ class AbstractAiFramework(ABC):
             request_uuid,
             llm_id,
             user_id,
-            companion_id,
             role,
             agent_id,
             kind_type,
             content,
             token=None
     ):
+        """Строка журнала вызова модели: промпт, ответ, вызов инструмента.
+
+        ⚠⚠ **Собеседника здесь нет и быть не должно.** Журнал отвечает на вопрос
+        «что мы спросили у модели и что она ответила»; «кто с кем разговаривает» —
+        вопрос отдельной таблицы разговоров, где у обмена своя строка с парой и
+        временем. Пока `companion_id` стоял здесь, он же был единственным местом,
+        куда попадала переписка, — и попадала слепком промпта, из которого разговор
+        не выбрать ни по паре, ни по времени.
+        """
         pass

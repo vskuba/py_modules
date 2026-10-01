@@ -26,9 +26,5 @@ class AiProviderGemini(AiProvider):
             api_key=config_get(self.name.upper() + '_API_KEY'),
             http_client=self.http_client,
         )
-        model = GoogleModel(model_name, provider=provider)
-        if not framework_model.thinking_disabled:
-            return model
-
-        return GoogleModel(model_name, provider=provider,
-                           settings=self.thinking_settings(model))
+        return self.model_assemble(GoogleModel, model_name, provider,
+                                   framework_model)

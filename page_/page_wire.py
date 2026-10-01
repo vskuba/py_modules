@@ -9,7 +9,18 @@
 """
 import argparse
 import re
+import sys
+
 from pathlib import Path
+
+# Файл запускают и путём (`python3 py_modules/page_/page_wire.py`). Тогда первым в путях
+# лежит каталог файла, и соседний namespace (`file_`) не находится вовсе.
+if __package__ in (None, ''):
+    _here = str(Path(__file__).resolve().parent)
+    sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from file_.file_walk import file_walk
 
 # decorator с URL → литерал шаблона внутри функции (обычно через хелпер
 # _dashboard_page(request, user, 'admin/x.html') — важен сам литерал).
@@ -32,8 +43,7 @@ def page_wire_check(routers, template_dir, nav_file) -> list[dict]:
     """
     roots = [Path(r) for r in (routers if isinstance(routers, (list, tuple))
                                else [routers])]
-    py_files = [p for root in roots for p in
-                (root.rglob('*.py') if root.is_dir() else [root])]
+    py_files = [p for root in roots for p in file_walk(root, ('.py',))]
     nav_text = Path(nav_file).read_text(encoding='utf-8')
     out = []
     for rf in py_files:

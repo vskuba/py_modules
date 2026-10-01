@@ -32,12 +32,8 @@ class AiProviderOpenrouter(AiProvider):
             api_key=config_get(self.name.upper() + '_API_KEY'),
             http_client=self.http_client,
         )
-        model = OpenAIChatModel(model_name, provider=provider)
-        if not framework_model.thinking_disabled:
-            return model
-
-        return OpenAIChatModel(model_name, provider=provider,
-                               settings=self.thinking_settings(model))
+        return self.model_assemble(OpenAIChatModel, model_name, provider,
+                                   framework_model)
 
     def raw_endpoint(self, model_name: str) -> tuple[str, str]:
         """

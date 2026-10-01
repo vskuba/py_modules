@@ -3,3 +3,7 @@
 # В venv проекта — одна строка: -r py_modules/requirements.txt
 Pillow>=11
 numpy>=2.1
+
+# evm_: чистый secp256k1/keccak без eth-библиотек (ленивый импорт — вызов, не импорт)
+cryptography>=44
+pycryptodome>=3.21

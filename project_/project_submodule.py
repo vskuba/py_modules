@@ -28,8 +28,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Порядок строк тут значим: модуль запускают и прямым путём
+# (`python py_modules/project_/project_submodule.py`), а тогда в `sys.path`
+# лежит его каталог, а не корень слоя, — импорт соседа обязан идти ПОСЛЕ
+# починки пути, иначе `project_` не пакет и ModuleNotFoundError.
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from project_.project_ import project_git
 
 
 def project_submodule_state() -> dict:
@@ -45,13 +51,13 @@ def project_submodule_state() -> dict:
          `diff --stat gitlink..checkout` — что приедет в панель при bump}
     """
     root, sub = _repo()
-    parts = _git(root, 'ls-tree', 'HEAD', sub.name).split() if root != sub else []
+    parts = project_git(root, 'ls-tree', 'HEAD', sub.name).split() if root != sub else []
     # «160000 commit <sha>\t<путь>»: полем больше — и это не gitlink
     gitlink = parts[2] if len(parts) == 4 and parts[1] == 'commit' else ''
-    checkout = _git(sub, 'rev-parse', 'HEAD')
+    checkout = project_git(sub, 'rev-parse', 'HEAD')
     ancestor = bool(gitlink and checkout) and _run_ok(
         sub, 'merge-base', '--is-ancestor', gitlink, checkout)
-    files = _git(sub, 'diff', '--stat', gitlink, checkout).splitlines() \
+    files = project_git(sub, 'diff', '--stat', gitlink, checkout).splitlines() \
         if gitlink and checkout else []
     return {'gitlink': gitlink, 'checkout': checkout,
             'synced': bool(gitlink) and gitlink == checkout, 'ancestor': ancestor,
@@ -80,18 +86,18 @@ def project_submodule_bump(line: str = 'master', from_repo: str = '') -> dict:
         ValueError: цель не читается (нет такой ветки/sha нигде из названных).
     """
     root, sub = _repo()
-    head = _git(sub, 'rev-parse', 'HEAD')
+    head = project_git(sub, 'rev-parse', 'HEAD')
     target = line
     if from_repo:
         # та же линия в двух чекаутах живёт по-разному: свежее там, где правят
-        here = _git(sub, 'rev-parse', '--verify', line)
-        there = _git(Path(from_repo).resolve(), 'rev-parse', '--verify', line)
+        here = project_git(sub, 'rev-parse', '--verify', line)
+        there = project_git(Path(from_repo).resolve(), 'rev-parse', '--verify', line)
         if there and (not here or here != there):
             _run(sub, 'fetch', '-q', str(Path(from_repo).resolve()), line)
             target = 'FETCH_HEAD'
-    if not _git(sub, 'rev-parse', '--verify', target):
+    if not project_git(sub, 'rev-parse', '--verify', target):
         raise ValueError(f'цель {line!r} не читается в {sub.name}: ни ветка, ни sha')
-    sha = _git(sub, 'rev-parse', target)
+    sha = project_git(sub, 'rev-parse', target)
 
     merged = bool(sha) and bool(head) and not _run_ok(
         sub, 'merge-base', '--is-ancestor', head, sha)
@@ -105,11 +111,11 @@ def project_submodule_bump(line: str = 'master', from_repo: str = '') -> dict:
     else:
         _run(sub, 'checkout', '-q', sha)
 
-    parts = _git(root, 'ls-tree', 'HEAD', sub.name).split() if root != sub else []
+    parts = project_git(root, 'ls-tree', 'HEAD', sub.name).split() if root != sub else []
     gitlink = parts[2] if len(parts) == 4 and parts[1] == 'commit' else ''
-    final = _git(sub, 'rev-parse', 'HEAD')
+    final = project_git(sub, 'rev-parse', 'HEAD')
     return {'sha': final, 'merged': merged,
-            'files': _git(sub, 'diff', '--stat', gitlink, final).splitlines()
+            'files': project_git(sub, 'diff', '--stat', gitlink, final).splitlines()
             if gitlink else []}
 
 
@@ -124,18 +130,8 @@ def _repo() -> tuple[Path, Path]:
     чекаут, gitlink тогда пуст).
     """
     here = Path(__file__).resolve().parents[1]
-    super_ = _git(here, 'rev-parse', '--show-superproject-working-tree')
+    super_ = project_git(here, 'rev-parse', '--show-superproject-working-tree')
     return (Path(super_) if super_ else here), here
-
-
-def _git(cwd: Path, *args: str) -> str:
-    """Одна строка от git; ошибка — пусто (git сам скажет, чего не знает)."""
-    try:
-        done = subprocess.run(['git', *args], cwd=str(cwd), capture_output=True,
-                              text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return ''
-    return done.stdout.strip() if done.returncode == 0 else ''
 
 
 def _run_ok(cwd: Path, *args: str) -> bool:

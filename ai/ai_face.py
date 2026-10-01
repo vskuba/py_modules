@@ -145,8 +145,50 @@ def ai_face_crop(path, out, mode='face', det_size=AI_FACE_DET, anchor=''):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), img[box[1]:box[3], box[0]:box[2]])
+    # 'face' — коробка САМОГО лица, до расширения по режиму и до обрезки по
+    # краям кадра. Из 'box' её не восстановить: у лица возле края расширение
+    # срезано, и обратный счёт по AI_FACE_MODES даёт неверную ширину.
     return {'box': list(box), 'mode': mode, 'out': str(out),
+            'face': [x0, y0, x1, y1],
             'kps': [[round(float(a), 1), round(float(b), 1)] for a, b in f.kps]}
+
+
+AI_FACE_VIEW_WIDTH = 900   # ширина показа: столько, чтобы поры были видны глазом
+
+
+def ai_face_view(path, out, width=AI_FACE_VIEW_WIDTH, mode='face_hair',
+                 det_size=AI_FACE_DET, anchor=''):
+    """Выкроить лицо И ПРИВЕСТИ К ШИРИНЕ показа — чтобы посмотреть глазами.
+
+    Отдельно от `ai_face_crop` намеренно: у той контракт «ровно эти пиксели,
+    без ресайза — генератор платит только за них», и добавлять туда ресайз
+    значит его сломать. Здесь цель обратная: человеку нужен один и тот же
+    размер на экране, каким бы ни был исходник, иначе два кадра сравниваются
+    не по коже, а по масштабу.
+
+    Возвращает `{'out', 'box', 'face_px', 'scale', 'small'}`. `face_px` —
+    ширина коробки лица В ИСХОДНИКЕ: по ней видно, о чём вообще речь, — лицо
+    на 200 px, растянутое до 900, покажет интерполяцию, а не поры. Такой
+    случай помечается `small`.
+
+    ⚠ Судить по этой картинке о ФАКТУРЕ нельзя, если `small`: растяжение
+    рисует свою. Замер фактуры берёт пиксели как есть (`image_grain_measure`),
+    а показ — дело глаза.
+    """
+    import cv2
+    got = ai_face_crop(path, out, mode=mode, det_size=det_size, anchor=anchor)
+    fx0, _, fx1, _ = got['face']
+    face_px = int(fx1 - fx0)
+    img = cv2.imread(str(out))
+    if img is None:
+        raise ValueError(f'не прочитана выкройка: {out}')
+    k = float(width) / max(1, img.shape[1])
+    if abs(k - 1.0) > 0.01:
+        img = cv2.resize(img, None, fx=k, fy=k,
+                         interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
+        cv2.imwrite(str(out), img)
+    return {'out': str(out), 'box': got['box'], 'face_px': face_px,
+            'scale': round(k, 3), 'small': bool(k > 1.0)}
 
 
 def ai_face_paste(base, patch, out, box, feather=AI_FACE_FEATHER, kps=None,

@@ -26,8 +26,8 @@ def state_watch(table, where: dict, column) -> dict:
         column: колонка, за которой сторожить (`status`).
 
     Returns:
-        {'значение': значение или None — строки нет,
-         'проба': строка `python -m mysql_.mysql_query sql …`, исполнимая в
+        {'value_of': значение или None — строки нет,
+         'probe': строка `python -m mysql_.mysql_query sql …`, исполнимая в
          корне проекта часовым сторожем как есть}.
     """
     for name in [table, column, *where]:

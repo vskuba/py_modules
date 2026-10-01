@@ -25,6 +25,10 @@ import yaml
 
 COMFYUI_TRAINER_TIMEOUT = 36000.0  # 4000 шагов на запечатках — часы, не минуты
 COMFYUI_TRAINER_MEM_MARGIN = 4.0   # ГиБ запаса: на живой остаток соседей-процессов
+# Потолок на короткий поход к ферме (положить конфиг, спросить память, снять
+# лору). Сам трейн этим не ограничен — у него свой COMFYUI_TRAINER_TIMEOUT;
+# здесь речь о ssh, который без потолка висит до TCP-таймаута ядра.
+COMFYUI_TRAINER_SSH_TIMEOUT = 600.0
 
 
 def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
@@ -73,7 +77,8 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
     remote_cfg = f'{toolkit}/config/{name}.yaml'
     subprocess.run([*_ssh(farm_ssh), f'docker exec -i {farm_container} '
                     f'bash -c "cat > {remote_cfg}"'],
-                   input=yml.encode(), check=True, capture_output=True)
+                   input=yml.encode(), check=True, capture_output=True,
+                   timeout=COMFYUI_TRAINER_SSH_TIMEOUT)
     # единая память GB10: не влезает с запасом — отказ, не отправляя
     free = float(_sh(farm_ssh, farm_container,
                      'grep MemAvailable /proc/meminfo | tr -cd 0-9\\n').strip()) / 2**20
@@ -123,7 +128,9 @@ def _ssh(host):
 
 def _sh(host, container, sh):
     return subprocess.run([*_ssh(host), f'docker exec {container} sh -c "{sh}"'],
-                          capture_output=True, text=True, check=True, errors='replace').stdout
+                          capture_output=True, text=True, check=True,
+                          errors='replace',
+                          timeout=COMFYUI_TRAINER_SSH_TIMEOUT).stdout
 
 
 def _pull(host, container, remote, out, name):
@@ -143,7 +150,8 @@ def _pull(host, container, remote, out, name):
     p = f'{out}/{name}.safetensors'
     with open(p, 'wb') as f:
         got = subprocess.run([*_ssh(host), f'docker exec {container} cat {remote}'],
-                             check=True, stderr=subprocess.PIPE, stdout=f)
+                             check=True, stderr=subprocess.PIPE, stdout=f,
+                             timeout=COMFYUI_TRAINER_SSH_TIMEOUT)
     if not Path(p).stat().st_size:
         raise RuntimeError(f'лора снялась пустой: {remote} '
                            f'({got.stderr.decode(errors="replace").strip()})')

@@ -11,10 +11,20 @@
 """
 import ast
 import re
+import sys
+
 from pathlib import Path
 
+# Файл запускают и путём (`python3 py_modules/tool_/tool_catalog.py`). Тогда первым в путях
+# лежит каталог файла, и соседний namespace (`file_`) не находится вовсе.
+if __package__ in (None, ''):
+    _here = str(Path(__file__).resolve().parent)
+    sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from file_.file_walk import file_walk
+
 TOOL_CATALOG_ROOT = Path(__file__).resolve().parents[1]
-TOOL_CATALOG_SKIP = ('.venv', '__pycache__', '.git', 'node_modules', '.idea')
 TOOL_CATALOG_TOPICS = 'docs/readme.md'
 
 # Строка таблицы «Состав» в индексе документации: | `имя.md` | описание |
@@ -48,10 +58,7 @@ def _functions(base: Path) -> list[dict]:
     """Публичные функции уровня модуля со всех `*.py` под корнем."""
     out = []
 
-    for path in sorted(base.rglob('*.py')):
-        if any(part in TOOL_CATALOG_SKIP for part in path.parts):
-            continue
-
+    for path in file_walk(base, ('.py',)):
         try:
             source = path.read_text(encoding='utf-8')
             tree = ast.parse(source)
@@ -114,6 +121,37 @@ def _topics(base: Path) -> list[dict]:
     return out
 
 
+def _main() -> None:
+    """CLI: `python -m tool_.tool_catalog [--kind func|topic] [--json]`."""
+    import argparse
+    import json
+
+    ap = argparse.ArgumentParser(
+        description='Опись общего слоя: публичные функции и темы документации. '
+                    'Собирается обходом дерева, индекса на диске нет.')
+    ap.add_argument('--kind', default='', choices=['', 'func', 'topic'],
+                    help='только функции или только темы')
+    ap.add_argument('--namespace', default='',
+                    help='только этот namespace (`adb_`, `image_`)')
+    ap.add_argument('--cli', action='store_true', help='только то, у чего есть CLI')
+    ap.add_argument('--json', action='store_true', help='машинный вывод')
+    ns = ap.parse_args()
+
+    rows = [r for r in tool_catalog()
+            if (not ns.kind or r['kind'] == ns.kind)
+            and (not ns.namespace or r['where'].split('/')[0] == ns.namespace)
+            and (not ns.cli or r['cli'])]
+    if ns.json:
+        print(json.dumps(rows, ensure_ascii=False))
+        return
+    for r in rows:
+        mark = '🔧' if r['kind'] == 'func' else '📄'
+        print(f"{mark} {r['where']}:{r['name']}{'  [CLI]' if r['cli'] else ''}")
+        if r['summary']:
+            print(f"      {r['summary']}")
+    print(f'\nвсего: {len(rows)}')
+
+
 def _summary(doc: str) -> str:
     """Первая строка докстринга — та, что отвечает «зачем звать» (code_rules, §7.1)."""
     if not doc:
@@ -126,3 +164,7 @@ def _summary(doc: str) -> str:
         first = rest[0].strip() if rest else ''
 
     return first
+
+
+if __name__ == '__main__':
+    _main()

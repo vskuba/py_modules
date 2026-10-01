@@ -283,7 +283,7 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                 # одной установке единственными png в каталоге оказались три
                 # ЧУЖИХ лица, и якорем становились они.
                 frames = sorted(x for x in f.iterdir()
-                               if x.is_file() and x.suffix.lower() in COMFY_GEN_FACE_EXTS)
+                                if x.is_file() and x.suffix.lower() in COMFY_GEN_FACE_EXTS)
                 f = Path(ai_look_anchor(frames, p, parts=parts_ask,
                                         cache=str(f / 'anchors.json'))['face'])
             probe = ai_look_probe(p, box)

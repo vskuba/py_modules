@@ -26,10 +26,10 @@ def comfy_node_info(name: str, base: str = '') -> dict:
         base: адрес ComfyUI; пусто — `COMFY_NODE_BASE`.
 
     Returns:
-        {'узел': str, 'обязательные': {имя: вход}, 'необязательные': {имя: вход},
-        'выходы': [типы]}, где вход — {'тип': str|[], 'значения': [] (если
+        {'node': str, 'required': {имя: вход}, 'optional': {имя: вход},
+        'outputs': [типы]}, где вход — {'type': str|[], 'values': [] (если
         enumerate-файл; иначе ''), 'default': что есть}. Для enum-входов
-        'значения' — тот самый список: видно, что файл виден загрузчику без
+        'values' — тот самый список: видно, что файл виден загрузчику без
         прогона. `ValueError` словами — если такого узла на ферме нет: проверять
         граф чужой фермой молча означало бы соврать.
     """
@@ -37,35 +37,41 @@ def comfy_node_info(name: str, base: str = '') -> dict:
     url = f'{base}/object_info/{urllib.request.quote(name)}'
     with urllib.request.urlopen(url, timeout=15) as r:
         body = json.load(r)
-    node_ = body.get(name)
-    if node_ is None:
+    node = body.get(name)
+    if node is None:
         raise ValueError(f'узел «{name}» на ферме {base} не объявлен; '
                          'спроси имя из /object_info целиком')
     inputs = {'required': {}, 'optional': {}}
     for label in ('required', 'optional'):
-        for name_, v in (node_.get('input', {}).get(label, {}) or {}).items():
-            typ = v[0] if isinstance(v, list) and v else v
+        for field, v in (node.get('input', {}).get(label, {}) or {}).items():
+            kind = v[0] if isinstance(v, list) and v else v
             extra = v[1] if isinstance(v, list) and len(v) > 1 and v[1] else {}
-            entry = ({'type': typ, 'values': []} if isinstance(typ, str)
-                     else {'type': 'COMBO', 'values': typ})
+            entry = ({'type': kind, 'values': []} if isinstance(kind, str)
+                     else {'type': 'COMBO', 'values': kind})
             if 'default' in extra:
                 entry['default'] = extra['default']
-            inputs[label][name_] = entry
-    return {'node': name, 'outputs': node_.get('output', []), **inputs}
+            inputs[label][field] = entry
+    return {'node': name, 'outputs': node.get('output', []), **inputs}
 
 
 def comfy_node_sees(name: str, file: str, base: str = '') -> dict:
     """Видит ли загрузчик этот файл (имя в enumerate его входов) — без прогона.
 
-    Возвращает {'виден': bool, 'вход': имя, 'значения': сколько} словами о том,
-    где именно имя видно или почему нет.
+    Args:
+        name: имя класса ноды-загрузчика.
+        file: имя файла, как его пишут во входе графа.
+        base: адрес ComfyUI; пусто — `COMFY_NODE_BASE`.
+
+    Returns:
+        {'visible': bool, 'input': имя входа, 'values': длина enumerate} —
+        видно, где именно имя нашлось; не нашлось — `input` пуст.
     """
     info = comfy_node_info(name, base)
     for label in ('required', 'optional'):
-        for name_, entry_ in info[label].items():
-            if file in entry_.get('values', []):
-                return {'visible': True, 'input': name_,
-                        'values': len(entry_['values'])}
+        for field, entry in info[label].items():
+            if file in entry.get('values', []):
+                return {'visible': True, 'input': field,
+                        'values': len(entry['values'])}
     return {'visible': False, 'input': '', 'values': 0}
 
 

@@ -66,5 +66,6 @@ if __name__ == '__main__':
                         ('only_js', 'читается, но не отдаётся')):
         for key, where in sorted(r[name].items()):
             print(f'  {key!r} — {title}: {", ".join(where[:3])}')
-    print(f'совпало ключей: {r["both"]}' + (f', расшлось: '
-                                           f'{len(r["only_server"]) + len(r["only_js"])}'))
+    gap = len(r['only_server']) + len(r['only_js'])
+    print(f'совпало ключей: {r["both"]}' + (f', расшлось: {gap}'))
+    raise SystemExit(min(gap, 125))   # код возврата живёт в байте, см. file_check
