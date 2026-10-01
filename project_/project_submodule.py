@@ -83,7 +83,18 @@ def project_submodule_bump(line: str = 'master', from_repo: str = '') -> dict:
          'files': diff --stat старый gitlink..новый sha, пусто — линия полная}
 
     Raises:
-        ValueError: цель не читается (нет такой ветки/sha нигде из названных).
+        ValueError: цель не читается (нет такой ветки/sha нигде из названных),
+            либо линии разошлись **содержанием** и слияние упёрлось в конфликт.
+
+    ⚠⚠ **Конфликт слияния разрешает человек, и чекаут при этом не трогается.**
+    Автоматически слить можно только то, что не спорит; спорное — это две
+    осмысленные правки одного места, и выбрать между ними может лишь тот, кто
+    знает, зачем они сделаны. Прежде конфликт ронял модуль исключением
+    `CalledProcessError` **посреди слияния**: чекаут оставался с конфликтом в
+    дереве, на чужом коммите и с висящей веткой `_psm-tmp`, а человек видел
+    `Command '[...]' returned non-zero exit status 128` и не знал ни что
+    случилось, ни где теперь его линия. Измерено на живом расхождении
+    DatingAi ↔ RhapsodyAi 01.10.2026.
     """
     root, sub = _repo()
     head = project_git(sub, 'rev-parse', 'HEAD')
@@ -103,11 +114,26 @@ def project_submodule_bump(line: str = 'master', from_repo: str = '') -> dict:
         sub, 'merge-base', '--is-ancestor', head, sha)
     if merged:
         # линия чекаута не предок цели — вливаем её в цель временной веткой,
-        # как это делают руками: цель победит, но не потеряет чужое
+        # как это делают руками: цель победит, но не потеряет чужое.
+        #
+        # ⚠ Весь танец — под откат: любой шаг может не удаться (конфликт,
+        # грязное дерево), и бросить человека посреди слияния нельзя.
+        _run_ok(sub, 'branch', '-q', '-D', '_psm-tmp')   # хвост прошлой неудачи
         _run(sub, 'branch', '-q', '_psm-tmp', head)
         _run(sub, 'checkout', '-q', sha)
-        _run(sub, 'merge', '-q', '--no-edit', '_psm-tmp')
-        _run(sub, 'branch', '-q', '-D', '_psm-tmp')
+
+        if not _run_ok(sub, 'merge', '-q', '--no-edit', '_psm-tmp'):
+            # ⚠ Возврат ровно туда, где человек стоял: прерванное слияние
+            # отменяем, чекаут ставим обратно на его линию, временную ветку
+            # убираем. Оставь мы хоть что-то — следующий заход упал бы на
+            # занятом имени ветки, и причина выглядела бы совсем иной.
+            why = _merge_why(sub, line)
+            _run_ok(sub, 'merge', '--abort')
+            _run_ok(sub, 'checkout', '-q', '--force', head)
+            _run_ok(sub, 'branch', '-q', '-D', '_psm-tmp')
+            raise ValueError(why)
+
+        _run_ok(sub, 'branch', '-q', '-D', '_psm-tmp')
     else:
         _run(sub, 'checkout', '-q', sha)
 
@@ -132,6 +158,25 @@ def _repo() -> tuple[Path, Path]:
     here = Path(__file__).resolve().parents[1]
     super_ = project_git(here, 'rev-parse', '--show-superproject-working-tree')
     return (Path(super_) if super_ else here), here
+
+
+def _merge_why(sub: Path, line: str) -> str:
+    """Отказ слияния словами: какие файлы спорят и что с этим делать.
+
+    Голый `CalledProcessError` человеку не говорит ничего — ни что слияние
+    вообще было, ни где теперь его линия. Называем спорные файлы и путь
+    руками: выбирать между двумя осмысленными правками одного места модуль
+    не вправе.
+    """
+    files = [row.split('\t')[-1] for row in
+             project_git(sub, 'diff', '--name-only', '--diff-filter=U').splitlines()
+             if row.strip()]
+    shown = ', '.join(files[:6]) + (' …' if len(files) > 6 else '')
+
+    return (f'линии разошлись содержанием, слить само не вышло — спорят: '
+            f'{shown or "(файлы не названы)"}. Чекаут возвращён на прежнюю '
+            f'линию, ничего не потеряно. Разрешать руками: '
+            f'cd {sub} && git merge {line} — и выбрать, чья правка верна')
 
 
 def _run_ok(cwd: Path, *args: str) -> bool:
