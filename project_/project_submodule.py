@@ -101,10 +101,11 @@ def project_submodule_bump(line: str = 'master', from_repo: str = '') -> dict:
     target = line
     if from_repo:
         # та же линия в двух чекаутах живёт по-разному: свежее там, где правят
+        other = _layer_of(Path(from_repo))
         here = project_git(sub, 'rev-parse', '--verify', line)
-        there = project_git(Path(from_repo).resolve(), 'rev-parse', '--verify', line)
+        there = project_git(other, 'rev-parse', '--verify', line)
         if there and (not here or here != there):
-            _run(sub, 'fetch', '-q', str(Path(from_repo).resolve()), line)
+            _run(sub, 'fetch', '-q', str(other), line)
             target = 'FETCH_HEAD'
     if not project_git(sub, 'rev-parse', '--verify', target):
         raise ValueError(f'цель {line!r} не читается в {sub.name}: ни ветка, ни sha')
@@ -160,6 +161,24 @@ def _repo() -> tuple[Path, Path]:
     return (Path(super_) if super_ else here), here
 
 
+def _layer_of(where: Path) -> Path:
+    """Чекаут общего слоя по пути, который назвал человек.
+
+    ⚠⚠ **Называют обычно корень проекта**, а не сам слой: «возьми линию из
+    DatingAi» — естественная формулировка, и путь к `…/DatingAi/py_modules`
+    человек держать в голове не обязан. Берём подпапку, если она есть.
+
+    Без этого `fetch` тянул линию **самого проекта**: приезжала чужая история,
+    `merge-base --is-ancestor` отвечал «не предок» даже у совпавших линий, а
+    слияние упиралось в `refusing to merge unrelated histories`. Снаружи это
+    выглядело как «линии разошлись» там, где они одинаковы.
+    """
+    here = where.resolve()
+    inner = here / Path(__file__).resolve().parents[1].name
+
+    return inner if (inner / '.git').exists() else here
+
+
 def _merge_why(sub: Path, line: str) -> str:
     """Отказ слияния словами: какие файлы спорят и что с этим делать.
 
@@ -171,12 +190,23 @@ def _merge_why(sub: Path, line: str) -> str:
     files = [row.split('\t')[-1] for row in
              project_git(sub, 'diff', '--name-only', '--diff-filter=U').splitlines()
              if row.strip()]
+
+    # ⚠ Спорящих файлов нет — значит слияние не началось вовсе, и причина
+    # другая: чаще всего привезли линию **не того репозитория** (`--from`
+    # указывает на проект, у которого свой `py_modules`). Говорить про
+    # «разошлись содержанием» тут значило бы послать человека разбирать
+    # конфликт, которого нет.
+    if not files:
+        return (f'слить не вышло, и спорящих файлов нет — похоже, привезена '
+                f'линия другого репозитория. Чекаут возвращён на прежнюю линию. '
+                f'Проверить: cd {sub} && git merge {line}')
+
     shown = ', '.join(files[:6]) + (' …' if len(files) > 6 else '')
 
     return (f'линии разошлись содержанием, слить само не вышло — спорят: '
-            f'{shown or "(файлы не названы)"}. Чекаут возвращён на прежнюю '
-            f'линию, ничего не потеряно. Разрешать руками: '
-            f'cd {sub} && git merge {line} — и выбрать, чья правка верна')
+            f'{shown}. Чекаут возвращён на прежнюю линию, ничего не потеряно. '
+            f'Разрешать руками: cd {sub} && git merge {line} — и выбрать, '
+            f'чья правка верна')
 
 
 def _run_ok(cwd: Path, *args: str) -> bool:
