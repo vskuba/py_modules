@@ -79,6 +79,7 @@ namespace-папок, которые проекты импортируют на�
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
+| `google_drive_/` | `docs/google_drive.md` — чужая папка Диска сервисным аккаунтом: токен подписью, обход вглубь, превью вместо оригинала; ⚠ «не расшарили» приходит пустым списком, а не отказом |
 | `comfy_/comfy_gen.py` | `docs/comfy_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
 | `comfy_/comfy_collection.py` | `docs/comfy_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/http_mock.py` | `docs/testing_rules.md`, §5.1 — сторож «живого HTTP в тестах не бывает»: на транспорте httpx и на весь прогон, а не на сокете и не на тест |
@@ -251,6 +252,9 @@ CLI есть у модулей, которыми пользуются «рука
 | `evm_.evm_typed` | `domain имя версия chain контракт` / `typehash «тип»` / `digest «тип» --fields '{}' --domain 0x…` → EIP-712 руками |
 | `evm_.evm_eip3009` | `КЛЮЧ --token '{}' --chain --to --value --nonce --before` → authorization с самопроверкой signer==recovered |
 | `ai.ai_vision` | `describe`, `normalize` |
+| `google_drive_.google_drive_` | `token`, `shared`, `list '<условие q>'` `[--key путь]` → доступ есть? что видно? файлы по условию |
+| `google_drive_.google_drive_walk` | `<имя папки\|id> [--groups] [--key]` → дерево вглубь; `--groups` — разложенное по папкам, как у человека |
+| `google_drive_.google_drive_bytes` | `<папка> <часть имени> [--width 200\|400\|800\|1600] [--out файл]` → превью или оригинал |
 | `adb_.adb_` | `devices`, `info [--json]`, `size`, `capture`, `describe`; паспорт снимается одной командой, а не пятью |
 | `adb_.adb_ui` | `map`, `find`, `dump`, `wait «надпись» [--timeout]` `[--exact --json]`; find/wait: код возврата 0 — нашлось, 1 — нет |
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake`, `wake-full [no-unlock no-home no-stayon]`, `stayon on\|off` |
