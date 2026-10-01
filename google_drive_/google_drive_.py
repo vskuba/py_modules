@@ -94,9 +94,7 @@ async def google_drive_token(key_path: str = '', scope: str = '') -> str:
     аккаунт: ни в URL картинки, ни в ответ ручки, ни в журнал он попадать не
     должен — только в заголовок запроса.
     """
-    path = str(key_path or config_get('GOOGLE_DRIVE_KEY', ''))
-    if not path:
-        raise RuntimeError('ключ сервисного аккаунта не задан: GOOGLE_DRIVE_KEY')
+    path = _key_path(key_path)
 
     cached, until = _tokens.get(path, ('', 0.0))
     if cached and until > time.time():
@@ -216,6 +214,31 @@ async def _token_fetch(key_path: str, scope: str) -> tuple[str, int]:
         raise RuntimeError(f'Google не выдал токен ({response.status_code}): {response.text[:300]}')
     answer = response.json()
     return answer['access_token'], int(answer.get('expires_in', 3600))
+
+
+def _key_path(key_path: str = '') -> str:
+    """Путь к ключу: заданный вызовом либо `GOOGLE_DRIVE_KEY` из настроек.
+
+    ⚠⚠ **Относительный путь считается от корня проекта, а не от рабочего
+    каталога.** В настройках его естественно писать коротко
+    (`google_drive/ключ.json`), и из запущенной панели такой путь работает —
+    она стартует из корня. А вот задание планировщика, сюита или разовый
+    скрипт запускаются откуда угодно, и тот же путь у них не открывается:
+    отказ выглядит как «ключа нет», хотя ключ на месте.
+
+    Проверено делом: задание галереи из рабочего каталога ветки получило
+    «No such file or directory» на все пятьдесят три анкеты.
+    """
+    path = str(key_path or config_get('GOOGLE_DRIVE_KEY', ''))
+    if not path:
+        raise RuntimeError('ключ сервисного аккаунта не задан: GOOGLE_DRIVE_KEY')
+
+    if Path(path).is_absolute():
+        return path
+
+    from project_.project_ import project_root
+
+    return str(project_root() / path)
 
 
 def _error_words(status: int, text: str) -> str:
