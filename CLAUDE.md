@@ -78,7 +78,8 @@ namespace-папок, которые проекты импортируют на�
 | `ai/ai_mask.py` | `docs/ai_mask.md` — контур минус перекрытия, связность вместо яркости, перо в пикселях |
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
-| `ai/ai_vision.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт |
+| `ai/vision/ai_vision.py`, `ai/vision/ai_vision_json.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт; §6.1 — структурный ответ в колонки |
+| `google_drive_/` | `docs/google_drive.md` — чужая папка Диска сервисным аккаунтом: токен подписью, обход вглубь, превью вместо оригинала; ⚠ «не расшарили» приходит пустым списком, а не отказом |
 | `comfy_/comfy_gen.py` | `docs/comfy_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
 | `comfy_/comfy_collection.py` | `docs/comfy_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/http_mock.py` | `docs/testing_rules.md`, §5.1 — сторож «живого HTTP в тестах не бывает»: на транспорте httpx и на весь прогон, а не на сокете и не на тест |
@@ -174,7 +175,7 @@ PYTHONPATH=. python -m image_.image_scan --help  # что умеет канди�
   безопасен (см. выше), вторая публичная функция с тем же смыслом расходится с первой
   и путает соседние проекты.
 - **Нашлось в другом namespace — зови импортом**, а не копируй; тяжёлый стек подключай
-  лениво внутри функции (`adb_` → `ai.ai_vision` именно так).
+  лениво внутри функции (`adb_` → `ai.vision.ai_vision` именно так).
 - **Не нашлось — сначала выбери слой**: универсальное сюда, знающее про таблицы и роли
   проекта — в его ветку инструментов. Критерий — `docs/tool_rules.md`, §1; имя нового —
   по правилу префикса namespace выше.
@@ -187,7 +188,7 @@ PYTHONPATH=. python -m image_.image_scan --help  # что умеет канди�
 
 ```bash
 .venv/bin/python -c "from adb_.adb_ui import adb_ui_find"     # импорт: зависимости на месте
-PYTHONPATH=. .venv/bin/python -m ai.ai_vision describe <файл>  # прогон CLI модуля
+PYTHONPATH=. .venv/bin/python -m ai.vision.ai_vision describe <файл>  # прогон CLI модуля
 ```
 
 ### Зависимости
@@ -250,7 +251,11 @@ CLI есть у модулей, которыми пользуются «рука
 | `crypto_.crypto_ed25519` | `pair [--seed-text]` / `sign КЛЮЧ «челлендж»` / `verify PUB «челлендж» SIG` `[--encoding hex\|base64url\|base58]` |
 | `evm_.evm_typed` | `domain имя версия chain контракт` / `typehash «тип»` / `digest «тип» --fields '{}' --domain 0x…` → EIP-712 руками |
 | `evm_.evm_eip3009` | `КЛЮЧ --token '{}' --chain --to --value --nonce --before` → authorization с самопроверкой signer==recovered |
-| `ai.ai_vision` | `describe`, `normalize` |
+| `ai.vision.ai_vision` | `describe`, `normalize` |
+| `ai.vision.ai_vision_json` | `<картинка> «просьба с именами полей» [--model --tokens]` → разобранный объект вместо прозы; ⚠ поля называют в просьбе, пустого словаря не бывает |
+| `google_drive_.google_drive_` | `token`, `shared`, `list '<условие q>'` `[--key путь]` → доступ есть? что видно? файлы по условию |
+| `google_drive_.google_drive_walk` | `<имя папки\|id> [--groups] [--key]` → дерево вглубь; `--groups` — разложенное по папкам, как у человека |
+| `google_drive_.google_drive_bytes` | `<папка> <часть имени> [--width 200\|400\|800\|1600] [--out файл]` → превью или оригинал |
 | `adb_.adb_` | `devices`, `info [--json]`, `size`, `capture`, `describe`; паспорт снимается одной командой, а не пятью |
 | `adb_.adb_ui` | `map`, `find`, `dump`, `wait «надпись» [--timeout]` `[--exact --json]`; find/wait: код возврата 0 — нашлось, 1 — нет |
 | `adb_.adb_input` | `tap`, `tap-on`, `swipe`, `scroll`, `text`, `key`, `wake`, `wake-full [no-unlock no-home no-stayon]`, `stayon on\|off` |
@@ -391,7 +396,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 |------|-----------|
 | Фундамент | `config`, `logging_` |
 | Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_`, `redis_queue`, `qdrant_`, `sqllite3`, `queue_`, `state` |
-| LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/ai_vision`, `mcp_` |
+| LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/vision/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_`, `text_` |
 | Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `datetime_`, `json_`, `async_`, `thread_` |
 | Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `apk_` (разбор APK на машине), `translator`, `flux_schnell`, `microphone` |
@@ -400,7 +405,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 таблица.
 
 Тяжёлые зависимости подключаются **лениво, внутри функции**, чтобы соседний модуль не тянул
-чужой стек: `adb_` импортирует `ai.ai_vision` только в момент распознавания (снимок экрана не
+чужой стек: `adb_` импортирует `ai.vision.ai_vision` только в момент распознавания (снимок экрана не
 должен требовать pydantic-ai), а `ai_vision` импортирует реестр провайдеров только в момент
 запроса (нормализация JPEG живёт без него). По той же схеме `pdf_` берёт `pypdf`/`pypdfium2`,
 а `font_` — `fontTools`: на уровне модуля у них только stdlib.

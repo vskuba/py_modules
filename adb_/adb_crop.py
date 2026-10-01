@@ -152,7 +152,7 @@ def adb_crop_describe(crop: dict, prompt: str = '', model_name: str = '') -> str
     Returns:
         Текст ответа модели.
     """
-    from ai.ai_vision import ai_vision_describe_wait
+    from ai.vision.ai_vision import ai_vision_describe_wait
     with open(crop['path'], 'rb') as fh:
         return ai_vision_describe_wait(fh.read(), prompt=prompt, model_name=model_name)
 
