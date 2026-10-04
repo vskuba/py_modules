@@ -1,5 +1,9 @@
 """Смена воркера: одно задание на установку, и оно не задваивается.
 
+Namespace — `worker_`, то есть предметная область: очередь `rq`, задание,
+замок и сторож над ним. Круги, которые смена крутит **внутри** себя, — это
+соседний `round_`: там скелет «раз в N секунд, пока идёт смена».
+
 Это не «работа над объектом», как у конвейера задач: в сообщении очереди нет
 ничего. Один job поднимает фоновую работу установки — сокеты, круги, что
 угодно, — держит её несколько часов и завершается, поставив себе следующую.
@@ -42,7 +46,8 @@
 
 `rq` восстанавливает job **по полному имени модуля** из Redis: воркер живёт в
 отдельном контейнере и получает ссылку, а не код. Положи точку входа сюда — и
-воркер поднял бы `shift_.shift_.…`, который не знает, какую работу крутить.
+воркер поднял бы `worker_.worker_shift.…`, который не знает, какую
+работу крутить.
 
 Поэтому в проекте остаются ровно две вещи: функция-точка входа (её имя уезжает в
 Redis) и шесть доводов — очередь, ключ, слово журнала, работа, срок смены, шаг
@@ -58,26 +63,26 @@ from redis_queue.redis_queue import redis_queue_get
 
 # Длина смены. Меньше часа — и перезапуски начинают стоить дороже самой работы;
 # больше суток — и правка кода не доезжает до живой смены.
-SHIFT_HOLD_SEC = 6 * 3600
+WORKER_SHIFT_HOLD_SEC = 6 * 3600
 
 # Насколько потолок задания больше смены. Рвать работу должен её собственный
 # срок, а не `rq` снаружи; умолчание `rq` (180 с) сюда не годится на два порядка.
-SHIFT_JOB_EXTRA_SEC = 600
+WORKER_SHIFT_JOB_EXTRA_SEC = 600
 
-SHIFT_RESULT_TTL = 3600
+WORKER_SHIFT_RESULT_TTL = 3600
 
 # Срок замка и темп его продления — см. ⚠⚠ в заголовке. Продлеваем заметно чаще,
 # чем он гаснет: одна пропущенная отметка не должна отпирать работу.
-SHIFT_FLIGHT_TTL = 150
-SHIFT_FLIGHT_BEAT = 60
+WORKER_SHIFT_LOCK_TTL = 150
+WORKER_SHIFT_BEAT = 60
 
 # Как часто сторож заглядывает, жива ли смена. Заглядывание стоит одной команды
 # Redis, а постановка вслепую безопасна — она заперта тем же ключом. Полминуты —
 # с запасом чаще срока замка.
-SHIFT_KEEP_STEP = 30
+WORKER_SHIFT_KEEP_STEP = 30
 
 
-def shift_flight_acquire(key: str, ttl: float = SHIFT_FLIGHT_TTL) -> bool:
+def worker_shift_lock(key: str, ttl: float = WORKER_SHIFT_LOCK_TTL) -> bool:
     """Занять замок смены. `False` — она уже работает или ждёт очереди.
 
     Args:
@@ -85,26 +90,26 @@ def shift_flight_acquire(key: str, ttl: float = SHIFT_FLIGHT_TTL) -> bool:
         ttl: срок ключа в секундах.
 
     ⚠ Срок короткий намеренно: пока смена идёт, она продлевает ключ сама
-    (`shift_beat`). Умерший воркер перестаёт продлевать, и место освобождается
+    (`worker_shift_beat`). Умерший воркер перестаёт продлевать, и место освобождается
     через минуты, а не через смену.
     """
     return bool(redis_conn_get().set(key, '1', nx=True, ex=int(ttl)))
 
 
-def shift_flight_release(key: str) -> None:
+def worker_shift_unlock(key: str) -> None:
     """Освободить замок. Повторный вызов безвреден."""
     redis_conn_get().delete(key)
 
 
-def shift_flight_busy(key: str) -> bool:
+def worker_shift_busy(key: str) -> bool:
     """Идёт ли смена прямо сейчас — по этому и видно, нужна ли новая."""
     return bool(redis_conn_get().exists(key))
 
 
-def shift_enqueue(job, *, queue: str, key: str, what: str,
-                  hold: float = SHIFT_HOLD_SEC,
-                  ttl: float = SHIFT_FLIGHT_TTL,
-                  result_ttl: float = SHIFT_RESULT_TTL) -> str | None:
+def worker_shift_enqueue(job, *, queue: str, key: str, what: str,
+                  hold: float = WORKER_SHIFT_HOLD_SEC,
+                  ttl: float = WORKER_SHIFT_LOCK_TTL,
+                  result_ttl: float = WORKER_SHIFT_RESULT_TTL) -> str | None:
     """Поставить смену в очередь. `None` — смена уже идёт.
 
     Args:
@@ -127,18 +132,18 @@ def shift_enqueue(job, *, queue: str, key: str, what: str,
     ⚠ Безопасно звать откуда угодно и как угодно часто: замок делает повторный
     вызов бездействием, а не второй сменой на ту же работу.
     """
-    if not shift_flight_acquire(key, ttl):
+    if not worker_shift_lock(key, ttl):
         return None
 
     try:
         placed = redis_queue_get(queue).enqueue(
             job,
-            job_timeout=int(hold + SHIFT_JOB_EXTRA_SEC),
+            job_timeout=int(hold + WORKER_SHIFT_JOB_EXTRA_SEC),
             result_ttl=int(result_ttl),
             failure_ttl=int(result_ttl),
         )
     except Exception:
-        shift_flight_release(key)
+        worker_shift_unlock(key)
         raise
 
     logger_info(f'{what}: смена поставлена в очередь [{placed.id[:8]}]')
@@ -146,10 +151,10 @@ def shift_enqueue(job, *, queue: str, key: str, what: str,
     return placed.id
 
 
-async def shift_run(work, *, key: str, what: str, again=None,
-                    hold: float = SHIFT_HOLD_SEC,
-                    ttl: float = SHIFT_FLIGHT_TTL,
-                    beat: float = SHIFT_FLIGHT_BEAT) -> str:
+async def worker_shift_run(work, *, key: str, what: str, again=None,
+                    hold: float = WORKER_SHIFT_HOLD_SEC,
+                    ttl: float = WORKER_SHIFT_LOCK_TTL,
+                    beat: float = WORKER_SHIFT_BEAT) -> str:
     """Одна смена целиком: продление замка, работа, уборка, следующая смена.
 
     Args:
@@ -178,12 +183,12 @@ async def shift_run(work, *, key: str, what: str, again=None,
     ближайшего захода сторожа, а дыра — это пропущенная работа.
     """
     logging_init()
-    beating = asyncio.create_task(shift_beat(key, what, ttl=ttl, every=beat))
+    beating = asyncio.create_task(worker_shift_beat(key, what, ttl=ttl, every=beat))
     try:
         done = await work(hold)
     finally:
         beating.cancel()
-        shift_flight_release(key)
+        worker_shift_unlock(key)
         await mysql_pool_close()
 
     if again is not None:
@@ -192,8 +197,8 @@ async def shift_run(work, *, key: str, what: str, again=None,
     return str(done)
 
 
-async def shift_beat(key: str, what: str, ttl: float = SHIFT_FLIGHT_TTL,
-                     every: float = SHIFT_FLIGHT_BEAT) -> None:
+async def worker_shift_beat(key: str, what: str, ttl: float = WORKER_SHIFT_LOCK_TTL,
+                     every: float = WORKER_SHIFT_BEAT) -> None:
     """Продлевать замок, пока смена жива. Бесконечная — снимают отменой задачи.
 
     ⚠ Сбой Redis не роняет работу: она идёт и без ключа, а лишняя смена хуже,
@@ -208,8 +213,8 @@ async def shift_beat(key: str, what: str, ttl: float = SHIFT_FLIGHT_TTL,
         await asyncio.sleep(every)
 
 
-def shift_keep_start(enqueue, what: str,
-                     step: float = SHIFT_KEEP_STEP) -> asyncio.Future:
+def worker_shift_keep(enqueue, what: str,
+                     step: float = WORKER_SHIFT_KEEP_STEP) -> asyncio.Future:
     """Завести сторожа: возвращает смену, когда её не стало.
 
     Args:
@@ -225,18 +230,18 @@ def shift_keep_start(enqueue, what: str,
     ⚠ Смену ставим сразу, не дожидаясь первого захода: при старте её обычно нет,
     и ждать полминуты незачем.
     """
-    shift_enqueue_quietly(enqueue, what, 'смена поднята при старте')
+    _quietly(enqueue, what, 'смена поднята при старте')
 
     return asyncio.ensure_future(_keep(enqueue, what, step))
 
 
-def shift_keep_stop(task) -> None:
+def worker_shift_keep_stop(task) -> None:
     """Снять сторожа. Звать на остановке сервера — он бесконечный."""
     if task is not None and not task.done():
         task.cancel()
 
 
-def shift_enqueue_quietly(enqueue, what: str, why: str) -> None:
+def _quietly(enqueue, what: str, why: str) -> None:
     """Поставить смену, если её нет. Не бросает и не шумит.
 
     ⚠ Молчание при живой смене намеренное: сторож заглядывает дважды в минуту, и
@@ -257,5 +262,5 @@ async def _keep(enqueue, what: str, step: float) -> None:
     """Тело сторожа: спит и возвращает смену, когда её не стало."""
     while True:
         await asyncio.sleep(step)
-        shift_enqueue_quietly(enqueue, what,
+        _quietly(enqueue, what,
                               'смена поднята заново — прежняя не вернулась')
