@@ -154,7 +154,7 @@ def _run(command: str, timeout: int) -> str:
     ввода здесь нет.
     """
     got = subprocess.run(command, shell=True, capture_output=True,
-                         text=True, timeout=timeout)
+                         text=True, errors='replace', timeout=timeout)
     if got.returncode:
         raise RuntimeError(f'{command[:60]}…: {got.stderr.strip()[:300]}')
 
@@ -166,9 +166,16 @@ def _feed(command: str, payload: str) -> str:
 
     ⚠ Ошибку **не бросаем**: отказ миграции — это и есть то, ради чего
     репетиция; его надо показать человеку, а не спрятать под исключением.
+
+    ⚠⚠ `errors='replace'`, и это не украшение. Клиент MySQL цитирует в ошибке
+    **кусок данных**, а данные лежат как угодно — `latin1`, обрезанный UTF-8,
+    бинарь. Без этого довода репетиция падала `UnicodeDecodeError` в недрах
+    `subprocess`, не дойдя до вывода: вместо отказа миграции человек получал
+    трассировку питона, в которой ни миграции, ни SQL не упомянуто вовсе.
+    Поймано живьём на `chat_initiative` (байт `0x8d` в выводе клиента).
     """
     got = subprocess.run(command, shell=True, input=payload,
-                         capture_output=True, text=True,
+                         capture_output=True, text=True, errors='replace',
                          timeout=MYSQL_REHEARSE_APPLY_TIMEOUT)
 
     return (got.stdout or '') + (got.stderr or '')
