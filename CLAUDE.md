@@ -87,6 +87,7 @@ namespace-папок, которые проекты импортируют на�
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
 | `setting_/setting_state.py` | `docs/setting_state.md` — JSON-состояние кругов поверх настроек, `dynamic=1` |
+| `round_/` | `docs/round.md` — круг и заход: скелет смены, слот в Redis против темпа в памяти, суточная норма, обход единиц; ⚠ смены в слое нет намеренно — это набор занятий проекта |
 | `logging_/` | `docs/observability_rules.md` |
 | `datetime_/` | `docs/datetime_rules.md` |
 | `auth_/` | `docs/auth_rules.md` |
