@@ -59,7 +59,7 @@ import asyncio
 from logging_.logging_ import logger_info, logging_init
 from mysql_.mysql_ import mysql_pool_close
 from redis_.redis_ import redis_conn_get
-from redis_queue.redis_queue import redis_queue_get
+from redis_.redis_queue import redis_queue_get
 
 # Длина смены. Меньше часа — и перезапуски начинают стоить дороже самой работы;
 # больше суток — и правка кода не доезжает до живой смены.

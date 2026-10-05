@@ -397,7 +397,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | Слой | Namespace |
 |------|-----------|
 | Фундамент | `config`, `logging_` |
-| Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_`, `redis_queue`, `qdrant_`, `sqllite3`, `queue_`, `state` |
+| Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_` (соединение и очередь RQ), `qdrant_`, `sqllite3`, `queue_`, `state` |
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/vision/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_`, `text_` |
 | Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `datetime_`, `json_`, `async_`, `thread_` |
