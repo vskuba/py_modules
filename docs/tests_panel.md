@@ -1,9 +1,23 @@
-# Обвязка сюиты панели (`pytest_/`)
+# Обвязка сюиты панели (`tests_/`)
 
 > Сюита ходит по HTTP в **работающую** панель. Всё, что для этого нужно одинаково
 > у всех — вход, клиенты, сторож сети, адрес базы, уборка после теста.
 
-## 0. Почему сюита против живого приложения, а не против объекта `app`
+## 0. ⚠⚠ Почему namespace `tests_`, а не `pytest_`
+
+Сперва он и звался `pytest_`: модули-то про pytest. Имя оказалось непригодным, и
+по технической причине, а не по вкусу.
+
+**Pytest считает своим хуком любое имя на `pytest_` в `conftest.py`.** Импортируй
+туда `pytest_db_after` — и pluggy при сборе падает: `unknown hook
+'pytest_db_after'`. Ни один тест не запускается, а обвязка именно туда и
+импортируется.
+
+Обойти это можно было бы псевдонимами на каждом импорте, но это ловушка для
+каждого следующего проекта: забыл псевдоним — сюита не стартует вовсе.
+`tests_` снимает вопрос целиком.
+
+## 0.1 Почему сюита против живого приложения, а не против объекта `app`
 
 Половина того, что стоит проверять, живёт не в коде: сессия в куке, срез
 префикса прокси, права на странице, порядок роутов. Тест против `app` их не
@@ -16,11 +30,11 @@
 
 | Файл | Что |
 |------|-----|
-| `pytest_panel.py` | вход, кэш сессий на прогон, клиенты |
-| `pytest_net.py` | сторож сети: наружу установки не ходить |
-| `pytest_db.py` | адрес базы с хоста, `.env`, уборка после теста |
-| `pytest_guard.py` | сторож приёма: исходник без собственных объяснений |
-| `pytest_order.py` | отчёт о порядке прогона |
+| `tests_panel.py` | вход, кэш сессий на прогон, клиенты |
+| `tests_net.py` | сторож сети: наружу установки не ходить |
+| `tests_db.py` | адрес базы с хоста, `.env`, уборка после теста |
+| `tests_guard.py` | сторож приёма: исходник без собственных объяснений |
+| `tests_order.py` | отчёт о порядке прогона |
 
 ## 1. Клиенты и вход
 
@@ -28,12 +42,12 @@
 @pytest.fixture
 async def client():
     """Без входа — им проверяется, что закрытое закрыто."""
-    async with pytest_panel_client() as http:
+    async with tests_panel_client() as http:
         yield http
 
 @pytest.fixture
 async def auth_client():
-    async with await pytest_panel_as(ADMIN_USERNAME, ADMIN_PASSWORD) as http:
+    async with await tests_panel_as(ADMIN_USERNAME, ADMIN_PASSWORD) as http:
         yield http
 ```
 
@@ -60,15 +74,15 @@ async def auth_client():
 ```python
 @pytest.fixture(autouse=True)
 def no_outside_calls(monkeypatch, request):
-    pytest_net_guard(monkeypatch, request.node.name,
+    tests_net_guard(monkeypatch, request.node.name,
                      ports=(3313,),                       # порт базы наружу
-                     pairs=[(h, 8021) for h in PYTEST_NET_LOOPBACK],
+                     pairs=[(h, 8021) for h in TESTS_NET_LOOPBACK],
                      hint='Внешнее — только через заглушку: `rhapsody_fake.py`.')
 ```
 
 | | что видит | чего не видит |
 |---|---|---|
-| сокетный (`pytest_net`) | **любое** соединение | ставится на тест и снимается с ним |
+| сокетный (`tests_net`) | **любое** соединение | ставится на тест и снимается с ним |
 | `http_/http_mock.py` | только HTTP, зато **весь прогон** | не-HTTP соединения |
 
 Сокетный ставится `monkeypatch`'ем на каждый тест, а часть работы уходит в
@@ -85,8 +99,8 @@ def no_outside_calls(monkeypatch, request):
 ## 3. ⚠⚠ База: адрес правится первой строкой `conftest.py`
 
 ```python
-from pytest_.pytest_db import pytest_db_reachable
-pytest_db_reachable('3313')          # до любого импорта из src/
+from tests_.tests_db import tests_db_reachable
+tests_db_reachable('3313')          # до любого импорта из src/
 ```
 
 Имя контейнера с хоста не резолвится, а слой читает адрес **на уровне модуля** —
@@ -103,7 +117,7 @@ pytest_db_reachable('3313')          # до любого импорта из src
 @pytest.fixture(autouse=True)
 async def db_pool():
     yield
-    await pytest_db_after()
+    await tests_db_after()
 ```
 
 Пул привязан к циклу событий, а цикл у каждого теста свой: первый тест, позвавший

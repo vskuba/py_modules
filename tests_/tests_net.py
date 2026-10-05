@@ -33,14 +33,14 @@ import socket
 # Порты своей установки, куда ходить можно всегда. MySQL (в контейнере и
 # опубликованный наружу) и Redis: база настоящая намеренно — подделка проверяла
 # бы подделку.
-PYTEST_NET_PORTS = (3306, 6379)
+TESTS_NET_PORTS = (3306, 6379)
 
 # Петля: только с ней разрешаются порты из `pairs`. ⚠ Имя контейнера сюда не
 # входит — с хоста оно и не резолвится, а из контейнера сюиту не гоняют.
-PYTEST_NET_LOOPBACK = ('127.0.0.1', 'localhost', '::1')
+TESTS_NET_LOOPBACK = ('127.0.0.1', 'localhost', '::1')
 
 
-def pytest_net_allowed(address, ports=(), pairs=()) -> bool:
+def tests_net_allowed(address, ports=(), pairs=()) -> bool:
     """Свой ли это адрес. Всё, что не своё, — запрещено.
 
     Args:
@@ -63,13 +63,13 @@ def pytest_net_allowed(address, ports=(), pairs=()) -> bool:
 
     host, port = str(address[0]), int(address[1] or 0)
 
-    if port in PYTEST_NET_PORTS or port in tuple(ports):
+    if port in TESTS_NET_PORTS or port in tuple(ports):
         return True
 
     return (host, port) in tuple(pairs)
 
 
-def pytest_net_guard(monkeypatch, what: str = '', ports=(), pairs=(),
+def tests_net_guard(monkeypatch, what: str = '', ports=(), pairs=(),
                      hint: str = '') -> None:
     """Запретить тесту соединения наружу. Зовётся из фикстуры с `autouse=True`.
 
@@ -88,7 +88,7 @@ def pytest_net_guard(monkeypatch, what: str = '', ports=(), pairs=(),
     real_connect_ex = socket.socket.connect_ex
 
     def check(address) -> None:
-        if pytest_net_allowed(address, ports, pairs):
+        if tests_net_allowed(address, ports, pairs):
             return
 
         raise AssertionError(

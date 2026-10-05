@@ -30,8 +30,8 @@
 
 Иначе мёртвое прячется за упоминанием себя же: у `_number_check` в том же файле
 стоял комментарий «решает сервер (`_number_check`)» — одно это упоминание выдало бы
-живое имя. Вычёркиванием заняты готовые `pytest_guard_code` (питон, разбором) и
-`pytest_guard_text` (прочее, вычёркиванием).
+живое имя. Вычёркиванием заняты готовые `tests_guard_code` (питон, разбором) и
+`tests_guard_text` (прочее, вычёркиванием).
 
 ## ⚠⚠ Что каркас зовёт сам — не мёртвое
 
@@ -86,7 +86,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from file_.file_walk import file_walk
-from pytest_.pytest_guard import pytest_guard_code, pytest_guard_text
+from tests_.tests_guard import tests_guard_code, tests_guard_text
 from tool_.tool_impact import TOOL_IMPACT_SUFFIXES
 
 # Слои ответа — те же, что у `tool_impact`: отчёты двух инструментов про одно и то же
@@ -373,13 +373,13 @@ def _stripped(path: Path) -> str:
     """
     try:
         if path.suffix == '.py':
-            return pytest_guard_code(str(path))
+            return tests_guard_code(str(path))
 
         text = path.read_text(encoding='utf-8', errors='replace')
         if path.suffix in ('.md', '.txt'):
             return text
 
-        return pytest_guard_text(text)
+        return tests_guard_text(text)
     except (OSError, ValueError, SyntaxError):
         return ''
 

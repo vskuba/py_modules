@@ -15,19 +15,19 @@
 
 | | вопрос, на который отвечает |
 |---|---|
-| `pytest_guard_code()` | «есть ли это в коде вообще» — без комментариев и docstring |
-| `pytest_guard_calls()` | «зовут ли это» — разбором вызовов |
-| `pytest_guard_kwargs()` | «как именно зовут» — какими доводами |
-| `pytest_guard_text()` | то же для не-Python: SQL, разметка, стили |
+| `tests_guard_code()` | «есть ли это в коде вообще» — без комментариев и docstring |
+| `tests_guard_calls()` | «зовут ли это» — разбором вызовов |
+| `tests_guard_kwargs()` | «как именно зовут» — какими доводами |
+| `tests_guard_text()` | то же для не-Python: SQL, разметка, стили |
 
-⚠ **Выбирать надо по вопросу, а не по удобству.** `pytest_guard_code` снимает
+⚠ **Выбирать надо по вопросу, а не по удобству.** `tests_guard_code` снимает
 объяснения, но объявленную рядом функцию видит — она и есть код. Спрашивать «не
-подписан ли обработчик» надо у `pytest_guard_calls`: имя, объявленное и не
+подписан ли обработчик» надо у `tests_guard_calls`: имя, объявленное и не
 позванное, для него не существует. Замер на живом случае:
 
     поиском подстрокой  : True   ← ложная тревога, имя в комментарии
-    pytest_guard_code   : True   ← честно: функция объявлена рядом
-    pytest_guard_calls  : False  ← верный ответ: не подписан
+    tests_guard_code   : True   ← честно: функция объявлена рядом
+    tests_guard_calls  : False  ← верный ответ: не подписан
 
 ## ⚠ Строковые литералы остаются
 
@@ -51,7 +51,7 @@ from pathlib import Path
 # Комментарии, которые снимаются из не-Python текста: SQL, JS, разметка.
 # ⚠ `#` тоже комментарий MySQL, но в CSS это цвет, а в разметке — якорь;
 # поэтому он снимается только там, где стоит с начала строки.
-PYTEST_GUARD_COMMENT_RE = (
+TESTS_GUARD_COMMENT_RE = (
     (re.compile(r'/\*.*?\*/', re.S), ' '),
     (re.compile(r'<!--.*?-->', re.S), ' '),
     (re.compile(r'^\s*(--|#).*$', re.M), ''),
@@ -59,7 +59,7 @@ PYTEST_GUARD_COMMENT_RE = (
 )
 
 
-def pytest_guard_code(target) -> str:
+def tests_guard_code(target) -> str:
     """
     Сторож приёма: код без комментариев и docstring, искать подстрокой.
 
@@ -89,7 +89,7 @@ def pytest_guard_code(target) -> str:
     return ast.unparse(tree)
 
 
-def pytest_guard_calls(target) -> set:
+def tests_guard_calls(target) -> set:
     """
     Какие функции вправду зовут внутри.
 
@@ -114,7 +114,7 @@ def pytest_guard_calls(target) -> set:
     return out
 
 
-def pytest_guard_kwargs(target, call: str = '') -> dict:
+def tests_guard_kwargs(target, call: str = '') -> dict:
     """
     С какими именованными доводами зовут функции.
 
@@ -142,7 +142,7 @@ def pytest_guard_kwargs(target, call: str = '') -> dict:
     return out
 
 
-def pytest_guard_text(text: str) -> str:
+def tests_guard_text(text: str) -> str:
     """
     Текст без комментариев — для не-Python: SQL, разметка, стили.
 
@@ -157,7 +157,7 @@ def pytest_guard_text(text: str) -> str:
     с такой проверкой искомое пишут словами**, а не как оно выглядит в коде.
     """
     out = str(text)
-    for pattern, repl in PYTEST_GUARD_COMMENT_RE:
+    for pattern, repl in TESTS_GUARD_COMMENT_RE:
         out = pattern.sub(repl, out)
 
     return out
@@ -199,13 +199,13 @@ if __name__ == '__main__':
 
     try:
         if args.command == 'code':
-            print(pytest_guard_code(args.path))
+            print(tests_guard_code(args.path))
         elif args.command == 'calls':
-            print('\n'.join(sorted(pytest_guard_calls(args.path))))
+            print('\n'.join(sorted(tests_guard_calls(args.path))))
         elif args.command == 'kwargs':
-            for name, kw in sorted(pytest_guard_kwargs(args.path, args.call).items()):
+            for name, kw in sorted(tests_guard_kwargs(args.path, args.call).items()):
                 print(f'{name}: ' + ', '.join(f'{k}={v}' for k, v in sorted(kw.items())))
         else:
-            print(pytest_guard_text(Path(args.path).read_text(encoding='utf-8')))
+            print(tests_guard_text(Path(args.path).read_text(encoding='utf-8')))
     except (ValueError, SyntaxError) as err:
         raise SystemExit(f'ошибка: {err}')

@@ -9,7 +9,7 @@
 
 ## Что делает
 
-`pytest_order(вывод_прогона)` — берёт строки `FAILED ...::test_x` из вывода
+`tests_order(вывод_прогона)` — берёт строки `FAILED ...::test_x` из вывода
 `pytest`, перезапускает каждый упавший узел **один** тем же интерпретатором и
 делит на два списка: «валивается и один» (правка виновата) и «один зелёный»
 (плывёт от порядка или общего состояния).
@@ -32,10 +32,10 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-PYTEST_ORDER_FAILED_RE = re.compile(r'^FAILED (\S+::\S+)', re.M)
+TESTS_ORDER_FAILED_RE = re.compile(r'^FAILED (\S+::\S+)', re.M)
 
 
-def pytest_order(report: str, extra: tuple = ()) -> list:
+def tests_order(report: str, extra: tuple = ()) -> list:
     """Каждый упавший тест — изолированно: правка виновата или порядок.
 
     Args:
@@ -49,7 +49,7 @@ def pytest_order(report: str, extra: tuple = ()) -> list:
     Raises:
         RuntimeError: в выводе нет ни одного упавшего узла — нечего разбирать.
     """
-    nodeids = PYTEST_ORDER_FAILED_RE.findall(report)
+    nodeids = TESTS_ORDER_FAILED_RE.findall(report)
 
     if not nodeids:
         raise RuntimeError('в выводе нет ни одной строки FAILED — нечего разбирать')
@@ -65,7 +65,7 @@ def pytest_order(report: str, extra: tuple = ()) -> list:
     return out
 
 
-def pytest_order_format(rows: list) -> str:
+def tests_order_format(rows: list) -> str:
     """Отчёт словами: сначала виновники правки, потом жертвы порядка."""
     blame = [r for r in rows if not r['alone_ok']]
     order = [r for r in rows if r['alone_ok']]
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     try:
         text = sys.stdin.read() if args.report == '-' else Path(args.report).read_text(encoding='utf-8')
         extra = tuple(x for m in args.marks for x in ('-m', m))
-        print(pytest_order_format(pytest_order(text, extra)))
+        print(tests_order_format(tests_order(text, extra)))
     except (RuntimeError, OSError) as err:
         raise SystemExit(f'ошибка: {err}')
 

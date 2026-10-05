@@ -27,21 +27,21 @@ import os
 import httpx
 
 # Куда стучаться. ⚠ Из окружения: на проде у панели своё имя, локально порт.
-PYTEST_PANEL_URL = os.getenv('BASE_URL', 'http://localhost:8000').rstrip('/')
+TESTS_PANEL_URL = os.getenv('BASE_URL', 'http://localhost:8000').rstrip('/')
 
 # Сколько ждём ответа. Ручки, которые водят браузер или модель, сюда не входят —
 # их сюита не трогает: они стоят минуту и требуют живого соседа.
-PYTEST_PANEL_TIMEOUT = 30.0
+TESTS_PANEL_TIMEOUT = 30.0
 
 # Чем проверяем, что кука ещё жива. ⚠ Дешёвая ручка общего скелета панели: она
 # есть у всех и не трогает предметных таблиц.
-PYTEST_PANEL_PROBE = '/auth/me'
+TESTS_PANEL_PROBE = '/auth/me'
 
 # Куда входим. Ручка общего скелета; имя тела — `username`/`password`.
-PYTEST_PANEL_LOGIN = '/auth/login'
+TESTS_PANEL_LOGIN = '/auth/login'
 
 
-def pytest_panel_client(cookies=None, base_url: str = '',
+def tests_panel_client(cookies=None, base_url: str = '',
                         timeout: float = 0) -> httpx.AsyncClient:
     """Клиент к панели. Без кук — им проверяется, что закрытое закрыто.
 
@@ -51,7 +51,7 @@ def pytest_panel_client(cookies=None, base_url: str = '',
     ```python
     @pytest.fixture
     async def client():
-        async with pytest_panel_client() as http:
+        async with tests_panel_client() as http:
             yield http
     ```
 
@@ -59,13 +59,13 @@ def pytest_panel_client(cookies=None, base_url: str = '',
     вход, и клиент, идущий по нему, превращает 401 в 200 со страницей входа —
     тест зеленеет, ничего не проверив.
     """
-    return httpx.AsyncClient(base_url=base_url or PYTEST_PANEL_URL,
-                             timeout=timeout or PYTEST_PANEL_TIMEOUT,
+    return httpx.AsyncClient(base_url=base_url or TESTS_PANEL_URL,
+                             timeout=timeout or TESTS_PANEL_TIMEOUT,
                              follow_redirects=False,
                              cookies=cookies)
 
 
-async def pytest_panel_login(username: str, password: str, base_url: str = '',
+async def tests_panel_login(username: str, password: str, base_url: str = '',
                              probe: str = '') -> httpx.Cookies:
     """Куки роли: берём готовые, а нет — входим один раз на весь прогон.
 
@@ -83,17 +83,17 @@ async def pytest_panel_login(username: str, password: str, base_url: str = '',
             проверки: «оператор не может открыть бэкапы» одинаково выглядит и
             когда права работают, и когда учётки просто нет.
     """
-    url = base_url or PYTEST_PANEL_URL
-    probe = probe or PYTEST_PANEL_PROBE
+    url = base_url or TESTS_PANEL_URL
+    probe = probe or TESTS_PANEL_PROBE
 
-    async with pytest_panel_client(base_url=url) as http:
+    async with tests_panel_client(base_url=url) as http:
         cookies = _sessions.get((url, username))
         if cookies is not None:
             http.cookies = cookies
             if (await http.get(probe)).status_code == 200:
                 return cookies
 
-        response = await http.post(PYTEST_PANEL_LOGIN,
+        response = await http.post(TESTS_PANEL_LOGIN,
                                    json={'username': username, 'password': password})
         assert response.status_code == 200, (
             f'не вышло войти под {username}: '
@@ -104,31 +104,31 @@ async def pytest_panel_login(username: str, password: str, base_url: str = '',
         return http.cookies
 
 
-async def pytest_panel_as(username: str, password: str, base_url: str = '',
+async def tests_panel_as(username: str, password: str, base_url: str = '',
                           probe: str = '') -> httpx.AsyncClient:
     """Клиент **с сессией** названной учётки. Вход — один раз на прогон.
 
     ```python
     @pytest.fixture
     async def auth_client():
-        async with await pytest_panel_as(ADMIN_USERNAME, ADMIN_PASSWORD) as http:
+        async with await tests_panel_as(ADMIN_USERNAME, ADMIN_PASSWORD) as http:
             yield http
     ```
     """
-    cookies = await pytest_panel_login(username, password, base_url, probe)
+    cookies = await tests_panel_login(username, password, base_url, probe)
 
-    return pytest_panel_client(cookies=cookies, base_url=base_url)
+    return tests_panel_client(cookies=cookies, base_url=base_url)
 
 
-def pytest_panel_port(base_url: str = '') -> int:
+def tests_panel_port(base_url: str = '') -> int:
     """Порт панели из её адреса — нужен сторожу сети, чтобы её не запретить."""
-    url = base_url or PYTEST_PANEL_URL
+    url = base_url or TESTS_PANEL_URL
     tail = (url.rsplit(':', 1) + ['80'])[1]
 
     return int(tail.split('/')[0])
 
 
-def pytest_panel_forget() -> None:
+def tests_panel_forget() -> None:
     """Забыть запомненные сессии. Нужно разовым скриптам, не сюите."""
     _sessions.clear()
 

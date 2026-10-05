@@ -40,14 +40,14 @@ import socket
 
 # Куда ходить, когда имя из `.env` с хоста не резолвится. Локальная петля и
 # опубликованный наружу порт — то, как compose выставляет базу на хост.
-PYTEST_DB_LOCAL_HOST = '127.0.0.1'
+TESTS_DB_LOCAL_HOST = '127.0.0.1'
 
 # Имя переменной, в которой лежит опубликованный порт. ⚠ Не сам порт: он у
 # каждой установки свой, чтобы две базы на одной машине не сталкивались.
-PYTEST_DB_PORT_ENV = 'MYSQL_PORT_HOST'
+TESTS_DB_PORT_ENV = 'MYSQL_PORT_HOST'
 
 
-def pytest_db_reachable(default_port: str = '3306') -> bool:
+def tests_db_reachable(default_port: str = '3306') -> bool:
     """Поправить адрес базы, если имя из `.env` отсюда не резолвится.
 
     Args:
@@ -60,21 +60,21 @@ def pytest_db_reachable(default_port: str = '3306') -> bool:
     ⚠ Зовётся **первой строкой `conftest.py`**, до импортов из проекта: иначе
     адрес уже прочитан на уровне модуля и правка опоздала.
     """
-    pytest_db_env_load()
+    tests_db_env_load()
 
     host = os.getenv('MYSQL_HOST', 'mysql')
     try:
         socket.getaddrinfo(host, None)
     except socket.gaierror:
-        os.environ['MYSQL_HOST'] = PYTEST_DB_LOCAL_HOST
-        os.environ['MYSQL_PORT'] = os.getenv(PYTEST_DB_PORT_ENV, default_port)
+        os.environ['MYSQL_HOST'] = TESTS_DB_LOCAL_HOST
+        os.environ['MYSQL_PORT'] = os.getenv(TESTS_DB_PORT_ENV, default_port)
 
         return True
 
     return False
 
 
-def pytest_db_env_load() -> None:
+def tests_db_env_load() -> None:
     """Прочитать `.env` установки **поверх** окружения процесса.
 
     ⚠ Именно поверх: случайная `MYSQL_DATABASE` в окружении молча увела бы тесты
@@ -91,7 +91,7 @@ def pytest_db_env_load() -> None:
     load_dotenv(override=True)
 
 
-async def pytest_db_after() -> None:
+async def tests_db_after() -> None:
     """Уборка после теста: погасить фоновые задачи и закрыть пул.
 
     ⚠⚠ Порядок не переставить — см. ⚠⚠ в заголовке модуля.
@@ -102,7 +102,7 @@ async def pytest_db_after() -> None:
     @pytest.fixture(autouse=True)
     async def db_pool():
         yield
-        await pytest_db_after()
+        await tests_db_after()
     ```
 
     Цена — новое соединение на тест; база локальная, это доли миллисекунды.
@@ -111,11 +111,11 @@ async def pytest_db_after() -> None:
     """
     from mysql_.mysql_ import mysql_pool_close
 
-    await pytest_db_tasks_stop()
+    await tests_db_tasks_stop()
     await mysql_pool_close()
 
 
-async def pytest_db_tasks_stop() -> None:
+async def tests_db_tasks_stop() -> None:
     """Отменить всё, что тест оставил работать в фоне, и дождаться конца.
 
     ⚠ Ждать после отмены **обязательно**: отмена доходит до задачи только на
