@@ -1,8 +1,9 @@
-"""Люди панели: учётки, роли, токены доступа и посев первых двух.
+"""Люди панели: правила заведения, правки и посева первых двух.
 
-Домен отдельно от роутера: точка проверяет права и разбирает запрос, а решение
-«можно ли это сделать» принимается здесь и не зависит от того, откуда пришёл
-вызов.
+Здесь только **правила**. Где лежат учётки — отвечает хранилище
+(`panel_store.py`), какие бывают роли и права — договор доступа
+(`panel_access.py`). Правила от раскладки таблиц не зависят и потому одни на все
+панели.
 
 ## ⚠ Запреты ниже — не перестраховка
 
@@ -12,7 +13,7 @@
   самой странице, и вернуть роль ему будет некому. Роль меняет другой
   администратор — так это устроено везде, где роль вообще можно потерять;
 * **нельзя удалить себя** — человек остаётся без учётки в середине сеанса;
-* **нельзя тронуть последнего администратора** — панель осталась бы без хозяина.
+* **нельзя тронуть последнего полноправного** — панель осталась бы без хозяина.
 
 Последний запрет сегодня недостижим: до него не доходит очередь, потому что
 единственный путь к нему — правка самого себя, а она отсечена раньше. Оставлен
@@ -42,10 +43,9 @@ import re
 from auth_.auth_primitive import auth_password_hash, auth_token_new
 from config.config import config_get
 from logging_.logging_ import logger_info
-from mysql_.mysql_ import mysql_get_db_async
 
-from panel_.panel_auth import (PANEL_AUTH_ROLE_ADMIN, PANEL_AUTH_ROLE_OPERATOR,
-                               PANEL_AUTH_ROLES)
+from panel_.panel_access import panel_access
+from panel_.panel_store import panel_store
 
 # Что годится в имя учётки. Оно уходит в журналы и в списки, поэтому без пробелов
 # и юникода: `оператор вася` в логе выглядит как поломка кодировки, а не как имя.
@@ -55,8 +55,9 @@ PANEL_USER_NAME_RE = re.compile(r'^[a-zA-Z0-9._-]{2,50}$')
 # смешно»: панель торчит в интернет, и словарный пароль подберут за вечер.
 PANEL_USER_PASSWORD_MIN = 8
 
-# Сколько знаков токена показывать в списке. Хвоста хватает, чтобы отличить свой
-# ключ от чужого, и не хватает, чтобы им воспользоваться.
+# Сколько знаков токена показывать в ответе на выдачу — столько же, сколько в
+# списке. ⚠ Длину хвоста задаёт хранилище; здесь она нужна лишь затем, чтобы
+# ответ на выдачу выглядел как строка списка.
 PANEL_USER_TOKEN_TAIL = 6
 
 # Пометка токена, который заводится вместе с первым пользователем: им ходят
@@ -65,34 +66,13 @@ PANEL_USER_SEED_TOKEN_NOTE = 'первый токен установки'
 
 
 async def panel_user_list() -> list:
-    """Учётки с ролями и выданными токенами.
-
-    ⚠ Токены отдаются **без значения** — только пометка и хвост. Целиком токен
-    виден один раз, в ответ на выдачу: открытая страница иначе показывала бы
-    действующие ключи всякому, кто стоит за спиной.
-    """
-    async with mysql_get_db_async() as db:
-        await db.execute('SELECT id, username, role, created_at FROM `user` ORDER BY id')
-        rows = await db.fetchall() or []
-
-        for row in rows:
-            await db.execute(
-                'SELECT id, note, RIGHT(token, %s) AS tail, created_at '
-                '  FROM user_access_token WHERE user_id = %s ORDER BY id',
-                (PANEL_USER_TOKEN_TAIL, int(row['id'])))
-            row['tokens'] = await db.fetchall() or []
-
-    return rows
+    """Учётки с ролями и выданными токенами — **без значений токенов**."""
+    return await panel_store().list()
 
 
 async def panel_user_get(user_id: int) -> dict | None:
     """Одна учётка без токенов. Нет такой — `None`, решает вызывающий."""
-    async with mysql_get_db_async() as db:
-        await db.execute('SELECT id, username, role, created_at FROM `user` WHERE id = %s',
-                         (int(user_id),))
-        row = await db.fetchone()
-
-    return row
+    return await panel_store().get(user_id)
 
 
 async def panel_user_create(username: str, password: str, role: str) -> dict:
@@ -101,6 +81,8 @@ async def panel_user_create(username: str, password: str, role: str) -> dict:
     Raises:
         ValueError: имя не по шаблону, занято, короткий пароль, нет такой роли.
     """
+    store = panel_store()
+
     username = str(username or '').strip()
     if not PANEL_USER_NAME_RE.match(username):
         raise ValueError('имя: латиница, цифры, точка, дефис, подчёркивание; 2-50 знаков')
@@ -108,19 +90,13 @@ async def panel_user_create(username: str, password: str, role: str) -> dict:
     _password_check(password)
     role = _role_check(role)
 
-    async with mysql_get_db_async() as db:
-        await db.execute('SELECT id FROM `user` WHERE username = %s', (username,))
-        if await db.fetchone():
-            raise ValueError('такое имя уже занято')
+    if await store.by_name(username):
+        raise ValueError('такое имя уже занято')
 
-        await db.execute(
-            'INSERT INTO `user` (username, password_hash, role) VALUES (%s, %s, %s)',
-            (username, auth_password_hash(password), role))
-        user_id = int(db.lastrowid)
-
+    user_id = await store.create(username, auth_password_hash(password), role)
     logger_info(f'[auth][люди] заведена учётка «{username}» (#{user_id}), роль {role}')
 
-    return await panel_user_get(user_id)
+    return await store.get(user_id)
 
 
 async def panel_user_update(user_id: int, password: str = '', role: str = '',
@@ -136,40 +112,36 @@ async def panel_user_update(user_id: int, password: str = '', role: str = '',
     Raises:
         LookupError: учётки нет.
         ValueError: короткий пароль, нет такой роли, правка роли себе,
-            последний администратор.
+            последний полноправный.
     """
-    current = await panel_user_get(user_id)
+    store = panel_store()
+
+    current = await store.get(user_id)
     if not current:
         raise LookupError('учётка не найдена')
 
-    fields, args = [], []
-
     if password:
         _password_check(password)
-        fields.append('password_hash = %s')
-        args.append(auth_password_hash(password))
 
-    if role and str(role) != str(current['role']):
+    if role and str(role) != str(current.get('role') or ''):
         role = _role_check(role)
         if int(user_id) == int(actor_id):
             raise ValueError('нельзя менять роль себе — это делает другой администратор')
         await _last_admin_check(current)
-        fields.append('role = %s')
-        args.append(role)
+    else:
+        role = ''
 
     # Ни одного поля — не ошибка: страница шлёт форму целиком, и «ничего не
     # изменил» это обычный исход, а не повод отвечать отказом.
-    if not fields:
+    if not password and not role:
         return current
 
-    async with mysql_get_db_async() as db:
-        await db.execute(f'UPDATE `user` SET {", ".join(fields)} WHERE id = %s',
-                         tuple(args) + (int(user_id),))
+    await store.update(user_id, auth_password_hash(password) if password else '', role)
 
     logger_info(f'[auth][люди] учётка «{current["username"]}» (#{user_id}) изменена'
                 + (', пароль' if password else '') + (f', роль → {role}' if role else ''))
 
-    return await panel_user_get(user_id)
+    return await store.get(user_id)
 
 
 async def panel_user_delete(user_id: int, actor_id: int) -> None:
@@ -178,14 +150,15 @@ async def panel_user_delete(user_id: int, actor_id: int) -> None:
     Токены уходят сами — по внешнему ключу с `ON DELETE CASCADE`. Так и надо:
     выданный скрипту ключ не должен пережить человека, которому принадлежал.
 
-    ⚠ Предметные данные установки остаются: они принадлежат ей, а не человеку, и
-    `user_id` в их таблицах нет.
+    ⚠ Предметные данные установки остаются: они принадлежат ей, а не человеку.
 
     Raises:
         LookupError: учётки нет.
-        ValueError: удаление себя или последнего администратора.
+        ValueError: удаление себя или последнего полноправного.
     """
-    target = await panel_user_get(user_id)
+    store = panel_store()
+
+    target = await store.get(user_id)
     if not target:
         raise LookupError('учётка не найдена')
 
@@ -193,9 +166,7 @@ async def panel_user_delete(user_id: int, actor_id: int) -> None:
         raise ValueError('нельзя удалить себя')
 
     await _last_admin_check(target)
-
-    async with mysql_get_db_async() as db:
-        await db.execute('DELETE FROM `user` WHERE id = %s', (int(user_id),))
+    await store.delete(user_id)
 
     logger_info(f'[auth][люди] учётка «{target["username"]}» (#{user_id}) удалена')
 
@@ -209,17 +180,14 @@ async def panel_user_token_add(user_id: int, note: str = '') -> dict:
     Raises:
         LookupError: учётки нет.
     """
-    if not await panel_user_get(user_id):
+    store = panel_store()
+
+    if not await store.get(user_id):
         raise LookupError('учётка не найдена')
 
     token = auth_token_new()
     note = str(note or '').strip()[:190]
-
-    async with mysql_get_db_async() as db:
-        await db.execute(
-            'INSERT INTO user_access_token (user_id, token, note) VALUES (%s, %s, %s)',
-            (int(user_id), token, note))
-        token_id = int(db.lastrowid)
+    token_id = await store.token_add(user_id, token, note)
 
     logger_info(f'[auth][люди] выдан токен #{token_id} учётке #{user_id}'
                 + (f' — {note}' if note else ''))
@@ -230,8 +198,7 @@ async def panel_user_token_add(user_id: int, note: str = '') -> dict:
 
 async def panel_user_token_delete(token_id: int) -> None:
     """Отзывает токен. Действует сразу: токен читается из базы на каждый запрос."""
-    async with mysql_get_db_async() as db:
-        await db.execute('DELETE FROM user_access_token WHERE id = %s', (int(token_id),))
+    await panel_store().token_delete(token_id)
 
     logger_info(f'[auth][люди] отозван токен #{token_id}')
 
@@ -250,21 +217,13 @@ async def panel_user_seed_admin() -> None:
                     'нет ADMIN_USERNAME/ADMIN_PASSWORD')
         return
 
-    async with mysql_get_db_async() as db:
-        await db.execute('SELECT COUNT(*) AS n FROM user')
-        row = await db.fetchone()
-        if int((row or {}).get('n') or 0):
-            return
+    store = panel_store()
+    if await store.count():
+        return
 
-        await db.execute(
-            'INSERT INTO user (username, password_hash, role) VALUES (%s, %s, %s)',
-            (username, auth_password_hash(password), PANEL_AUTH_ROLE_ADMIN))
-        user_id = db.lastrowid
-
-        await db.execute(
-            'INSERT INTO user_access_token (user_id, token, note) VALUES (%s, %s, %s)',
-            (user_id, auth_token_new(), PANEL_USER_SEED_TOKEN_NOTE))
-        await db.connection.commit()
+    user_id = await store.create(username, auth_password_hash(password),
+                                 panel_access().role_admin())
+    await store.token_add(user_id, auth_token_new(), PANEL_USER_SEED_TOKEN_NOTE)
 
     logger_info(f'[auth] заведён первый пользователь «{username}» и токен доступа к нему')
 
@@ -285,15 +244,12 @@ async def panel_user_seed_operator() -> None:
         logger_info('[auth] оператор не заведён: нет OPERATOR_USERNAME/OPERATOR_PASSWORD')
         return
 
-    async with mysql_get_db_async() as db:
-        await db.execute('SELECT id FROM user WHERE username = %s', (username,))
-        if await db.fetchone():
-            return
+    store = panel_store()
+    if await store.by_name(username):
+        return
 
-        await db.execute(
-            'INSERT INTO user (username, password_hash, role) VALUES (%s, %s, %s)',
-            (username, auth_password_hash(password), PANEL_AUTH_ROLE_OPERATOR))
-        await db.connection.commit()
+    await store.create(username, auth_password_hash(password),
+                       panel_access().role_operator())
 
     logger_info(f'[auth] заведён оператор «{username}»')
 
@@ -306,27 +262,38 @@ def _password_check(password: str) -> None:
 
 
 def _role_check(role: str) -> str:
+    """Годится ли роль. Какие бывают — отвечает договор доступа установки.
+
+    ⚠ `None` в ответе договора значит «роли заводятся на ходу»: закрытого списка
+    нет, и проверять остаётся только непустоту.
+    """
     role = str(role or '').strip()
-    if role not in PANEL_AUTH_ROLES:
+    known = panel_access().roles_all()
+
+    if not role or (known is not None and role not in known):
         raise ValueError(f'нет такой роли: {role or "пусто"}')
 
     return role
 
 
 async def _last_admin_check(target: dict) -> None:
-    """Не даёт тронуть последнего администратора.
+    """Не даёт тронуть последнего полноправного человека.
 
     Сегодня сюда не доходит очередь: единственный путь — правка самого себя, а
     она отсечена раньше. Проверка оставлена страховкой на случай, когда правила
     «про себя» изменятся: панель без администратора чинится только через базу.
+
+    ⚠⚠ Считаются **полноправные**, а не роль с именем `admin`. Запросом это не
+    сделать: полнота — свойство набора прав, и знает его договор установки, а не
+    SQL. Поэтому роли перебираются в памяти; учёток у панели единицы, а зовётся
+    проверка только на правке роли и удалении.
     """
-    if str(target['role']) != PANEL_AUTH_ROLE_ADMIN:
+    access = panel_access()
+    if not access.is_full(str(target.get('role') or '')):
         return
 
-    async with mysql_get_db_async() as db:
-        await db.execute('SELECT COUNT(*) AS n FROM `user` WHERE role = %s',
-                         (PANEL_AUTH_ROLE_ADMIN,))
-        row = await db.fetchone()
+    used = await panel_store().roles_used()
+    full = sum(1 for one in used if access.is_full(one))
 
-    if int((row or {}).get('n') or 0) <= 1:
+    if full <= 1:
         raise ValueError('это последний администратор — панель останется без хозяина')
