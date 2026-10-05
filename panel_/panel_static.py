@@ -22,24 +22,58 @@ Starlette отдаёт `ETag` и `Last-Modified`, но **не** `Cache-Control` 
 пользователей. Публичному сайту так делать не следует — там статику версионируют
 в имени файла и кэшируют навсегда; для такого случая есть `no_cache=False`.
 
-## ⚠ Сами файлы статики живут в проекте, и только там
+## ⚠⚠ Общая статика лежит не здесь, а в своём submodule
 
-Общего каталога у слоя нет намеренно: `py_modules` — submodule под **скрипты
-Python**. CSS и JS панели принадлежат проекту, даже когда совпадают с соседним:
-замер показал 347 общих строк из ~106 000, то есть 0.3%, и во всех трёх проектах
-совпадает только всплывашка уведомления. Постоянная цена submodule-связи за
-такое не окупается.
+`py_modules` — submodule под **скрипты Python**, и файлов разметки в нём нет ни
+одного. Общие CSS и JS живут в отдельном репозитории (`dashboard`), который
+проект подключает рядом:
+
+```
+<проект>/
+  py_modules/   ← скрипты Python
+  dashboard/    ← статика, шаблоны, каркас
+```
+
+Разделение жёсткое и это его смысл: сложи их вместе, и правка CSS начнёт
+требовать согласия от проектов, которым до неё нет дела.
+
+Здесь — только **обвязка**: найти файл в двух каталогах и поставить заголовок.
+
+## ⚠⚠ Порядок каталогов — договор, а не деталь
+
+Свой каталог проекта ищется **первым**. Это единственный способ отойти от общего
+вида, не ломая остальных: положил у себя файл с тем же именем — он и отдаётся.
+Переставь порядок, и такая правка молча перестала бы действовать.
+
+Пример живой: `common.css` совпадает у двух панелей и лежит в общем, а у третьей
+свой — она его и видит.
+
+⚠ Поиск по двум каталогам, а не второй путь `/static/shared`: второй путь
+означал бы правку каждой страницы, которая эти файлы подключает, а их десятки —
+`notification.js` зовут 35 страниц в одном только проекте. Так пути страниц не
+меняются вовсе.
 """
+
+import os
 
 from starlette.staticfiles import StaticFiles
 
 
 class PanelStatic(StaticFiles):
-    """Статика панели с обязательной перепроверкой. Заводится `panel_static_files`."""
+    """Статика панели: свой каталог, затем общий. Заводится `panel_static_files`."""
 
-    def __init__(self, *, no_cache: bool = True, **kw):
+    def __init__(self, *, shared: str = '', no_cache: bool = True, **kw):
+        self._shared = str(shared or '')
         self._no_cache = no_cache
         super().__init__(**kw)
+
+    def get_directories(self, directory=None, packages=None) -> list:
+        """Где искать файл: сперва у проекта, потом в общем — см. ⚠⚠ в шапке."""
+        own = super().get_directories(directory, packages)
+        if self._shared and os.path.isdir(self._shared):
+            return [*own, self._shared]
+
+        return own
 
     def file_response(self, *args, **kw):
         response = super().file_response(*args, **kw)
@@ -49,16 +83,23 @@ class PanelStatic(StaticFiles):
         return response
 
 
-def panel_static_files(directory, no_cache: bool = True, **kw) -> PanelStatic:
+def panel_static_files(directory, shared: str = '', no_cache: bool = True,
+                       **kw) -> PanelStatic:
     """Раздача `/static`: `app.mount('/static', panel_static_files(path))`.
 
     Args:
-        directory: каталог статики проекта.
+        directory: каталог статики проекта — ищется первым.
+        shared: каталог общей статики (submodule `dashboard`). Пусто — проект
+            обходится своей.
         no_cache: слать ли `Cache-Control: no-cache`. ⚠ Выключать только там, где
             статика версионируется в имени файла, — см. ⚠⚠ в шапке.
         kw: прочее для `StaticFiles` — `html=True` для раздачи каталога целиком.
 
+    ⚠ Общего каталога может не быть на диске (выкачали проект без submodule) —
+    тогда раздача работает одним своим, а не падает на старте: панель без общей
+    всплывашки лучше, чем панель, которая не поднялась.
+
     ⚠ Отдаёт объект, а не монтирует: монтирование — дело точки входа проекта, он
     знает свой путь и имя.
     """
-    return PanelStatic(directory=directory, no_cache=no_cache, **kw)
+    return PanelStatic(directory=directory, shared=shared, no_cache=no_cache, **kw)
