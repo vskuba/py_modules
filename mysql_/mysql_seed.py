@@ -30,6 +30,7 @@ import pymysql
 from logging_.logging_ import logger_info
 from mysql_.mysql_ import mysql_conn_get
 from project_.project_ import project_root
+from sql_.sql_split import sql_split_statements
 
 # Где лежат seed-файлы по умолчанию — от корня проекта.
 MYSQL_SEED_DIR = os.path.join('data', 'seeds')
@@ -92,49 +93,20 @@ def mysql_seed_split(sql: str) -> list[str]:
     """
     Разбить SQL-дамп на отдельные запросы по `;`.
 
-    ⚠ **Точка с запятой внутри строкового литерала разделителем не считается** —
-    иначе описание с точкой с запятой рвёт запрос пополам, и половина уезжает в
-    базу отдельным мусорным запросом. Экранированный кавычкой символ (`\\'`)
-    пропускается вместе со следующим за ним: без этого литерал считался бы
-    закрытым не там, где он закрыт.
+    ⚠ Разбор живёт в `sql_/sql_split.py` — он один на дампы и на миграции. Здесь
+    осталась дверь под прежним именем: её зовут два проекта, а переименование
+    публичной функции слоя ломает соседей молча (`py_modules/CLAUDE.md`).
 
-    Комментарии не разбираются намеренно: seed-файлы делает выгрузка, а не рука,
-    и `--`-комментария с точкой с запятой в них не бывает. Полноценный разбор SQL
-    здесь стоил бы дороже задачи.
+    ⚠⚠ Прежде разбор стоял здесь своей копией и комментарии **не разбирал**
+    намеренно: «seed-файлы делает выгрузка, а не рука». Для выгрузки это правда,
+    и расхождение вскрылось не на ней: у соседнего проекта та же задача решалась
+    второй копией, умеющей комментарии, — и из 232 файлов миграций **136**
+    разбирались двумя копиями по-разному.
+
+    На seed-файлах переход ничего не менял: 12 файлов двух проектов, одно и то
+    же число запросов, одно и то же тело — разница только в отброшенной шапке.
     """
-    statements = []
-    buf = []
-    in_quote = None
-    i = 0
-    while i < len(sql):
-        c = sql[i]
-        if c == '\\' and in_quote:
-            buf.append(c)
-            i += 1
-            if i < len(sql):
-                buf.append(sql[i])
-                i += 1
-            continue
-        if c in ("'", '"'):
-            if in_quote == c:
-                in_quote = None
-            elif in_quote is None:
-                in_quote = c
-        elif c == ';' and in_quote is None:
-            statement = ''.join(buf).strip()
-            if statement:
-                statements.append(statement)
-            buf = []
-            i += 1
-            continue
-        buf.append(c)
-        i += 1
-
-    statement = ''.join(buf).strip()
-    if statement:
-        statements.append(statement)
-
-    return statements
+    return sql_split_statements(sql)
 
 
 def _dir(seeds_dir: str) -> str:
