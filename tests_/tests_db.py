@@ -16,6 +16,17 @@
 ⚠ Проверкой, а не безусловно: в контейнере (если сюиту однажды запустят там) имя
 резолвится, и подменять его нечем и незачем.
 
+## ⚠⚠ Одного `os.environ` мало — адрес закрепляется и на модуле
+
+`config.config` накатывает `.env.local` с `override=True`, то есть **позже**
+возвращает в окружение то, что мы только что поправили. А `mysql_.mysql_` читает
+адрес один раз, на импорте. Порядок выходит такой, что правка окружения живёт до
+первого обращения к конфигу и молча отменяется.
+
+Поэтому адрес ставится дважды: в окружение (для всего, что прочитает конфиг
+позже) и прямо на уже импортированный модуль базы. Поймано в проекте, где
+`.env.local` есть; там, где его нет, второй шаг просто ничего не меняет.
+
 ## ⚠⚠ `.env` читается с приоритетом над окружением
 
 Контейнеру конфиг передаёт compose, а сюите на хосте его не передаёт никто —
@@ -66,12 +77,37 @@ def tests_db_reachable(default_port: str = '3306') -> bool:
     try:
         socket.getaddrinfo(host, None)
     except socket.gaierror:
-        os.environ['MYSQL_HOST'] = TESTS_DB_LOCAL_HOST
-        os.environ['MYSQL_PORT'] = os.getenv(TESTS_DB_PORT_ENV, default_port)
+        pass
+    else:
+        return False
 
-        return True
+    port = os.getenv(TESTS_DB_PORT_ENV, default_port)
+    os.environ['MYSQL_HOST'] = TESTS_DB_LOCAL_HOST
+    os.environ['MYSQL_PORT'] = port
+    tests_db_pin(TESTS_DB_LOCAL_HOST, port)
 
-    return False
+    return True
+
+
+def tests_db_pin(host: str, port: str) -> None:
+    """Закрепить адрес **на самом модуле базы**, а не только в окружении.
+
+    ⚠⚠ Без этого правка отменяется молча: `config.config` накатывает `.env.local`
+    с `override=True` уже **после** нас, а `mysql_.mysql_` читает адрес один раз,
+    на импорте. Поймано в проекте, где `.env.local` есть; там, где его нет,
+    второй шаг просто ничего не меняет.
+
+    Модуль ещё не импортирован — не делаем ничего: он прочитает уже поправленное
+    окружение сам.
+    """
+    import sys
+
+    module = sys.modules.get('mysql_.mysql_')
+    if module is None:
+        return
+
+    module.host = host
+    module.port = int(port)
 
 
 def tests_db_env_load() -> None:
