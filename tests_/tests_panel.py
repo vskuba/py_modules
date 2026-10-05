@@ -26,11 +26,22 @@
 
 Проба — дешёвая ручка, которая есть у любой панели: «кто я». Проект, у которого
 она зовётся иначе, передаёт свою.
+
+## ⚠⚠ Сам вход берётся из `uvicorn_/uvicorn_panel.py`, а не пишется здесь
+
+Там он и жил: JSON-тело, а не форма — на форму панель отвечает 422. Знание это
+одно, и второй копии у него быть не должно.
+
+Разная у них **политика**, а не способ. `uvicorn_panel_client` входит заново на
+каждый вызов и сам перелогинивается на 401 — это правильно для разовой проверки
+живьём и негодно для сюиты: вход стоит 309 мс (см. выше), а автоперелогин
+превратил бы 401 в 200 и у теста, который 401 как раз и проверяет.
 """
 
 import os
 
 import httpx
+from uvicorn_.uvicorn_panel import uvicorn_panel_login
 
 # Куда стучаться. ⚠ Из окружения: на проде у панели своё имя, локально порт.
 TESTS_PANEL_URL = os.getenv('BASE_URL', 'http://localhost:8000').rstrip('/')
@@ -42,9 +53,6 @@ TESTS_PANEL_TIMEOUT = 30.0
 # Чем проверяем, что кука ещё жива. ⚠ Дешёвая ручка общего скелета панели: она
 # есть у всех и не трогает предметных таблиц.
 TESTS_PANEL_PROBE = '/auth/me'
-
-# Куда входим. Ручка общего скелета; имя тела — `username`/`password`.
-TESTS_PANEL_LOGIN = '/auth/login'
 
 
 def tests_panel_client(cookies=None, base_url: str = '',
@@ -85,29 +93,24 @@ async def tests_panel_login(username: str, password: str, base_url: str = '',
         Куки сессии.
 
     Raises:
-        AssertionError: войти не вышло. ⚠ Падаем **здесь**, а не в середине
-            проверки: «оператор не может открыть бэкапы» одинаково выглядит и
-            когда права работают, и когда учётки просто нет.
+        RuntimeError: войти не вышло, с кодом и началом ответа. ⚠ Падаем
+            **здесь**, а не в середине проверки: «оператор не может открыть
+            бэкапы» одинаково выглядит и когда права работают, и когда учётки
+            просто нет.
     """
     url = base_url or TESTS_PANEL_URL
     probe = probe or TESTS_PANEL_PROBE
 
-    async with tests_panel_client(base_url=url) as http:
-        cookies = _sessions.get((url, username))
-        if cookies is not None:
-            http.cookies = cookies
+    cookies = _sessions.get((url, username))
+    if cookies is not None:
+        async with tests_panel_client(cookies=cookies, base_url=url) as http:
             if (await http.get(probe)).status_code == 200:
                 return cookies
 
-        response = await http.post(TESTS_PANEL_LOGIN,
-                                   json={'username': username, 'password': password})
-        assert response.status_code == 200, (
-            f'не вышло войти под {username}: '
-            f'{response.status_code} {response.text[:200]}')
+    cookies = await uvicorn_panel_login(url, username, password)
+    _sessions[(url, username)] = cookies
 
-        _sessions[(url, username)] = http.cookies
-
-        return http.cookies
+    return cookies
 
 
 async def tests_panel_as(username: str, password: str, base_url: str = '',

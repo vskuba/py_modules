@@ -36,7 +36,8 @@ class UvicornPanelClient(httpx.AsyncClient):
     async def request(self, method, url, **kw):        # type: ignore[override]
         response = await super().request(method, url, **kw)
         if response.status_code == 401 and self._credentials[0]:
-            self.cookies = await _login(str(self.base_url), *self._credentials)
+            self.cookies = await uvicorn_panel_login(str(self.base_url),
+                                                     *self._credentials)
             response = await super().request(method, url, **kw)
         return response
 
@@ -98,15 +99,23 @@ async def uvicorn_panel_client(base: str = '', user: str = '',
     password = password or config_get('ADMIN_PASSWORD', 'change-me')
     client = UvicornPanelClient(base_url=base, timeout=15,
                                 transport=http_pool_transport())
-    client.cookies = await _login(base, user, password)
+    client.cookies = await uvicorn_panel_login(base, user, password)
     client._credentials = (user, password)
     return client
 
 
-# ── детали реализации ──
+async def uvicorn_panel_login(base: str, user: str, password: str) -> httpx.Cookies:
+    """Вход контрактом панели: **JSON-тело, не форма** (на форму она отвечает 422).
 
-async def _login(base: str, user: str, password: str) -> httpx.Cookies:
-    """Вход контрактом панели: JSON-тело, не форма (форма — 422)."""
+    Отдельной публичной функцией, потому что вход у панели один, а пользователей
+    у него двое: разовая проверка живьём (здесь) и обвязка сюиты
+    (`tests_/tests_panel.py`). Политика у них разная — одна перелогинивается на
+    401, вторая кэширует сессию на прогон и 401 обязана показывать как есть, — а
+    **способ войти** один, и второй копии у него быть не должно.
+
+    Raises:
+        RuntimeError: войти не вышло, с кодом и началом ответа.
+    """
     async with httpx.AsyncClient(transport=http_pool_transport(), timeout=15) as c:
         response = await c.post(f'{base}/auth/login',
                                 json={'username': user, 'password': password})
