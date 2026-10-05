@@ -113,7 +113,7 @@ namespace-папок, которые проекты импортируют на�
 | `x402_/x402_serve.py` | `docs/x402_serve.md` — платный 402-челлендж на FastAPI-маршрутах; ⚠ network каноническим id (eip155:84532 — testnet), price строкой |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
-| `comfy_/comfy_gen.py`, `comfyui_trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
+| `comfy_/comfy_gen.py`, `comfy_/trainer/` | `docs/comfy_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
 
 Полное оглавление — `docs/readme.md`. Четыре файла оттуда к правкам здесь отношения не
 имеют, они про устройство проекта-потребителя: `new_project.md`, `frontend_rules.md`,
@@ -313,9 +313,9 @@ CLI есть у модулей, которыми пользуются «рука
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
 | `comfy_.comfy_gen` | `run`/`train` `--workflow [--scenes --scene --persona --anchor --qa-anchor --seed --n --denoise --size --out --base --farm-ssh --farm-container]` |
 | `comfy_.comfy_collection` | `<каталог персоны>` → вердикт «коллекция закрыла N/M; добить seed+1000: …; кадров нет вовсе: …» |
-| `comfyui_trainer.comfyui_trainer_lora` | `--name --dataset --base --vae [--rank --alpha --lr --steps --seed --out]` |
-| `comfyui_trainer.comfyui_trainer_base` | `<монолит.safetensors> <каталог> [--python --repo --farm-ssh --farm-container]` → diffusers-папка базы |
-| `comfyui_trainer.comfyui_trainer_toolkit` | `[--toolkit --base]` → вердикт «трейнер цел» / что слетело |
+| `comfy_.trainer.comfy_trainer_lora` | `--name --dataset --base --vae [--rank --alpha --lr --steps --seed --out]` |
+| `comfy_.trainer.comfy_trainer_base` | `<монолит.safetensors> <каталог> [--python --repo --farm-ssh --farm-container]` → diffusers-папка базы |
+| `comfy_.trainer.comfy_trainer_toolkit` | `[--toolkit --base]` → вердикт «трейнер цел» / что слетело |
 
 Список сверяется командой — таблица устаревает быстрее кода:
 

@@ -2,9 +2,9 @@
 
 > Ферма делает, проект хранит. Кадры персоны гоняет `comfy_gen` (workflow в
 > API-форме у персоны, маркеры `__PROMPT__`/`__ANCHOR__`/`__SEED__`, вердикт
-> score/pass в манифест), базу под трейнер собирает `comfyui_trainer_base`
+> score/pass в манифест), базу под трейнер собирает `comfy_trainer_base`
 > (одинокий safetensors → diffusers-каталог), жив ли трейнер на ферме отвечает
-> `comfyui_trainer_toolkit_check`, сам трейн гонит `comfyui_trainer_lora`.
+> `comfy_trainer_toolkit_check`, сам трейн гонит `comfy_trainer_lora`.
 > Ферма для всех — параметр вызова (`farm_ssh`/`farm_container`), модули не
 > знают ни хостов, ни персон.
 
@@ -25,7 +25,7 @@ transformers 5.5 **проглатывает `subfolder`** в `from_pretrained` �
 модель из конфига-дефолта: CLIP 512 при 768 у чекпойнта. Признак — трейн
 идёт час и даёт generic-лицо без единой ошибки в логе. Лечится патчем
 `config=CLIPConfig(**json)` в `stable_diffusion_model.py`; слетает при
-пересборке образа тихо — поэтому `comfyui_trainer_toolkit_check` перед
+пересборке образа тихо — поэтому `comfy_trainer_toolkit_check` перед
 трейном обязателен.
 
 ## 3. Трейнер — гость в контейнере
@@ -45,8 +45,8 @@ Workflow несёт верхним ключом `_mem` — аппетит в Г�
 
 ## Чек-лист перед трейном
 
-- [ ] `comfyui_trainer_toolkit_check` → «трейнер цел» (патч 2/2, симлинки 2/2)
-- [ ] база собрана `comfyui_trainer_base`, каталог совпадает с `--base` трейна
+- [ ] `comfy_trainer_toolkit_check` → «трейнер цел» (патч 2/2, симлинки 2/2)
+- [ ] база собрана `comfy_trainer_base`, каталог совпадает с `--base` трейна
 - [ ] свободная память фермы ≥ `_mem` + запас (единая память — чужой процесс
       влезает в вашу оценку)
 - [ ] на ферме уже жив трейнер — не поднимать второго
@@ -69,9 +69,9 @@ Workflow несёт верхним ключом `_mem` — аппетит в Г�
 ## Проверка
 
 ```bash
-python -m comfyui_trainer.comfyui_trainer_toolkit --toolkit <каталог> --base <база> \
+python -m comfy_.trainer.comfy_trainer_toolkit --toolkit <каталог> --base <база> \
        --farm-ssh <хост> --farm-container <контейнер>        # вердикт «трейнер цел»
-python -m comfyui_trainer.comfyui_trainer_base <монолит> <каталог> --farm-ssh … --farm-container …
-python -m comfyui_trainer.comfyui_trainer_lora --name … --dataset … --base …  # трейн
+python -m comfy_.trainer.comfy_trainer_base <монолит> <каталог> --farm-ssh … --farm-container …
+python -m comfy_.trainer.comfy_trainer_lora --name … --dataset … --base …  # трейн
 python -m comfy_.comfy_gen <workflow.json> …                  # кадр персоны
 ```

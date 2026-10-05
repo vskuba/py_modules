@@ -23,15 +23,15 @@ from pathlib import Path
 import yaml
 
 
-COMFYUI_TRAINER_TIMEOUT = 36000.0  # 4000 шагов на запечатках — часы, не минуты
-COMFYUI_TRAINER_MEM_MARGIN = 4.0   # ГиБ запаса: на живой остаток соседей-процессов
+COMFY_TRAINER_TIMEOUT = 36000.0  # 4000 шагов на запечатках — часы, не минуты
+COMFY_TRAINER_MEM_MARGIN = 4.0   # ГиБ запаса: на живой остаток соседей-процессов
 # Потолок на короткий поход к ферме (положить конфиг, спросить память, снять
-# лору). Сам трейн этим не ограничен — у него свой COMFYUI_TRAINER_TIMEOUT;
+# лору). Сам трейн этим не ограничен — у него свой COMFY_TRAINER_TIMEOUT;
 # здесь речь о ssh, который без потолка висит до TCP-таймаута ядра.
-COMFYUI_TRAINER_SSH_TIMEOUT = 600.0
+COMFY_TRAINER_SSH_TIMEOUT = 600.0
 
 
-def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
+def comfy_trainer_lora(name, dataset, *, base, vae, rank, alpha,
                          lr, steps, seed, out, farm_ssh, farm_container,
                          toolkit='/opt/ComfyUI/tools/ai-toolkit',
                          python='/opt/ComfyUI/tools/aitk/bin/python',
@@ -78,11 +78,11 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
     subprocess.run([*_ssh(farm_ssh), f'docker exec -i {farm_container} '
                     f'bash -c "cat > {remote_cfg}"'],
                    input=yml.encode(), check=True, capture_output=True,
-                   timeout=COMFYUI_TRAINER_SSH_TIMEOUT)
+                   timeout=COMFY_TRAINER_SSH_TIMEOUT)
     # единая память GB10: не влезает с запасом — отказ, не отправляя
     free = float(_sh(farm_ssh, farm_container,
                      'grep MemAvailable /proc/meminfo | tr -cd 0-9\\n').strip()) / 2**20
-    need = COMFYUI_TRAINER_MEM_MARGIN
+    need = COMFY_TRAINER_MEM_MARGIN
     if free < need:
         raise RuntimeError(f'на ферме свободно {free:.0f} ГиБ, прогону надо '
                            f'≥{need:.0f} — не отправляю')
@@ -94,7 +94,7 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
         _sh(farm_ssh, farm_container,
             f'cd {toolkit} && nohup {python} run.py config/{name}.yaml '
             f'> /tmp/{name}.log 2>&1 & echo запущено')
-    deadline = time.monotonic() + (timeout or COMFYUI_TRAINER_TIMEOUT)
+    deadline = time.monotonic() + (timeout or COMFY_TRAINER_TIMEOUT)
     while True:  # лог трейнера — наш /history: жив, пишет шаги, дошёл до конца
         found = _sh(farm_ssh, farm_container,
                     f'ls {output_dir}/{name}/*.safetensors 2>/dev/null; '
@@ -109,7 +109,7 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
                                    f'tail -c 2000 /tmp/{name}.log'))
         if time.monotonic() > deadline:
             raise TimeoutError('трейнер жив, но не дошёл до весов за '
-                               f'{timeout or COMFYUI_TRAINER_TIMEOUT} с')
+                               f'{timeout or COMFY_TRAINER_TIMEOUT} с')
         time.sleep(30)
     return _pull(farm_ssh, farm_container, remote, out, name)
 
@@ -130,7 +130,7 @@ def _sh(host, container, sh):
     return subprocess.run([*_ssh(host), f'docker exec {container} sh -c "{sh}"'],
                           capture_output=True, text=True, check=True,
                           errors='replace',
-                          timeout=COMFYUI_TRAINER_SSH_TIMEOUT).stdout
+                          timeout=COMFY_TRAINER_SSH_TIMEOUT).stdout
 
 
 def _pull(host, container, remote, out, name):
@@ -151,7 +151,7 @@ def _pull(host, container, remote, out, name):
     with open(p, 'wb') as f:
         got = subprocess.run([*_ssh(host), f'docker exec {container} cat {remote}'],
                              check=True, stderr=subprocess.PIPE, stdout=f,
-                             timeout=COMFYUI_TRAINER_SSH_TIMEOUT)
+                             timeout=COMFY_TRAINER_SSH_TIMEOUT)
     if not Path(p).stat().st_size:
         raise RuntimeError(f'лора снялась пустой: {remote} '
                            f'({got.stderr.decode(errors="replace").strip()})')
@@ -177,7 +177,7 @@ if __name__ == '__main__':
     ns = ap.parse_args()
     Path(ns.out).mkdir(parents=True, exist_ok=True)
     try:
-        print(comfyui_trainer_lora(ns.name, ns.dataset, base=ns.base, vae=ns.vae,
+        print(comfy_trainer_lora(ns.name, ns.dataset, base=ns.base, vae=ns.vae,
                                   rank=ns.rank,
                                   alpha=ns.alpha, lr=ns.lr, steps=ns.steps,
                                   seed=ns.seed, out=ns.out, farm_ssh=ns.farm_ssh,
