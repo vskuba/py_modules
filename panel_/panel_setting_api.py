@@ -53,6 +53,10 @@ class PanelSettingSave(BaseModel):
 
     key: str = Field(..., min_length=1, max_length=PANEL_SETTING_KEY_MAX)
     value: str = ''
+    # ⚠ Область узла. Настройка живёт в паре `(user_id, node_id)`, и это свойство
+    # самого хранилища (`setting_/setting_.py`), а не одного проекта: там, где
+    # узлов нет, поле просто всегда пустое.
+    node_id: int | None = None
 
 
 async def panel_setting_timezone_hours() -> int:
@@ -105,7 +109,7 @@ def panel_setting_api_router(view=None, manage=None,
         значит ничего.
         """
         async with mysql_get_db_async() as db:
-            await db.execute('SELECT id, `key`, value FROM setting'
+            await db.execute('SELECT id, `key`, node_id, value FROM setting'
                              ' WHERE user_id IS NULL AND dynamic = 0'
                              ' ORDER BY `key` ASC')
             rows = await db.fetchall() or []
@@ -131,21 +135,54 @@ def panel_setting_api_router(view=None, manage=None,
                                 detail='ключ не может быть пустым')
 
         if payload.value == '':
-            await setting_delete(key)
+            await setting_delete(key, node_id=payload.node_id)
         else:
-            await setting_set(key, payload.value)
+            await setting_set(key, payload.value, node_id=payload.node_id)
 
         return {'result': 'ok'}
 
+    @router.get('/{key}/user/{user_id}')
+    async def setting_user_get(key: str, user_id: int, user=Depends(guard_view)):
+        """Личная настройка человека. Нет такой — `None`, решает страница."""
+        return {'result': await setting_get(str(key).strip(), None, int(user_id))}
+
+    @router.post('/{key}/user/{user_id}')
+    async def setting_user_set(key: str, user_id: int, data: dict,
+                               user=Depends(guard_manage)):
+        """Ставит личную настройку человека.
+
+        ⚠ Пустое значение здесь **отвергается**, а не удаляет строку — в
+        отличие от общей настройки. Личную ставят точечно и по одной, и пустота
+        в теле запроса тут вернее всего означает ошибку вызывающего.
+        """
+        value = data.get('value')
+        if not value:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail='нет значения')
+
+        return {'result': await setting_set(str(key).strip(), value, int(user_id))}
+
     @router.delete('/{key}')
     async def setting_drop(key: str, user=Depends(guard_manage)):
-        """Убирает настройку целиком.
+        """Убирает настройку целиком: общее значение **и все узловые**.
+
+        ⚠⚠ Именно целиком, а не `setting_delete(key)`. Тот сносит область с
+        пустым `node_id` и оставляет переопределения узлов жить — а страница под
+        крестиком понимает «настройки больше нет». Там, где узлов не заводят,
+        разницы не видно вовсе; там, где заводят, остался бы призрак.
+
+        ⚠ Личные настройки не трогаются: они принадлежат человеку, а не
+        установке.
 
         ⚠ Повторный вызов не ошибка: результат тот же — настройки нет. Отвечать
         404 на удаление уже удалённого значило бы пугать человека тем, чего он и
         добивался.
         """
-        await setting_delete(str(key).strip())
+        async with mysql_get_db_async() as db:
+            await db.execute('DELETE FROM setting'
+                             ' WHERE `key` = %s AND user_id IS NULL',
+                             (str(key).strip(),))
+            await db.connection.commit()
 
         return {'result': 'ok'}
 
