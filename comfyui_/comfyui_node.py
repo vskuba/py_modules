@@ -14,16 +14,16 @@ import json
 import urllib.error
 import urllib.request
 
-# Ферма локальная по умолчанию — как в `comfy_gen`; чужой адрес даёт вызывающий.
-COMFY_NODE_BASE = 'http://127.0.0.1:8188'
+# Ферма локальная по умолчанию — как в `comfyui_gen`; чужой адрес даёт вызывающий.
+COMFYUI_NODE_BASE = 'http://127.0.0.1:8188'
 
 
-def comfy_node_info(name: str, base: str = '') -> dict:
+def comfyui_node_info(name: str, base: str = '') -> dict:
     """Контракт ноды с фермы: входы с типами и enumerate-файлами, выходы.
 
     Args:
         name: имя класса (`SUPIRApply`, `CheckpointLoaderSimple`, …).
-        base: адрес ComfyUI; пусто — `COMFY_NODE_BASE`.
+        base: адрес ComfyUI; пусто — `COMFYUI_NODE_BASE`.
 
     Returns:
         {'node': str, 'required': {имя: вход}, 'optional': {имя: вход},
@@ -33,7 +33,7 @@ def comfy_node_info(name: str, base: str = '') -> dict:
         прогона. `ValueError` словами — если такого узла на ферме нет: проверять
         граф чужой фермой молча означало бы соврать.
     """
-    base = base or COMFY_NODE_BASE
+    base = base or COMFYUI_NODE_BASE
     url = f'{base}/object_info/{urllib.request.quote(name)}'
     with urllib.request.urlopen(url, timeout=15) as r:
         body = json.load(r)
@@ -54,19 +54,19 @@ def comfy_node_info(name: str, base: str = '') -> dict:
     return {'node': name, 'outputs': node.get('output', []), **inputs}
 
 
-def comfy_node_sees(name: str, file: str, base: str = '') -> dict:
+def comfyui_node_sees(name: str, file: str, base: str = '') -> dict:
     """Видит ли загрузчик этот файл (имя в enumerate его входов) — без прогона.
 
     Args:
         name: имя класса ноды-загрузчика.
         file: имя файла, как его пишут во входе графа.
-        base: адрес ComfyUI; пусто — `COMFY_NODE_BASE`.
+        base: адрес ComfyUI; пусто — `COMFYUI_NODE_BASE`.
 
     Returns:
         {'visible': bool, 'input': имя входа, 'values': длина enumerate} —
         видно, где именно имя нашлось; не нашлось — `input` пуст.
     """
-    info = comfy_node_info(name, base)
+    info = comfyui_node_info(name, base)
     for label in ('required', 'optional'):
         for field, entry in info[label].items():
             if file in entry.get('values', []):
@@ -84,8 +84,8 @@ if __name__ == '__main__':
     ap.add_argument('--sees', default='', help='файл: видит ли его загрузчик')
     ns = ap.parse_args()
     if ns.sees:
-        print(json.dumps(comfy_node_sees(ns.node, ns.sees, ns.base),
+        print(json.dumps(comfyui_node_sees(ns.node, ns.sees, ns.base),
                          ensure_ascii=False))
     else:
-        print(json.dumps(comfy_node_info(ns.node, ns.base),
+        print(json.dumps(comfyui_node_info(ns.node, ns.base),
                          ensure_ascii=False, indent=1))

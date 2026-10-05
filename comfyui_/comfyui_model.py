@@ -18,7 +18,7 @@ import os
 import urllib.request
 
 
-def comfy_model_present(models_dir: str, pattern: str, *,
+def comfyui_model_present(models_dir: str, pattern: str, *,
                         alias: str = '') -> dict:
     """Что из весов под шаблоном лежит и цело ли; недостающий алиас-симлинок дотягивает.
 
@@ -64,7 +64,7 @@ def comfy_model_present(models_dir: str, pattern: str, *,
     return {'found': found, 'total': len(found), 'alias': alias_info}
 
 
-def comfy_model_get(folder: str, url: str, *, name: str = '', size: int = 0,
+def comfyui_model_get(folder: str, url: str, *, name: str = '', size: int = 0,
                     sha256: str = '') -> dict:
     """Скачать вес в папку и проверить целость ДО того, как он попадёт в дело.
 
@@ -119,10 +119,10 @@ if __name__ == '__main__':
     ap.add_argument('--sha', default='', help='ожидаемый sha256')
     ns = ap.parse_args()
     if ns.mode == 'есть':
-        print(json.dumps(comfy_model_present(ns.dir, ns.pattern,
+        print(json.dumps(comfyui_model_present(ns.dir, ns.pattern,
                                             alias=ns.alias),
                          ensure_ascii=False, indent=2))
     else:
-        print(json.dumps(comfy_model_get(ns.dir, ns.url, name=ns.pattern,
+        print(json.dumps(comfyui_model_get(ns.dir, ns.url, name=ns.pattern,
                                          size=ns.size, sha256=ns.sha),
                          ensure_ascii=False))

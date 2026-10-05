@@ -16,7 +16,7 @@ ssh: тот же код гоняет против любой ComfyUI по http. 
 GB10 с единой памятью: задача, влезшая в память только что, роняет всю ферму.
 Поэтому workflow несёт верхним ключом `_mem` — примерный аппетит в ГБ. Память на
 ферме свободна всегда — что держат её прошлые прогоны, а не соседи: драйвер
-обязательно чистит её (`comfy_gen_free`) перед отправкой задачи, и лишь когда
+обязательно чистит её (`comfyui_gen_free`) перед отправкой задачи, и лишь когда
 после чистки не хватает `_mem` + запас — отказывает, не отправляя.
 
 Кадры сходят с конвейера без EXIF (exiftool -all=) и с именами-хэшами, как
@@ -38,13 +38,13 @@ import httpx
 from PIL import Image
 
 # Прогон тяжёлого workflow (flux + лоры) на ферме — минуты; ждём без стеснения.
-COMFY_GEN_TIMEOUT = 900.0
+COMFYUI_GEN_TIMEOUT = 900.0
 
 # Сколько ждать живого system_stats после перезапуска контейнера фермы.
-COMFY_GEN_FREE_WAIT = 180.0
+COMFYUI_GEN_FREE_WAIT = 180.0
 
 # Маркеры в API-JSON workflow: значения узлов, которые драйвер подставляет.
-COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__',
+COMFYUI_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__',
                     '__FACE__', '__DETAIL__', '__WIDTH__', '__HEIGHT__',
                     '__STEPS__', '__LORA__')
 
@@ -53,51 +53,51 @@ COMFY_GEN_MARKERS = ('__PROMPT__', '__ANCHOR__', '__SEED__', '__DENOISE__',
 # — фактический зазор, оставленный прогоном: у обучения на 15 заплатках он был
 # 0.4 ГиБ (free 93.6→0.4) и прогон жил; 4 ГиБ «на глаз» тут не оставляют места
 # никакой задаче (свободно максимум 93.7).
-COMFY_GEN_MEM_MARGIN = 0.3
+COMFYUI_GEN_MEM_MARGIN = 0.3
 
 # Обучение — те же шаги × градиент-аккумуляция прогонов, оно медленнее инференса:
 # полный прогон на 96 заплатках (900–1500 шагов) идёт больше часа — прошлый
 # компас 3600 с не дожил бы до SaveLoRA.
-COMFY_GEN_TRAIN_TIMEOUT = 7200.0
-COMFY_GEN_TRAIN_BUDGET = (512, 512)  # бюджет площади кадра: патч сверх неё жался бы пропорционально;
+COMFYUI_GEN_TRAIN_TIMEOUT = 7200.0
+COMFYUI_GEN_TRAIN_BUDGET = (512, 512)  # бюджет площади кадра: патч сверх неё жался бы пропорционально;
                                      # flux1-dev-fp8 на 768×1024 (0.79 МП/кадр) не влезает в память
-                                     # и падает torch.OutOfMemoryError — см. docs/comfy_gen.md
-COMFY_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
+                                     # и падает torch.OutOfMemoryError — см. docs/comfyui_gen.md
+COMFYUI_GEN_REMOTE = '/opt/ComfyUI/output'  # каталог готовых файлов внутри контейнера фермы
 # Какие файлы пачки считаем кадрами персоны. Не только png: материалы приходят
 # с камеры и лежат jpg, а пачка выкроек — png. Судья обязан видеть и то и другое.
-COMFY_GEN_FACE_EXTS = ('.png', '.jpg', '.jpeg', '.webp')
+COMFYUI_GEN_FACE_EXTS = ('.png', '.jpg', '.jpeg', '.webp')
 
-COMFY_GEN_MODELS = '/opt/ComfyUI/models/loras'  # куда ложится лора-актив на ферме
+COMFYUI_GEN_MODELS = '/opt/ComfyUI/models/loras'  # куда ложится лора-актив на ферме
 
 # Длинная сторона рендера выкройки, px. Выкройка идёт в граф В СВОИХ
 # ПРОПОРЦИЯХ: сплющивание в квадрат ломает геометрию лица (flux на 2D RoPE
 # считает по нативному аспекту), а овал, растянутый в квадрат и сжатый обратно,
 # возвращается чужой формы. Кратность 16 — страйд VAE 8 × патч flux 2.
-COMFY_GEN_SWAP_RENDER = 768
+COMFYUI_GEN_SWAP_RENDER = 768
 
 # QA кадра с лицом: косинус против якоря не ниже порога — иначе прогон на seed+сдвиг.
-COMFY_GEN_QA_PASS = 0.5
-COMFY_GEN_QA_RETRY_SEED = 1000
+COMFYUI_GEN_QA_PASS = 0.5
+COMFYUI_GEN_QA_RETRY_SEED = 1000
 # Детекция сверки: лицо живого кадра — крупное, на det 640 детектор дробит его
 # до несерьёзных пикселей и не берёт (замер: на close-up 896×1152 детект 640 —
 # 0 лиц, 320 — лицо с det_score 0.85). 320 берёт и крупные, и мелкие лица.
-COMFY_GEN_QA_DET = (320, 320)
+COMFYUI_GEN_QA_DET = (320, 320)
 # (замер 2026-09-14: тот же кадр swap на det 1024 даёт score 0.0 — крой/embedding
 # при детекции крупнее дет_size ломаются; сверка полным кадром идёт тем же детектором,
 # каким мерилась заплатками — 320.)
 
 
-def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
+def comfyui_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
                     anchor_input='', seed=1, n=1, denoise=1.0, detail=0.22,
-                    qa_anchor='', qa_pass=COMFY_GEN_QA_PASS,
+                    qa_anchor='', qa_pass=COMFYUI_GEN_QA_PASS,
                     width=0, height=0, steps=0, lora=1.0,
-                    qa_det=COMFY_GEN_QA_DET, farm_ssh='', farm_container='',
-                    remote=COMFY_GEN_REMOTE, face='', reuse=False):
+                    qa_det=COMFYUI_GEN_QA_DET, farm_ssh='', farm_container='',
+                    remote=COMFYUI_GEN_REMOTE, face='', reuse=False):
     """Прогнать workflow над сценой n раз; вернуть строки манифеста по кадрам.
 
     Кадры с лицом (scene.face_on) скорятся лицом-якорем `qa_anchor` детекцией
     `qa_det` по порогу `qa_pass`, иначе тот же прогон на
-    seed+COMFY_GEN_QA_RETRY_SEED. Порог — параметр, а не константа: на лице в
+    seed+COMFYUI_GEN_QA_RETRY_SEED. Порог — параметр, а не константа: на лице в
     сотню пикселей косинус к якорю физически ниже, чем на close-up, и общий 0.5
     заставлял бы каждый прогон вслепую повторяться. `qa_pass=0` — не пересевать.
 
@@ -106,14 +106,14 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
     («http://хост:порт»); anchor — файл якорного лица, грузится в input фермы,
     его новое имя подставляется вместо __ANCHOR__ (workflow без якоря его
     просто не содержит); seed — стартовый, i-й кадр — seed+i; перед отправкой
-    память фермы чистится `comfy_gen_free` (кэш моделей держит цифру внизу) и
+    память фермы чистится `comfyui_gen_free` (кэш моделей держит цифру внизу) и
     лишь потом `_mem` (ГБ) сверяется с свободным — не влезает — отказ.
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
-    comfy_gen_free(base, farm_ssh, farm_container, need, reuse=reuse)
-    anchor_name = comfy_gen_upload(anchor, base) if anchor else ''
-    face_name = comfy_gen_upload(face, base) if face else ''
+    comfyui_gen_free(base, farm_ssh, farm_container, need, reuse=reuse)
+    anchor_name = comfyui_gen_upload(anchor, base) if anchor else ''
+    face_name = comfyui_gen_upload(face, base) if face else ''
     if anchor_input:
         _wf_set(wf, anchor_input, anchor_name or str(anchor))
     rows = []
@@ -134,17 +134,17 @@ def comfy_gen_batch(workflow, scene, out, *, base, persona='', anchor=None,
         if qa_anchor and scene.get('face_on', True):
             _comfy_gen_qa(got, out, qa_anchor, qa_det, qa_pass)
             if qa_pass and not all(r['pass'] for r in got):
-                got = _run_one(body(seed + i + COMFY_GEN_QA_RETRY_SEED), scene,
-                               out, base, seed + i + COMFY_GEN_QA_RETRY_SEED, need,
+                got = _run_one(body(seed + i + COMFYUI_GEN_QA_RETRY_SEED), scene,
+                               out, base, seed + i + COMFYUI_GEN_QA_RETRY_SEED, need,
                                farm_ssh=farm_ssh, farm_container=farm_container)
                 _comfy_gen_qa(got, out, qa_anchor, qa_det, qa_pass)
         rows.extend(got)
     return rows
 
 
-def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_TRAIN_BUDGET,
+def comfyui_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFYUI_GEN_TRAIN_BUDGET,
                     steps=0, out='', farm_ssh='', farm_container='',
-                    remote=COMFY_GEN_REMOTE):
+                    remote=COMFYUI_GEN_REMOTE):
     """Обучить LoRA на пачке кадров; вернуть локальные пути готовых лор.
 
     workflow — API-JSON с LoadImageTextDataSetFromFolder/MakeTrainingDataset/
@@ -166,7 +166,7 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
     """
     wf = json.loads(Path(workflow).read_text())
     need = float(wf.pop('_mem', 0))
-    comfy_gen_free(base, farm_ssh, farm_container, need)
+    comfyui_gen_free(base, farm_ssh, farm_container, need)
     for n in wf.values():
         if n['_cls'] == 'LoadImageTextDataSetFromFolder':
             n['inputs']['folder'] = caption
@@ -177,17 +177,17 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
         scale = min(1.0, math.sqrt(budget[0] * budget[1] / (w0 * h0)))
         w, h = max(16, round(w0 * scale / 16) * 16), max(16, round(h0 * scale / 16) * 16)
         if (w, h) == (w0, h0):
-            comfy_gen_upload(f, base, subfolder=caption)
+            comfyui_gen_upload(f, base, subfolder=caption)
         else:
             q = tmp_dir / f.name
             with Image.open(f) as im:
                 im.resize((w, h), Image.LANCZOS).save(q)
-            comfy_gen_upload(q, base, subfolder=caption)
+            comfyui_gen_upload(q, base, subfolder=caption)
     run = _wf_fill(json.loads(json.dumps(wf)),
                    {'__PROMPT__': caption, '__ANCHOR__': '', '__SEED__': str(seed),
                     '__DENOISE__': '1.0', '__STEPS__': str(steps)})
     _run_one(run, {'id': 'train', 'nsfw': False}, '', base, seed, need,
-               timeout=COMFY_GEN_TRAIN_TIMEOUT)
+               timeout=COMFYUI_GEN_TRAIN_TIMEOUT)
     if not farm_ssh:
         return []
     prefix = next(n['inputs']['prefix'] for n in wf.values()
@@ -217,11 +217,11 @@ def comfy_gen_train(workflow, files, *, base, caption, seed=1, budget=COMFY_GEN_
     return got
 
 
-def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
-                   denoise=0.8, detail=0.22, seed=1, qa_det=COMFY_GEN_QA_DET,
-                   face='', hf=0, render=COMFY_GEN_SWAP_RENDER, steps=20,
+def comfyui_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
+                   denoise=0.8, detail=0.22, seed=1, qa_det=COMFYUI_GEN_QA_DET,
+                   face='', hf=0, render=COMFYUI_GEN_SWAP_RENDER, steps=20,
                    lora=1.0, grain=1.0, feather=0.0, fit_full=0.0, parts_ask=True,
-                   qa_pass=COMFY_GEN_QA_PASS, reuse=False,
+                   qa_pass=COMFYUI_GEN_QA_PASS, reuse=False,
                    farm_ssh='', farm_container=''):
     """Натянуть лицо лоры на готовые фото; вернуть строки манифеста по фото.
 
@@ -254,8 +254,8 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
 
     `parts_ask` — спрашивать ли vision-моделью, что попало в выкройку кроме
     лица (нужен ключ провайдера; без него — пустой список, прогон идёт).
-    Провал гейта — тот же прогон на seed+COMFY_GEN_QA_RETRY_SEED внутри
-    comfy_gen_batch. Замеры, стадии и вердикты — в строке манифеста.
+    Провал гейта — тот же прогон на seed+COMFYUI_GEN_QA_RETRY_SEED внутри
+    comfyui_gen_batch. Замеры, стадии и вердикты — в строке манифеста.
     """
     from PIL import Image
     from ai.ai_face import ai_face_crop, ai_face_paste, ai_face_score
@@ -283,7 +283,7 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
                 # одной установке единственными png в каталоге оказались три
                 # ЧУЖИХ лица, и якорем становились они.
                 frames = sorted(x for x in f.iterdir()
-                                if x.is_file() and x.suffix.lower() in COMFY_GEN_FACE_EXTS)
+                                if x.is_file() and x.suffix.lower() in COMFYUI_GEN_FACE_EXTS)
                 f = Path(ai_look_anchor(frames, p, parts=parts_ask,
                                         cache=str(f / 'anchors.json'))['face'])
             probe = ai_look_probe(p, box)
@@ -329,7 +329,7 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
             parts = ai_look_parts(p, box) if parts_ask else []
             prompt = persona + ai_look_prompt(probe)
             w_r, h_r = _swap_render(box, render)
-            got = comfy_gen_batch(workflow, {'id': p.stem, 'prompt': prompt,
+            got = comfyui_gen_batch(workflow, {'id': p.stem, 'prompt': prompt,
                                              'nsfw': False}, out, base=base,
                                   persona=persona, seed=seed, n=1,
                                   denoise=denoise, detail=detail,
@@ -412,7 +412,7 @@ def comfy_gen_swap(photos, workflow, out, *, base, persona='', mode='face',
     return rows
 
 
-def comfy_gen_upload(path, base, subfolder=''):
+def comfyui_gen_upload(path, base, subfolder=''):
     """Залить файл в input фермы (в подпапку, если задана) через /upload/image."""
     p = Path(path)
     r = httpx.post(f'{base}/upload/image',
@@ -423,7 +423,7 @@ def comfy_gen_upload(path, base, subfolder=''):
     return name
 
 
-def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0, reuse=False):
+def comfyui_gen_free(base, farm_ssh='', farm_container='', need=0.0, reuse=False):
     """Перед каждой задачей: освободить память фермы, вернуть свободно (ГиБ).
 
     `reuse` — не выгружать, если свободного уже хватает под `need`: для пачки
@@ -443,7 +443,7 @@ def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0, reuse=False):
         # девается: не хватило — идём обычным путём и выгружаем.
         try:
             free = _gen_alive(base)
-            if free >= need + COMFY_GEN_MEM_MARGIN:
+            if free >= need + COMFYUI_GEN_MEM_MARGIN:
                 return free
         except (httpx.HTTPError, TimeoutError):
             pass
@@ -455,18 +455,18 @@ def comfy_gen_free(base, farm_ssh='', farm_container='', need=0.0, reuse=False):
         ok = False
     if ok:
         free = _gen_alive(base)
-        if free >= need + COMFY_GEN_MEM_MARGIN:
+        if free >= need + COMFYUI_GEN_MEM_MARGIN:
             return free
     if not farm_ssh:
         raise RuntimeError(f'ферма {base} кэш не выгрузила'
                            + (f': свободно {free:.0f} ГиБ' if ok else ' и не ответила')
-                           + f', задаче надо ≥{need + COMFY_GEN_MEM_MARGIN:.0f} — не отправляю')
+                           + f', задаче надо ≥{need + COMFYUI_GEN_MEM_MARGIN:.0f} — не отправляю')
     subprocess.run(['ssh', farm_ssh, f'docker restart {farm_container}'],
                    capture_output=True, check=True)
     return _gen_alive(base)
 
 
-def comfy_gen_model(files, base, farm_ssh, farm_container, dest=COMFY_GEN_MODELS):
+def comfyui_gen_model(files, base, farm_ssh, farm_container, dest=COMFYUI_GEN_MODELS):
     """Лору-актив проекта — в models фермы, контейнер рестартнуть и ждать живого.
 
     LoraLoader ключуется путём: свежий файл под тем же именем без рестарта
@@ -474,7 +474,7 @@ def comfy_gen_model(files, base, farm_ssh, farm_container, dest=COMFY_GEN_MODELS
     поэтому именно рестарт контейнера, а не только загрузка файла."""
     # ⚠ Адрес фермы может нести флаги (`-i ключ`, `-o …`): своего ~/.ssh/config
     # внутри контейнера нет. Разбираем по пробелам — адрес последним словом,
-    # остальное опции. Тот же приём, что в `comfy_trainer_*._ssh`; без него
+    # остальное опции. Тот же приём, что в `comfyui_trainer_*._ssh`; без него
     # `scp` получал всю строку одним аргументом и падал.
     *opts, host = str(farm_ssh).split()
     for f in files:
@@ -507,7 +507,7 @@ def _swap_centroid(folder):
     # персоны — 0.245, то есть они смотрят в разные стороны, а все оценки
     # прогонов были не о том.
     files = sorted(p for p in Path(folder).iterdir()
-                   if p.is_file() and p.suffix.lower() in COMFY_GEN_FACE_EXTS)
+                   if p.is_file() and p.suffix.lower() in COMFYUI_GEN_FACE_EXTS)
     cache = Path(folder) / 'centroid.json'
     if cache.exists():
         got = json.loads(cache.read_text())
@@ -535,7 +535,7 @@ def _swap_render(box, long_side):
 
 def _gen_alive(base):
     """Ждать живого приложения фермы (system_stats отвечает) и вернуть ГиБ свободно."""
-    deadline = time.monotonic() + COMFY_GEN_FREE_WAIT
+    deadline = time.monotonic() + COMFYUI_GEN_FREE_WAIT
     while True:
         try:
             r = httpx.get(f'{base}/system_stats', timeout=10)
@@ -544,7 +544,7 @@ def _gen_alive(base):
         except httpx.TransportError:
             pass
         if time.monotonic() > deadline:
-            raise TimeoutError(f'ферма {base} не ожила за {COMFY_GEN_FREE_WAIT:.0f} с')
+            raise TimeoutError(f'ферма {base} не ожила за {COMFYUI_GEN_FREE_WAIT:.0f} с')
         time.sleep(2)
 
 
@@ -557,7 +557,7 @@ def _wf_fill(node, values):
         if isinstance(x, list):
             return [walk(v) for v in x]
         if isinstance(x, str):
-            for m in COMFY_GEN_MARKERS:
+            for m in COMFYUI_GEN_MARKERS:
                 if m in x:
                     return values[m] if x == m else x.replace(m, str(values[m]))
         return x
@@ -571,21 +571,21 @@ def _wf_set(node, path, value):
     node[nid]['inputs'][field] = value
 
 
-def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFY_GEN_TIMEOUT,
-             farm_ssh='', farm_container='', remote=COMFY_GEN_REMOTE):
+def _run_one(wf, scene, out, base, seed, need=0.0, timeout=COMFYUI_GEN_TIMEOUT,
+             farm_ssh='', farm_container='', remote=COMFYUI_GEN_REMOTE):
     """Один запуск /prompt -> /history -> /view; кадры на диск, строки манифеста.
 
     need>0 — ГБ, которые задача приблизительно съест: память уже выгружена
-    (`comfy_gen_free` выше по стеку) и этого всё равно не влезает вместе с
+    (`comfyui_gen_free` выше по стеку) и этого всё равно не влезает вместе с
     запасом — отказ, не отправляя (единая память GB10, переполнение валит всю
     ферму). Приложение фермы перезапускается посреди
     прогона и стирает свой queue/history — граф досылается заново (_gen_await),
     прогон доходит до конца, а не падает с Connection refused."""
     if need:
         free = httpx.get(f'{base}/system_stats', timeout=30).json()['system']['ram_free'] / 2**30
-        if free < need + COMFY_GEN_MEM_MARGIN:
+        if free < need + COMFYUI_GEN_MEM_MARGIN:
             raise RuntimeError(f'на ферме свободно {free:.0f} ГБ, задаче надо '
-                               f'≥{need + COMFY_GEN_MEM_MARGIN:.0f} — не отправляю')
+                               f'≥{need + COMFYUI_GEN_MEM_MARGIN:.0f} — не отправляю')
     for n in wf.values():  # API-форма: каждый узел с class_type
         n.setdefault('class_type', n.pop('_cls'))
     done = _gen_await({'prompt': wf, 'client_id': str(uuid.uuid4())}, base,
@@ -665,8 +665,8 @@ def _save(data, ext, out, scene, seed):
     return row
 
 
-def _comfy_gen_qa(rows, out, anchor, det=COMFY_GEN_QA_DET,
-                  qa_pass=COMFY_GEN_QA_PASS):
+def _comfy_gen_qa(rows, out, anchor, det=COMFYUI_GEN_QA_DET,
+                  qa_pass=COMFYUI_GEN_QA_PASS):
     """Скорить кадры с лицом против якоря: score/pass — в строки и в манифест.
 
     Кроит лицо кропом и скорит тем же det, каким кроил — та же цепочка, чем
@@ -744,7 +744,7 @@ if __name__ == '__main__':
                         help='лицо-якорь для score/pass; провал — тот же прогон на seed+1000')
     parser.add_argument('--qa-det', default='',
                         help=f'детекция «W,H» для score/pass (пусто — '
-                             f'{COMFY_GEN_QA_DET[0]},{COMFY_GEN_QA_DET[1]})')
+                             f'{COMFYUI_GEN_QA_DET[0]},{COMFYUI_GEN_QA_DET[1]})')
     parser.add_argument('--base', default='http://127.0.0.1:8188', help='адрес ComfyUI')
     parser.add_argument('--out', default='', help='каталог персоны под кадры (run)')
     parser.add_argument('--seed', type=int, default=1)
@@ -758,7 +758,7 @@ if __name__ == '__main__':
     parser.add_argument('--hf', type=int, default=0,
                         help='swap: сколько самых мелких уровней пирамиды берут '
                              'текстуру кадра (0 — заплатка на всех уровнях)')
-    parser.add_argument('--render', type=int, default=COMFY_GEN_SWAP_RENDER,
+    parser.add_argument('--render', type=int, default=COMFYUI_GEN_SWAP_RENDER,
                         help='swap: длинная сторона рендера выкройки (её '
                              'пропорции сохраняются, размер кратен 16)')
     parser.add_argument('--steps', type=int, default=20, help='swap: шагов сэмплера')
@@ -779,7 +779,7 @@ if __name__ == '__main__':
                         help='не выгружать модели фермы, если памяти и так '
                              'хватает: для пачки кадров по одному графу это '
                              'экономит перезагрузку 17 ГБ на каждый кадр')
-    parser.add_argument('--qa-pass', type=float, default=COMFY_GEN_QA_PASS,
+    parser.add_argument('--qa-pass', type=float, default=COMFYUI_GEN_QA_PASS,
                         help='порог косинуса приёмки; 0 — не пересевать прогон '
                              '(на лице в сотню пикселей общий 0.5 недостижим)')
     parser.add_argument('--budget', default='512x512',
@@ -792,7 +792,7 @@ if __name__ == '__main__':
     ns = parser.parse_args()
     try:
         if ns.command == 'model':
-            for name in comfy_gen_model(ns.files, ns.base, ns.farm_ssh,
+            for name in comfyui_gen_model(ns.files, ns.base, ns.farm_ssh,
                                         ns.farm_container):
                 print(name)
             print('на ферме')
@@ -801,12 +801,12 @@ if __name__ == '__main__':
             # Перенос строки внутри f-строки — синтаксис 3.12+, а образы
             # проектов стоят на python:3.11-slim: там это `SyntaxError` при
             # импорте модуля целиком. Считаем значение заранее.
-            free = comfy_gen_free(ns.base, ns.farm_ssh, ns.farm_container)
+            free = comfyui_gen_free(ns.base, ns.farm_ssh, ns.farm_container)
             print(f'свободно {free:.1f} ГиБ')
             raise SystemExit
         if ns.command == 'train':
             w, h = (int(v) for v in ns.budget.lower().split('x'))
-            got = comfy_gen_train(ns.workflow, ns.files, base=ns.base,
+            got = comfyui_gen_train(ns.workflow, ns.files, base=ns.base,
                                   caption=ns.persona, seed=ns.seed, budget=(w, h),
                                   steps=ns.steps, out=ns.out, farm_ssh=ns.farm_ssh,
                                   farm_container=ns.farm_container)
@@ -818,8 +818,8 @@ if __name__ == '__main__':
             if not ns.out:
                 raise SystemExit('ошибка: swap требует --out (каталог под фото)')
             det = (tuple(int(v) for v in ns.qa_det.split(','))
-                   if ns.qa_det else COMFY_GEN_QA_DET)
-            got = comfy_gen_swap(ns.files, ns.workflow, ns.out, base=ns.base,
+                   if ns.qa_det else COMFYUI_GEN_QA_DET)
+            got = comfyui_gen_swap(ns.files, ns.workflow, ns.out, base=ns.base,
                                  persona=ns.persona, mode=ns.mode, face=ns.face,
                                  denoise=ns.denoise, detail=ns.detail,
                                  hf=ns.hf, render=ns.render, steps=ns.steps,
@@ -840,10 +840,10 @@ if __name__ == '__main__':
         if ns.scene:
             scenes = [s for s in scenes if s['id'] == ns.scene]
         qa_det = (tuple(int(v) for v in ns.qa_det.split(','))
-                  if ns.qa_det else COMFY_GEN_QA_DET)
+                  if ns.qa_det else COMFYUI_GEN_QA_DET)
         rows = []
         for s in scenes:
-            rows.extend(comfy_gen_batch(ns.workflow, s, ns.out, base=ns.base,
+            rows.extend(comfyui_gen_batch(ns.workflow, s, ns.out, base=ns.base,
                                         persona=ns.persona, anchor=ns.anchor or None,
                                         anchor_input=ns.anchor_input,
                                         seed=ns.seed, n=ns.n, denoise=ns.denoise,

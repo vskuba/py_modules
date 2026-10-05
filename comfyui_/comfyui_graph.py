@@ -3,13 +3,13 @@
 Оба вопроса стоили смены по прогону каждый: граф, заведённый под flux, ехал с
 полым кондом к SDXL-базе и валился после двух попыток; копия графа у персоны
 пересоздавалась из полу-исправленного шаблона — и перестановки прогона лечили
-не его, а только молчали, пока сверку не делал рукой. `comfy_graph_check`
+не его, а только молчали, пока сверку не делал рукой. `comfyui_graph_check`
 отвечает structural: класс объявлен, required-входы поданы, линия из узла
 даёт тип, который вход ждёт, файла в enumerate загрузчика нет — словами и ДО
 отправки. Семантику (что патч — не юнет) проверка не ловит: для неё —
-`comfy_.comfy_node`.
+`comfyui_.comfyui_node`.
 
-`comfy_graph_stale` — второй вопрос: копия шаблона у персоны сверяется с
+`comfyui_graph_stale` — второй вопрос: копия шаблона у персоны сверяется с
 шаблоном молча и по содержимому, а не по mtime.
 
 Знания о конкретном проекте тут нет: графы и адреса приходят вызывающему;
@@ -19,13 +19,13 @@
 import json
 
 
-def comfy_graph_check(graph: dict | str, base: str = '') -> dict:
+def comfyui_graph_check(graph: dict | str, base: str = '') -> dict:
     """Возьмёт ли ферма граф как есть; словами о каждом узле, что не так.
 
     Args:
         graph: dict (разметка проекта `_cls`/`inputs` или API-`class_type`) или
             путь к json.
-        base: адрес ComfyUI; пусто — `comfy_node`-ный дефолт.
+        base: адрес ComfyUI; пусто — `comfyui_node`-ный дефолт.
 
     Returns:
         {'fit': bool, 'nodes': [{'node', 'why'}]} — проверки структурные:
@@ -33,7 +33,7 @@ def comfy_graph_check(graph: dict | str, base: str = '') -> dict:
         строковое имя файла видно в enumerate входа. Значения с маркером `__…__`
         (их подставит исполнитель) не сверяются.
     """
-    from comfy_.comfy_node import comfy_node_info
+    from comfyui_.comfyui_node import comfyui_node_info
     graph = _graph(graph)
     nodes = {key: value for key, value in graph.items() if isinstance(value, dict)}
     problems = []
@@ -43,7 +43,7 @@ def comfy_graph_check(graph: dict | str, base: str = '') -> dict:
             problems.append({'node': key, 'why': 'узел без класса'})
             continue
         try:
-            info = comfy_node_info(cls, base)
+            info = comfyui_node_info(cls, base)
         except ValueError as e:
             problems.append({'node': key, 'why': str(e)})
             continue
@@ -94,7 +94,7 @@ def comfy_graph_check(graph: dict | str, base: str = '') -> dict:
     return {'fit': not problems, 'nodes': problems}
 
 
-def comfy_graph_stale(template: dict | str, copy: dict | str) -> dict:
+def comfyui_graph_stale(template: dict | str, copy: dict | str) -> dict:
     """Свежая ли копия графа у персоны: чем именно разнится с шаблоном.
 
     Args:
@@ -147,9 +147,9 @@ def _graph(graph: dict | str) -> dict:
 
 def _outputs(node: dict, base: str) -> list:
     """Типы выходов узла с той же фермы (для сверки линии)."""
-    from comfy_.comfy_node import comfy_node_info
+    from comfyui_.comfyui_node import comfyui_node_info
     try:
-        return comfy_node_info(_node_class(node), base)['outputs']
+        return comfyui_node_info(_node_class(node), base)['outputs']
     except ValueError:
         return []
 
@@ -165,8 +165,8 @@ if __name__ == '__main__':
     ap.add_argument('--base', default='', help='адрес ComfyUI')
     ns = ap.parse_args()
     if ns.mode == 'check':
-        print(json.dumps(comfy_graph_check(ns.graph, ns.base),
+        print(json.dumps(comfyui_graph_check(ns.graph, ns.base),
                          ensure_ascii=False, indent=1))
     else:
-        print(json.dumps(comfy_graph_stale(ns.template, ns.graph),
+        print(json.dumps(comfyui_graph_stale(ns.template, ns.graph),
                          ensure_ascii=False, indent=1))

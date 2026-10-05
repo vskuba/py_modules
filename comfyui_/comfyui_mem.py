@@ -19,7 +19,7 @@
 ⚠ Замер идёт снизу вверх. Прогон, который не влез, не «вернёт ошибку»: он
 роняет процесс фермы. Поэтому лесенку начинают с заведомо малого и
 останавливаются, не доходя до предела, — предсказанный пик выше
-`COMFY_MEM_STOP` от общей памяти означает, что следующую ступень не гоняют.
+`COMFYUI_MEM_STOP` от общей памяти означает, что следующую ступень не гоняют.
 """
 import argparse
 import json
@@ -30,21 +30,21 @@ import httpx
 
 # Как часто спрашивать ферму о свободной памяти, с. Чаще — пик точнее, но
 # system_stats на занятой ферме отвечает не мгновенно.
-COMFY_MEM_POLL = 2.0
+COMFYUI_MEM_POLL = 2.0
 # Доля общей памяти, выше которой следующую ступень лесенки не гоняют.
-COMFY_MEM_STOP = 0.9
+COMFYUI_MEM_STOP = 0.9
 
 
-def comfy_mem_probe(run, base, poll=COMFY_MEM_POLL):
+def comfyui_mem_probe(run, base, poll=COMFYUI_MEM_POLL):
     """Выполнить `run()` и вернуть пик памяти фермы; словарь замера.
 
-    `run` — вызываемое без аргументов: отправка графа (`comfy_gen_batch`,
-    `comfy_gen_train` — что угодно, что блокируется до конца прогона). Пока оно
+    `run` — вызываемое без аргументов: отправка графа (`comfyui_gen_batch`,
+    `comfyui_gen_train` — что угодно, что блокируется до конца прогона). Пока оно
     работает, фоновый поток опрашивает `/system_stats`.
 
     Возвращает `{'total','free_before','free_min','peak','seconds','polls'}`,
     всё в ГиБ: `peak` — сколько граф занял сверх того, что было занято до него.
-    Это и есть кандидат в `_mem` (плюс запас `COMFY_GEN_MEM_MARGIN`).
+    Это и есть кандидат в `_mem` (плюс запас `COMFYUI_GEN_MEM_MARGIN`).
     """
     total, free0 = _mem_stats(base)
     seen = [free0]
@@ -72,7 +72,7 @@ def comfy_mem_probe(run, base, poll=COMFY_MEM_POLL):
             'polls': len(seen), 'result': result}
 
 
-def comfy_mem_fits(peak, total, stop=COMFY_MEM_STOP):
+def comfyui_mem_fits(peak, total, stop=COMFYUI_MEM_STOP):
     """Пускать ли следующую ступень лесенки: вердикт и запас."""
     return {'fits': peak < total * stop, 'headroom': round(total * stop - peak, 1),
             'limit': round(total * stop, 1)}
@@ -86,7 +86,7 @@ def _mem_stats(base):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(
-        prog='comfy_mem', description='пик памяти фермы под граф: замер вместо догадки')
+        prog='comfyui_mem', description='пик памяти фермы под граф: замер вместо догадки')
     ap.add_argument('command', choices=['stats', 'train'],
                     help='stats — что сейчас; train — короткий прогон обучения с замером')
     ap.add_argument('--base', default='http://127.0.0.1:8188')
@@ -95,7 +95,7 @@ if __name__ == '__main__':
     ap.add_argument('--persona', default='', help='train: подпись датасета')
     ap.add_argument('--budget', default='512x512', help='train: бюджет площади кадра')
     ap.add_argument('--steps', type=int, default=8, help='train: шагов в замерном прогоне')
-    ap.add_argument('--poll', type=float, default=COMFY_MEM_POLL)
+    ap.add_argument('--poll', type=float, default=COMFYUI_MEM_POLL)
     ns = ap.parse_args()
     try:
         if ns.command == 'stats':
@@ -105,15 +105,15 @@ if __name__ == '__main__':
             raise SystemExit
         if not (ns.workflow and ns.files and ns.persona):
             raise SystemExit('train требует --workflow, --files и --persona')
-        from comfy_.comfy_gen import comfy_gen_train
+        from comfyui_.comfyui_gen import comfyui_gen_train
         w, h = (int(v) for v in ns.budget.lower().split('x'))
-        got = comfy_mem_probe(
-            lambda: comfy_gen_train(ns.workflow, ns.files, base=ns.base,
+        got = comfyui_mem_probe(
+            lambda: comfyui_gen_train(ns.workflow, ns.files, base=ns.base,
                                     caption=ns.persona, budget=(w, h),
                                     steps=ns.steps),
             ns.base, poll=ns.poll)
         got.pop('result', None)
-        got.update(comfy_mem_fits(got['peak'], got['total']))
+        got.update(comfyui_mem_fits(got['peak'], got['total']))
         got.update({'frames_count': len(ns.files), 'budget': ns.budget, 'steps_count': ns.steps})
         print(json.dumps(got, ensure_ascii=False))
     except (httpx.HTTPError, OSError, RuntimeError, ValueError) as err:

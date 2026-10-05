@@ -1,10 +1,10 @@
 """Что файл веса просит с HF: размер и sha256 из API репо — до скачки.
 
-`comfy_model_get` сверяет скачанное с ожиданием, но ожидание два вечера кряду
+`comfyui_model_get` сверяет скачанное с ожиданием, но ожидание два вечера кряду
 приходило из curl: tree-API репо, `lfs.oid`, ещё и «Invalid username or
 password» с чужой машины — и качали вслепую, а огрызок с доехавшим хвостом
 распознавался только постфактум. Здесь та пара чисел — {'bytes', 'sha256'} —
-одним вызовом, ровно в той форме, в какой их ждёт `comfy_model_get`.
+одним вызовом, ровно в той форме, в какой их ждёт `comfyui_model_get`.
 
 Знания о конкретном проекте тут нет: репо и путь к файлу приходят вызывающему.
 """
@@ -15,7 +15,7 @@ import urllib.request
 HF_API = 'https://huggingface.co/api'
 
 
-def comfy_model_hf_expect(repo: str, file: str, *, ref: str = 'main',
+def comfyui_model_hf_expect(repo: str, file: str, *, ref: str = 'main',
                           token: str = '') -> dict:
     """Ожидание файла из репо HF: url докачки, размер, sha256 (lfs oid).
 
@@ -57,11 +57,11 @@ if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(
         description='что просит файл веса с HF: размер и sha256 до скачки — '
-                    'в той форме, в какой их ждёт comfy_model_get.')
+                    'в той форме, в какой их ждёт comfyui_model_get.')
     ap.add_argument('repo', help='репо HF')
     ap.add_argument('file', help='путь к файлу в репо')
     ap.add_argument('--ref', default='main', help='ветка/ревизия')
     ap.add_argument('--token', default='', help='Bearer для гейтнутых репо')
     ns = ap.parse_args()
-    print(json.dumps(comfy_model_hf_expect(ns.repo, ns.file, ref=ns.ref,
+    print(json.dumps(comfyui_model_hf_expect(ns.repo, ns.file, ref=ns.ref,
                                            token=ns.token), ensure_ascii=False))

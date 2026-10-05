@@ -74,14 +74,14 @@ namespace-папок, которые проекты импортируют на�
 | `image_/body_/` | `docs/image_body.md` — паспорт фигуры (закрытый словарь полей вместо пикселей), свод нескольких исходников модой, круг поиска похожих в Instagram; без исходников — лента как есть, судья глаза |
 | `image_/image_grain.py` | `docs/image_grain.md` — сигма шума по Иммеркеру, окно настоящей кожи рядом с лицом, синтез зерна по спектру кадра |
 | `image_/image_unique.py` | `docs/image_unique.md` — перцептивные хеши и точки-приметы, цена правки по фактуре; ⚠ шум и яркость хеш не двигают |
-| `ai/ai_face.py`, `ai/ai_look.py`, `ai/ai_landmark.py`, `ai/ai_enhance.py` | `docs/comfy_gen.md`, §3 — выкройка, замеры, центроид как судья, стадии сборки заплатки |
+| `ai/ai_face.py`, `ai/ai_look.py`, `ai/ai_landmark.py`, `ai/ai_enhance.py` | `docs/comfyui_gen.md`, §3 — выкройка, замеры, центроид как судья, стадии сборки заплатки |
 | `ai/ai_mask.py` | `docs/ai_mask.md` — контур минус перекрытия, связность вместо яркости, перо в пикселях |
 | `apk_/apk_.py` | `docs/apk_inspect.md` — APK на машине: ресурсы, бинарный AXML, pathData векторов |
 | `ai/provider/`, `ai/ai_thread.py` | `docs/llm_rules.md` — маршрутизация, приоритет, фоллбэк |
 | `ai/vision/ai_vision.py`, `ai/vision/ai_vision_json.py` | `docs/vision_llm.md` — контракт `data:`-URI, цена кадра, где модель врёт; §6.1 — структурный ответ в колонки |
 | `google_drive_/` | `docs/google_drive.md` — чужая папка Диска сервисным аккаунтом: токен подписью, обход вглубь, превью вместо оригинала; ⚠ «не расшарили» приходит пустым списком, а не отказом |
-| `comfy_/comfy_gen.py` | `docs/comfy_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
-| `comfy_/comfy_collection.py` | `docs/comfy_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
+| `comfyui_/comfyui_gen.py` | `docs/comfyui_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
+| `comfyui_/comfyui_collection.py` | `docs/comfyui_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/http_mock.py` | `docs/testing_rules.md`, §5.1 — сторож «живого HTTP в тестах не бывает»: на транспорте httpx и на весь прогон, а не на сокете и не на тест |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
@@ -113,7 +113,7 @@ namespace-папок, которые проекты импортируют на�
 | `x402_/x402_serve.py` | `docs/x402_serve.md` — платный 402-челлендж на FastAPI-маршрутах; ⚠ network каноническим id (eip155:84532 — testnet), price строкой |
 | `project_/project_submodule.py` | `docs/project_submodule.md` — указатель py_modules: state и bump без воровства линии |
 | `project_/project_test.py` | `docs/project_test.md` — сюита интерпретатором панели, код возврата |
-| `comfy_/comfy_gen.py`, `comfy_/trainer/` | `docs/comfy_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
+| `comfyui_/comfyui_gen.py`, `comfyui_/trainer/` | `docs/comfyui_trainer.md` — база монолитом не папка, энкодеры с явным конфигом, идемпотентный старт трейна |
 
 Полное оглавление — `docs/readme.md`. Четыре файла оттуда к правкам здесь отношения не
 имеют, они про устройство проекта-потребителя: `new_project.md`, `frontend_rules.md`,
@@ -286,7 +286,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
 | `uvicorn_.uvicorn_stale` | `[--root --service]` → панель бежит правку или старый код; мёртвые `.pyc` |
 | `uvicorn_.uvicorn_mirror` | `СТРАНИЦА [--probe 'JS с return'] [--base]` → копия страницы как исток для probe/shot/drive |
-| `comfy_.comfy_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
+| `comfyui_.comfyui_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
 | `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
@@ -311,11 +311,11 @@ CLI есть у модулей, которыми пользуются «рука
 | `ai.ai_enhance` | `<кадр> --out [--patch --box --kps --scale --feather]` |
 | `apk_.apk_` | `entries <apk> [glob]`, `dump <apk> [подстрока] [--config default│'']`, `xml <apk> <запись>`, `pathdata <apk> <запись>`, `extract <apk> <запись> [--out-dir --png]` |
 | `i18n_.i18n_` | `<український текст>` (транслітерація КМУ № 55) |
-| `comfy_.comfy_gen` | `run`/`train` `--workflow [--scenes --scene --persona --anchor --qa-anchor --seed --n --denoise --size --out --base --farm-ssh --farm-container]` |
-| `comfy_.comfy_collection` | `<каталог персоны>` → вердикт «коллекция закрыла N/M; добить seed+1000: …; кадров нет вовсе: …» |
-| `comfy_.trainer.comfy_trainer_lora` | `--name --dataset --base --vae [--rank --alpha --lr --steps --seed --out]` |
-| `comfy_.trainer.comfy_trainer_base` | `<монолит.safetensors> <каталог> [--python --repo --farm-ssh --farm-container]` → diffusers-папка базы |
-| `comfy_.trainer.comfy_trainer_toolkit` | `[--toolkit --base]` → вердикт «трейнер цел» / что слетело |
+| `comfyui_.comfyui_gen` | `run`/`train` `--workflow [--scenes --scene --persona --anchor --qa-anchor --seed --n --denoise --size --out --base --farm-ssh --farm-container]` |
+| `comfyui_.comfyui_collection` | `<каталог персоны>` → вердикт «коллекция закрыла N/M; добить seed+1000: …; кадров нет вовсе: …» |
+| `comfyui_.trainer.comfyui_trainer_lora` | `--name --dataset --base --vae [--rank --alpha --lr --steps --seed --out]` |
+| `comfyui_.trainer.comfyui_trainer_base` | `<монолит.safetensors> <каталог> [--python --repo --farm-ssh --farm-container]` → diffusers-папка базы |
+| `comfyui_.trainer.comfyui_trainer_toolkit` | `[--toolkit --base]` → вердикт «трейнер цел» / что слетело |
 
 Список сверяется командой — таблица устаревает быстрее кода:
 

@@ -10,7 +10,7 @@
 (ai_look_fit), та же, что в диспетчере swap.
 
 Если нужно само лицо ПЕРЕГЕНЕРИТЬ выкрученным сэмплингом — это
-`comfy_gen swap --denoise/--detail`; здесь локальная доводка без фермы.
+`comfyui_gen swap --denoise/--detail`; здесь локальная доводка без фермы.
 """
 import argparse
 import json

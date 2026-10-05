@@ -9,38 +9,38 @@ ai-toolkit стоит в контейнере не под git: пересобр�
 """
 import subprocess
 
-COMFY_TRAINER_TOOLKIT_PATCH_MARKER = 'config=__import__'
-COMFY_TRAINER_TOOLKIT_UNPATCHED = 'config_class'
+COMFYUI_TRAINER_TOOLKIT_PATCH_MARKER = 'config=__import__'
+COMFYUI_TRAINER_TOOLKIT_UNPATCHED = 'config_class'
 # Потолок на проверочный ssh: несколько grep'ов — секунды, а повисший ssh
 # к спящей ферме держит вызывающего до TCP-таймаута ядра.
-COMFY_TRAINER_TOOLKIT_TIMEOUT = 120.0
+COMFYUI_TRAINER_TOOLKIT_TIMEOUT = 120.0
 
 
-def comfy_trainer_toolkit_check(*, toolkit, base, farm_ssh, farm_container):
+def comfyui_trainer_toolkit_check(*, toolkit, base, farm_ssh, farm_container):
     """Вернуть строку вердикта о трейнере: патч на месте / что слетело.
 
     toolkit — каталог ai-toolkit на ферме, base — собранный
-    comfy_trainer_base каталог базы. Вердикт «цело» — можно гнать трейн;
+    comfyui_trainer_base каталог базы. Вердикт «цело» — можно гнать трейн;
     иначе — что именно слетело, чтобы чинить до первой ночной сборки, а не
     после утреннего generic-лица.
     """
     sh = subprocess.run(
         ['ssh', *str(farm_ssh).split(), f'docker exec -i {farm_container} bash -s'],
-        input=(f"echo $(grep -ac '{COMFY_TRAINER_TOOLKIT_PATCH_MARKER}' "
+        input=(f"echo $(grep -ac '{COMFYUI_TRAINER_TOOLKIT_PATCH_MARKER}' "
                f"{toolkit}/toolkit/stable_diffusion_model.py) "
-               f"$(grep -ac '{COMFY_TRAINER_TOOLKIT_UNPATCHED}' "
+               f"$(grep -ac '{COMFYUI_TRAINER_TOOLKIT_UNPATCHED}' "
                f"{toolkit}/toolkit/stable_diffusion_model.py) "
                f"$(for d in text_encoder text_encoder_2; do test -e {base}/$d/model.safetensors "
                f"&& echo ok; done | wc -l)\n"),
         capture_output=True, text=True, check=True, errors='replace',
-        timeout=COMFY_TRAINER_TOOLKIT_TIMEOUT).stdout.split()
+        timeout=COMFYUI_TRAINER_TOOLKIT_TIMEOUT).stdout.split()
     patched, unpatched, links = sh[0], sh[1], sh[2]
     bad = []
     if patched != '2':
-        bad.append(f'патч энкодеров ({COMFY_TRAINER_TOOLKIT_PATCH_MARKER}) в файле '
+        bad.append(f'патч энкодеров ({COMFYUI_TRAINER_TOOLKIT_PATCH_MARKER}) в файле '
                    f'{patched}/2 — без него from_pretrained строит модель из конфига-дефолта')
     if unpatched != '0':
-        bad.append(f'непропатченных мест ({COMFY_TRAINER_TOOLKIT_UNPATCHED}) {unpatched} '
+        bad.append(f'непропатченных мест ({COMFYUI_TRAINER_TOOLKIT_UNPATCHED}) {unpatched} '
                    f'— from_pretrained без config= строит модель из конфига-дефолта')
     if links != '2':
         bad.append(f'симлинков model.safetensors в базе {links}/2 — загрузчик их требует')
@@ -58,7 +58,7 @@ if __name__ == '__main__':
     ap.add_argument('--farm-container', required=True)
     ns = ap.parse_args()
     try:
-        print(comfy_trainer_toolkit_check(toolkit=ns.toolkit, base=ns.base,
+        print(comfyui_trainer_toolkit_check(toolkit=ns.toolkit, base=ns.base,
                                             farm_ssh=ns.farm_ssh,
                                             farm_container=ns.farm_container))
     except (RuntimeError, OSError, subprocess.CalledProcessError) as err:

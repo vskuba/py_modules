@@ -14,9 +14,9 @@ conv1×1) — в тексте конвертера; разошлось — мо�
 """
 import subprocess
 
-COMFY_TRAINER_BASE_REPO = ('https://huggingface.co/camenduru/FLUX.1-dev-diffusers'
+COMFYUI_TRAINER_BASE_REPO = ('https://huggingface.co/camenduru/FLUX.1-dev-diffusers'
                              '/resolve/main')
-COMFY_TRAINER_BASE_SCRIPT = '''import json
+COMFYUI_TRAINER_BASE_SCRIPT = '''import json
 import re
 import struct
 import urllib.request
@@ -185,9 +185,9 @@ print('готово:', DST)
 '''
 
 
-def comfy_trainer_base(src, dst, *, farm_ssh, farm_container,
+def comfyui_trainer_base(src, dst, *, farm_ssh, farm_container,
                         python='/opt/ComfyUI/tools/aitk/bin/python',
-                        repo=COMFY_TRAINER_BASE_REPO):
+                        repo=COMFYUI_TRAINER_BASE_REPO):
     """Собрать diffusers-папку базы из монолита; вернуть собранный каталог.
 
     src — одиночный safetensors на ферме (comfy-имена ключей), dst — каталог
@@ -196,11 +196,11 @@ def comfy_trainer_base(src, dst, *, farm_ssh, farm_container,
     конфиги, и Tokenizer-файлы качаются без токена). Прогон блокирует вызов на
     минуты: это конверт 17 ГиБ весов, не фоновая задача.
     """
-    script = (COMFY_TRAINER_BASE_SCRIPT
+    script = (COMFYUI_TRAINER_BASE_SCRIPT
               .replace('__SRC__', src).replace('__DST__', str(dst))
               .replace('__REPO__', repo))
     r = subprocess.run(['ssh', *str(farm_ssh).split(), f'docker exec -i {farm_container} '
-                        f'bash -c "cat > /tmp/comfy_trainer_base.py"'],
+                        f'bash -c "cat > /tmp/comfyui_trainer_base.py"'],
                        input=script.encode(), check=True, capture_output=True)
 
     def _run(cmd):
@@ -208,9 +208,9 @@ def comfy_trainer_base(src, dst, *, farm_ssh, farm_container,
                               check=True, errors='replace').stdout
 
     out = _run(['ssh', *str(farm_ssh).split(), f'docker exec {farm_container} {python} '
-                f'/tmp/comfy_trainer_base.py'])
+                f'/tmp/comfyui_trainer_base.py'])
     _run(['ssh', *str(farm_ssh).split(), f'docker exec {farm_container} rm -f '
-          f'/tmp/comfy_trainer_base.py'])
+          f'/tmp/comfyui_trainer_base.py'])
     print(out)
     return str(dst)
 
@@ -222,12 +222,12 @@ if __name__ == '__main__':
     ap.add_argument('src', help='одинокий safetensors на ферме')
     ap.add_argument('dst', help='каталог базы на ферме')
     ap.add_argument('--python', default='/opt/ComfyUI/tools/aitk/bin/python')
-    ap.add_argument('--repo', default=COMFY_TRAINER_BASE_REPO)
+    ap.add_argument('--repo', default=COMFYUI_TRAINER_BASE_REPO)
     ap.add_argument('--farm-ssh', required=True)
     ap.add_argument('--farm-container', required=True)
     ns = ap.parse_args()
     try:
-        print(comfy_trainer_base(ns.src, ns.dst, farm_ssh=ns.farm_ssh,
+        print(comfyui_trainer_base(ns.src, ns.dst, farm_ssh=ns.farm_ssh,
                                    farm_container=ns.farm_container,
                                    python=ns.python, repo=ns.repo))
     except (RuntimeError, OSError, subprocess.CalledProcessError) as err:
