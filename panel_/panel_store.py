@@ -58,13 +58,27 @@ class PanelUserStore(ABC):
         """Учётка по токену доступа. Нет такого — `None`."""
 
     @abstractmethod
-    async def create(self, username: str, password_hash: str, role: str) -> int:
-        """Завести учётку. Отдаёт её номер."""
+    async def create(self, username: str, password_hash: str, role: str,
+                     extra: dict | None = None) -> int:
+        """Завести учётку. Отдаёт её номер.
+
+        Args:
+            extra: столбцы и связи **этого проекта** — почта, узлы, что угодно.
+                Умолчание ничего с ними не делает: у простой схемы их нет.
+
+        ⚠⚠ Что сюда попадает, решает **роутер** списком имён, а не «всё, что
+        прислали». Пройди payload насквозь — и страница могла бы дописать любой
+        столбец, включая `role_id` в обход проверки роли.
+        """
 
     @abstractmethod
     async def update(self, user_id: int, password_hash: str = '',
-                     role: str = '') -> None:
-        """Сменить пароль и роль. ⚠ Пустое значение — «не трогать»."""
+                     role: str = '', extra: dict | None = None) -> None:
+        """Сменить пароль, роль и столбцы проекта.
+
+        ⚠ Пустое значение — «не трогать». Для `extra` это решает проект: у
+        связей (список узлов) пустой список бывает законным «снять все».
+        """
 
     @abstractmethod
     async def delete(self, user_id: int) -> None:
@@ -80,6 +94,13 @@ class PanelUserStore(ABC):
 
         Нужно проверке «последний полноправный»: полнота — свойство набора прав,
         и запросом её не выяснить.
+        """
+
+    @abstractmethod
+    async def tokens_of(self, user_id: int) -> list:
+        """Токены одного человека: `{id, note, tail, created_at}`.
+
+        ⚠ Значений здесь быть не должно — по той же причине, что и в списке.
         """
 
     @abstractmethod
@@ -149,7 +170,8 @@ class PanelUserStoreColumn(PanelUserStore):
 
             return await db.fetchone()
 
-    async def create(self, username: str, password_hash: str, role: str) -> int:
+    async def create(self, username: str, password_hash: str, role: str,
+                     extra: dict | None = None) -> int:
         async with mysql_get_db_async() as db:
             await db.execute(
                 'INSERT INTO `user` (username, password_hash, role)'
@@ -158,7 +180,7 @@ class PanelUserStoreColumn(PanelUserStore):
             return int(db.lastrowid)
 
     async def update(self, user_id: int, password_hash: str = '',
-                     role: str = '') -> None:
+                     role: str = '', extra: dict | None = None) -> None:
         fields, args = [], []
         if password_hash:
             fields.append('password_hash = %s')
@@ -189,6 +211,15 @@ class PanelUserStoreColumn(PanelUserStore):
             await db.execute('SELECT `role` FROM `user`')
 
             return [str(one.get('role') or '') for one in await db.fetchall() or []]
+
+    async def tokens_of(self, user_id: int) -> list:
+        async with mysql_get_db_async() as db:
+            await db.execute(
+                'SELECT id, note, RIGHT(token, %s) AS tail, created_at'
+                '  FROM user_access_token WHERE user_id = %s ORDER BY id',
+                (self.TOKEN_TAIL, int(user_id)))
+
+            return await db.fetchall() or []
 
     async def token_add(self, user_id: int, token: str, note: str) -> int:
         async with mysql_get_db_async() as db:

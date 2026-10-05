@@ -75,8 +75,12 @@ async def panel_user_get(user_id: int) -> dict | None:
     return await panel_store().get(user_id)
 
 
-async def panel_user_create(username: str, password: str, role: str) -> dict:
+async def panel_user_create(username: str, password: str, role: str,
+                            extra: dict | None = None) -> dict:
     """Заводит учётку. Пароль обязателен: без него человек не сможет войти.
+
+    Args:
+        extra: столбцы и связи проекта — их принимает и раскладывает хранилище.
 
     Raises:
         ValueError: имя не по шаблону, занято, короткий пароль, нет такой роли.
@@ -93,14 +97,15 @@ async def panel_user_create(username: str, password: str, role: str) -> dict:
     if await store.by_name(username):
         raise ValueError('такое имя уже занято')
 
-    user_id = await store.create(username, auth_password_hash(password), role)
+    user_id = await store.create(username, auth_password_hash(password), role,
+                                 extra)
     logger_info(f'[auth][люди] заведена учётка «{username}» (#{user_id}), роль {role}')
 
     return await store.get(user_id)
 
 
 async def panel_user_update(user_id: int, password: str = '', role: str = '',
-                            actor_id: int = 0) -> dict:
+                            actor_id: int = 0, extra: dict | None = None) -> dict:
     """Меняет пароль и роль. **Пустое поле — «не трогать»**.
 
     Не «поставить пустым»: иначе смена одной роли молча обнуляла бы пароль, и
@@ -108,6 +113,7 @@ async def panel_user_update(user_id: int, password: str = '', role: str = '',
 
     Args:
         actor_id: кто правит. По нему отсекается правка роли себе.
+        extra: столбцы и связи проекта — их принимает и раскладывает хранилище.
 
     Raises:
         LookupError: учётки нет.
@@ -133,10 +139,14 @@ async def panel_user_update(user_id: int, password: str = '', role: str = '',
 
     # Ни одного поля — не ошибка: страница шлёт форму целиком, и «ничего не
     # изменил» это обычный исход, а не повод отвечать отказом.
-    if not password and not role:
+    #
+    # ⚠ `extra` считается полем наравне с паролем и ролью: страница, пришедшая
+    # сменить только почту, иначе уходила бы ни с чем.
+    if not password and not role and not extra:
         return current
 
-    await store.update(user_id, auth_password_hash(password) if password else '', role)
+    await store.update(user_id, auth_password_hash(password) if password else '',
+                       role, extra)
 
     logger_info(f'[auth][люди] учётка «{current["username"]}» (#{user_id}) изменена'
                 + (', пароль' if password else '') + (f', роль → {role}' if role else ''))
@@ -169,6 +179,20 @@ async def panel_user_delete(user_id: int, actor_id: int) -> None:
     await store.delete(user_id)
 
     logger_info(f'[auth][люди] учётка «{target["username"]}» (#{user_id}) удалена')
+
+
+async def panel_user_tokens(user_id: int) -> list:
+    """Токены одного человека — **без значений**, только пометка и хвост.
+
+    Raises:
+        LookupError: учётки нет.
+    """
+    store = panel_store()
+
+    if not await store.get(user_id):
+        raise LookupError('учётка не найдена')
+
+    return await store.tokens_of(user_id)
 
 
 async def panel_user_token_add(user_id: int, note: str = '') -> dict:

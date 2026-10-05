@@ -32,27 +32,42 @@ from panel_.panel_auth import (PanelUser, panel_auth_admin_required,
                                panel_auth_need)
 from panel_.panel_user import (panel_user_create, panel_user_delete,
                                panel_user_list, panel_user_token_add,
-                               panel_user_token_delete, panel_user_update)
+                               panel_user_token_delete, panel_user_tokens,
+                               panel_user_update)
 
 # Под каким путём живут точки. Выносится константой, потому что на него ссылается
 # страница настроек: разойдись они — страница тихо показывает пустой список.
 PANEL_USER_API_PREFIX = '/api/users'
 
 
-def panel_user_api_router(view=None, manage=None) -> APIRouter:
+def panel_user_api_router(view=None, manage=None, extra_fields=(),
+                          prefix: str = PANEL_USER_API_PREFIX) -> APIRouter:
     """Роутер людей: `app.include_router(panel_user_api_router())`.
 
     Args:
         view: право на чтение списка. `None` — полноправному.
         manage: право на заведение, правку, удаление и токены. `None` — то же.
+        extra_fields: какие **ещё** поля тела запроса передавать хранилищу —
+            столбцы и связи этого проекта (`('email', 'node_ids')`).
+        prefix: под каким путём жить.
 
     ⚠ Чтение и управление разведены намеренно: «посмотреть, кто есть» и «завести
     человека» — разные действия, и проект вправе дать первое шире второго.
+
+    ⚠⚠ `extra_fields` — **закрытый список имён**, а не сквозной проброс тела.
+    Пройди payload насквозь, и страница дописала бы любой столбец таблицы —
+    включая тот, которым роль задаётся в обход проверки роли.
     """
+    allowed = tuple(extra_fields or ())
+
     guard_view = panel_auth_need(view) if view else panel_auth_admin_required
     guard_manage = panel_auth_need(manage) if manage else panel_auth_admin_required
 
-    router = APIRouter(prefix=PANEL_USER_API_PREFIX, tags=['users'])
+    def extra_of(payload: dict) -> dict:
+        """Поля проекта из тела запроса — только названные в `extra_fields`."""
+        return {name: payload[name] for name in allowed if name in payload}
+
+    router = APIRouter(prefix=prefix, tags=['users'])
 
     @router.get('')
     async def users_list(user: PanelUser = Depends(guard_view)):
@@ -66,7 +81,7 @@ def panel_user_api_router(view=None, manage=None) -> APIRouter:
         try:
             return {'result': await panel_user_create(
                 str(payload.get('username') or ''), str(payload.get('password') or ''),
-                str(payload.get('role') or ''))}
+                str(payload.get('role') or ''), extra_of(payload))}
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=str(e))
@@ -78,7 +93,8 @@ def panel_user_api_router(view=None, manage=None) -> APIRouter:
         try:
             return {'result': await panel_user_update(
                 user_id, str(payload.get('password') or ''),
-                str(payload.get('role') or ''), actor_id=user.user_id)}
+                str(payload.get('role') or ''), actor_id=user.user_id,
+                extra=extra_of(payload))}
         except LookupError as e:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
         except ValueError as e:
@@ -98,6 +114,15 @@ def panel_user_api_router(view=None, manage=None) -> APIRouter:
                                 detail=str(e))
 
         return {'result': 'ok'}
+
+    @router.get('/{user_id}/token')
+    async def users_tokens(user_id: int, user: PanelUser = Depends(guard_view)):
+        """Токены человека — пометка и хвост. ⚠ Значений нет: целиком токен
+        виден один раз, в ответ на выдачу."""
+        try:
+            return {'result': await panel_user_tokens(user_id)}
+        except LookupError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     @router.post('/{user_id}/token')
     async def users_token_add(user_id: int, payload: dict,
