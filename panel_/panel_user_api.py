@@ -31,7 +31,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from panel_.panel_auth import (PanelUser, panel_auth_admin_required,
                                panel_auth_need)
 from panel_.panel_user import (panel_user_create, panel_user_delete,
-                               panel_user_list, panel_user_token_add,
+                               panel_user_get, panel_user_list,
+                               panel_user_token_add,
                                panel_user_token_delete, panel_user_tokens,
                                panel_user_update)
 
@@ -73,6 +74,20 @@ def panel_user_api_router(view=None, manage=None, extra_fields=(),
     async def users_list(user: PanelUser = Depends(guard_view)):
         """Учётки с ролями и выданными токенами. Значений токенов здесь нет."""
         return {'result': {'users': await panel_user_list()}}
+
+    @router.get('/{user_id}')
+    async def users_one(user_id: int, user: PanelUser = Depends(guard_view)):
+        """Карточка одного человека — без токенов, они своей точкой.
+
+        ⚠ Нужна странице с формой: брать карточку из общего списка значит
+        держать его в памяти страницы и обновлять руками после каждой правки.
+        """
+        found = await panel_user_get(user_id)
+        if not found:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail='учётка не найдена')
+
+        return {'result': found}
 
     @router.post('', status_code=201)
     async def users_create(payload: dict,
