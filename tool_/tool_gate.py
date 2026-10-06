@@ -60,7 +60,7 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tool_.tool_hook import tool_hook_run
+from claude_.claude_hook import claude_hook_run
 from tool_.tool_instead import tool_instead, tool_instead_format
 
 # Где помнится показанное. ⚠ Не в проекте: застава общая, а проектов много.
@@ -145,15 +145,15 @@ def tool_gate_format(verdict) -> str:
 def main() -> int:
     """Хук `PreToolUse` на `Write`/`Edit`: код 2 отменяет запись, 0 — пропускает.
 
-    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в `tool_hook`,
-    одним местом на обе заставы. Здесь только вопрос: что за запись и стоит ли её
-    задержать.
+    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в
+    `claude_hook`, одним местом на обе заставы. Здесь только вопрос: что за запись и
+    стоит ли её задержать.
     """
-    return tool_hook_run(TOOL_GATE_TOOLS, _look)
+    return claude_hook_run(TOOL_GATE_TOOLS, _look)
 
 
 def _look(data: dict) -> str:
-    """Замечание по этой записи либо пусто. Вид проверки для `tool_hook_run`."""
+    """Замечание по этой записи либо пусто. Вид проверки для `claude_hook_run`."""
     where, code = _written(data)
 
     return tool_gate_format(tool_gate(where, code))

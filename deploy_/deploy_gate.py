@@ -55,7 +55,7 @@ if __package__ in (None, ''):
 
 from deploy_.deploy_precheck import (deploy_precheck, deploy_precheck_format,
                                      deploy_precheck_stopped)
-from tool_.tool_hook import tool_hook_run
+from claude_.claude_hook import claude_hook_run
 
 # Переменная окружения, снимающая заставу. ⚠ Имя длинное намеренно: короткое
 # однажды окажется выставленным в общем окружении, и застава замолчит навсегда.
@@ -163,7 +163,7 @@ def deploy_gate_marks(command) -> str:
 def main() -> int:
     """Хук `PreToolUse`: код 2 отменяет команду, 0 — пропускает.
 
-    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в `tool_hook`,
+    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в `claude_hook`,
     одним местом на обе заставы. Здесь только `--marks` и вопрос про команду.
     """
     if len(sys.argv) > 1 and sys.argv[1] == '--marks':
@@ -172,11 +172,11 @@ def main() -> int:
 
         return 0
 
-    return tool_hook_run(DEPLOY_GATE_TOOLS, _look)
+    return claude_hook_run(DEPLOY_GATE_TOOLS, _look)
 
 
 def _look(data: dict) -> str:
-    """Замечание по этой команде либо пусто. Вид проверки для `tool_hook_run`."""
+    """Замечание по этой команде либо пусто. Вид проверки для `claude_hook_run`."""
     command = (data.get('tool_input') or {}).get('command', '')
 
     return deploy_gate_format(deploy_gate(command, data.get('cwd') or '.'))
