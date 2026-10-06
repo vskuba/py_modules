@@ -126,8 +126,8 @@ yoyo режет миграцию на запросы не сам, а `sqlparse.s
 ## 5. Как снять заставу
 
 ```bash
-DEPLOY_GATE_PASS=1 ./deploy.sh      # выкладка без проверок
-TOOL_GATE_PASS=1                    # запись без проверки слоя
+CLAUDE_GATE_DEPLOY_PASS=1 ./deploy.sh      # выкладка без проверок
+CLAUDE_GATE_TOOL_PASS=1                    # запись без проверки слоя
 ```
 
 ⚠⚠ Обход существует намеренно: починка прода в три часа ночи не должна упираться в
@@ -160,7 +160,7 @@ def main() -> int:
 закрыт ли эпизод. Владелец — `claude_/gate/claude_gate.py`:
 
 ```python
-claude_gate_off(TOOL_GATE_PASS)              # снята клапаном → молчать
+claude_gate_off(CLAUDE_GATE_TOOL_PASS)              # снята клапаном → молчать
 claude_gate_asked(ключ, память)              # сколько раз уже придирались
 claude_gate_remember(ключ, память)           # придрались
 claude_gate_forget(ключ, память)             # проверке не к чему придраться — забыть

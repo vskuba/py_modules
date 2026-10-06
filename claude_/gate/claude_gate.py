@@ -26,20 +26,20 @@
 
 ## Как этим пользуются
 
-    if claude_gate_off(TOOL_GATE_PASS):
+    if claude_gate_off(CLAUDE_GATE_TOOL_PASS):
         return ''
 
-    if claude_gate_asked(path, TOOL_GATE_SEEN) >= 1:
+    if claude_gate_asked(path, CLAUDE_GATE_TOOL_SEEN) >= 1:
         return ''
 
     said = <своя проверка>
 
     if not said:
-        claude_gate_forget(path, TOOL_GATE_SEEN)      # придираться не к чему
+        claude_gate_forget(path, CLAUDE_GATE_TOOL_SEEN)      # придираться не к чему
 
         return ''
 
-    claude_gate_remember(path, TOOL_GATE_SEEN)
+    claude_gate_remember(path, CLAUDE_GATE_TOOL_SEEN)
 
     return said
 
@@ -73,7 +73,7 @@ def claude_gate_off(name) -> bool:
     """Снята ли застава переменной окружения — спускной клапан.
 
     Args:
-        name: имя переменной, например `TOOL_GATE_PASS`.
+        name: имя переменной, например `CLAUDE_GATE_TOOL_PASS`.
 
     ⚠ Имя переменной каждая застава называет **своё и длинное**: короткое однажды
     окажется выставленным в общем окружении, и застава замолчит навсегда, а заметить

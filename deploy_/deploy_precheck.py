@@ -45,9 +45,10 @@
 
 ## ⚠⚠ Пути берутся по договору, а чего нет — молча пропускается
 
-`src/`, `migrations/`, `data/**/public/js`, `data/**/template` — соглашение этих
-проектов, а не настройка. Нет каталога — проверка пропущена с пометкой `нет`, и
-это не ошибка: библиотеке без `migrations/` нечего там смотреть.
+`src/`, `hooks/`, `migrations/`, `data/**/public/js`, `data/**/template` — соглашение
+этих проектов, а не настройка. Нет каталога — проверка пропущена с пометкой `нет`, и
+это не ошибка: библиотеке без `migrations/` нечего там смотреть. `cyrillic` и `order`
+смотрят оба каталога кода, что есть на диске: заставы — тоже код, правило то же.
 
 ⚠ `js` требует `node` в системе. Нет его — проверка честно скажется
 непроведённой, а не тихо пройдёт: «проверено» и «проверить не смогли» — разное.
@@ -86,8 +87,10 @@ DEPLOY_PRECHECK_LOOK = 'взгляд'
 DEPLOY_PRECHECK_ORDER = ('cyrillic', 'order', 'js', 'migrations', 'collate',
                          'pages', 'dead', 'instead', 'keys')
 
-# Каталог кода по договору проектов.
+# Каталоги кода по договору проектов. ⚠ `cyrillic` и `order` смотрят оба, что есть
+# на диске: заставы — тоже код.
 DEPLOY_PRECHECK_SRC = 'src'
+DEPLOY_PRECHECK_HOOKS = 'hooks'
 DEPLOY_PRECHECK_MIGRATIONS = 'migrations'
 
 # Сколько находок показываем на проверку: остальное — числом. ⚠ Длинный отчёт
@@ -246,28 +249,32 @@ def main() -> int:
 
 def _check_cyrillic(base: Path, going) -> list[dict]:
     """Кириллица в именах кода: правило — имена латиницей, русский в прозе."""
-    src = base / DEPLOY_PRECHECK_SRC
-    if not src.exists():
+    spots = [base / one for one in (DEPLOY_PRECHECK_SRC, DEPLOY_PRECHECK_HOOKS)
+             if (base / one).exists()]
+    if not spots:
         return [_note('cyrillic', f'{DEPLOY_PRECHECK_SRC}/ нет — пропущено')]
 
     return [{'check': 'cyrillic', 'level': DEPLOY_PRECHECK_STOP,
              'where': f"{_short(base, one['file'])}:{one['line']}",
              'what': f"имя `{one['name']}`"}
-            for one in variable_cyrillic(str(src))
+            for spot in spots
+            for one in variable_cyrillic(str(spot))
             if _going(base, one['file'], going)]
 
 
 def _check_order(base: Path, going) -> list[dict]:
     """Публичные функции выше приватных: файл читают сверху вниз."""
-    src = base / DEPLOY_PRECHECK_SRC
-    if not src.exists():
+    spots = [base / one for one in (DEPLOY_PRECHECK_SRC, DEPLOY_PRECHECK_HOOKS)
+             if (base / one).exists()]
+    if not spots:
         return [_note('order', f'{DEPLOY_PRECHECK_SRC}/ нет — пропущено')]
 
     return [{'check': 'order', 'level': DEPLOY_PRECHECK_STOP,
              'where': f"{_short(base, one['file'])}:{one['line']}",
              'what': f"{one['name']} после {one['after']} "
                      f"(стр. {one['after_line']})"}
-            for one in function_order(str(src))
+            for spot in spots
+            for one in function_order(str(spot))
             if _going(base, one['file'], going)]
 
 
