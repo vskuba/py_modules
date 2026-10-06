@@ -11,11 +11,11 @@
 
 Предмет этого модуля — **политика прерывания**, а не проверка: что именно смотрят,
 знают `tool_instead`, `deploy_precheck` и правила вёрстки, каждый у себя. Разбор ввода
-хука и коды возврата — этажом ниже, в `claude_/claude_hook.py`.
+хука и коды возврата — этажом ниже, в `claude_/hook/claude_hook.py`.
 
 ## ⚠⚠ Это уже писали дважды, и копии разошлись
 
-`claude_gate_tool` помнил `{путь: epoch}` — голое число, — а `claude_gate_design`
+`claude_gate_tool_exists_check` помнил `{путь: epoch}` — голое число, — а `claude_gate_design_review_live`
 `{сессия: {asks, at}}` — запись. Из-за числа счётчик придирок не помещался вовсе, а
 чистка протухшего стояла у одного при записи, у другого при чтении. Здесь взята
 запись: счётчик без отметки времени не гаснет никогда, и эпизод, один раз отпущенный,
@@ -26,20 +26,20 @@
 
 ## Как этим пользуются
 
-    if claude_gate_off(CLAUDE_GATE_TOOL_PASS):
+    if claude_gate_off(CLAUDE_GATE_TOOL_EXISTS_CHECK_PASS):
         return ''
 
-    if claude_gate_asked(path, CLAUDE_GATE_TOOL_SEEN) >= 1:
+    if claude_gate_asked(path, CLAUDE_GATE_TOOL_EXISTS_CHECK_SEEN) >= 1:
         return ''
 
     said = <своя проверка>
 
     if not said:
-        claude_gate_forget(path, CLAUDE_GATE_TOOL_SEEN)      # придираться не к чему
+        claude_gate_forget(path, CLAUDE_GATE_TOOL_EXISTS_CHECK_SEEN)      # придираться не к чему
 
         return ''
 
-    claude_gate_remember(path, CLAUDE_GATE_TOOL_SEEN)
+    claude_gate_remember(path, CLAUDE_GATE_TOOL_EXISTS_CHECK_SEEN)
 
     return said
 
@@ -73,7 +73,7 @@ def claude_gate_off(name) -> bool:
     """Снята ли застава переменной окружения — спускной клапан.
 
     Args:
-        name: имя переменной, например `CLAUDE_GATE_TOOL_PASS`.
+        name: имя переменной, например `CLAUDE_GATE_TOOL_EXISTS_CHECK_PASS`.
 
     ⚠ Имя переменной каждая застава называет **своё и длинное**: короткое однажды
     окажется выставленным в общем окружении, и застава замолчит навсегда, а заметить
