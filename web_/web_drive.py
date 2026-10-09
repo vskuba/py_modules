@@ -35,7 +35,7 @@ import tempfile
 import time
 
 from adb_.adb_ws import adb_ws_open, adb_ws_send, adb_ws_recv
-from web_.web_shot import web_shot_serve, _find_browser
+from web_.web_shot import web_shot_serve, web_shot_argv, _find_browser
 
 # Потолок ожидания ответа одного CDP-вызова без своего await, секунды.
 WEB_DRIVE_TIMEOUT = 15.0
@@ -120,11 +120,8 @@ def _drive(browser, url, script, wait_ms, storage, shot, size) -> dict:
     """Один живой прогон: Chrome с DevTools, evaluate, чтение состояния."""
     profile = tempfile.mkdtemp(prefix='web_drive_')
     proc = subprocess.Popen(
-        [browser, '--headless=new', '--disable-gpu', '--hide-scrollbars',
-         '--no-first-run', '--no-default-browser-check',
-         '--force-device-scale-factor=1',
-         f'--user-data-dir={profile}', '--remote-debugging-port=0',
-         '--window-size=' + ','.join(str(int(v)) for v in size), url],
+        web_shot_argv(browser, size) + [
+            f'--user-data-dir={profile}', '--remote-debugging-port=0', url],
         stderr=subprocess.DEVNULL)
     try:
         port = _wait_port(profile)

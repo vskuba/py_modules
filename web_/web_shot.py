@@ -14,12 +14,20 @@
 домешивает скрипт в копию страницы — в каталоге из симлинков, чтобы те же
 корневые ссылки продолжали указывать на настоящие ассеты.
 
+Четвёртая обнаружилась на сервере: **под root Chrome отказывается стартовать
+без `--no-sandbox`, и отказывается молча**. Код возврата 0, `--dump-dom` отдаёт
+пустой stdout, `--screenshot` не пишет файла, а причина — одна строка в stderr,
+которого никто не читает. В контейнере приложения процесс идёт от root всегда,
+поэтому флаг ставит `web_shot_argv` по `geteuid`, а не настройка: под обычным
+пользователем он не нужен и снимал бы защиту зря.
+
 `--hide-scrollbars` включён всегда: без него Chrome рисует панель прокрутки
 поверх последнего столбца макета, и ширина вьюпорта перестаёт равняться
 ширине снимка (проверено: сдвиг вёрстки на 15 px при замере «1080»).
 """
 import argparse
 import contextlib
+import glob
 import http.server
 import os
 import re
@@ -41,6 +49,33 @@ WEB_SHOT_SIZE = (1080, 2400)
 # Хвост stderr Chrome в тексте ошибки: коды возврата у него малоинформативны,
 # а настоящие причины (sandbox, не хватает памяти) видны только в журнале.
 WEB_SHOT_ERR_TAIL = 400
+
+# Общие флаги головы: одни и те же у снимка, зонда и живого прогона — голова
+# одна, и расходиться им незачем. `--force-device-scale-factor=1` обязателен:
+# без него кадр уезжает в DPI машины, и пиксельные замеры врут от машины к
+# машине.
+WEB_SHOT_FLAGS = ('--headless=new', '--disable-gpu', '--hide-scrollbars',
+                  '--no-first-run', '--no-default-browser-check',
+                  '--force-device-scale-factor=1')
+
+
+def web_shot_argv(browser: str, size=None) -> list:
+    """
+    Команда запуска headless Chrome без адреса: общие флаги, окно, песочница.
+
+    Args:
+        browser: путь к бинарю (`_find_browser`, если не задан вызывающим).
+        size: (ширина, высота) окна; None — флаг окна не ставится.
+
+    Returns:
+        list: argv до адреса страницы — дописывайте свои флаги и URL.
+    """
+    args = [browser, *WEB_SHOT_FLAGS]
+    if os.geteuid() == 0:
+        args.append('--no-sandbox')
+    if size:
+        args.append(f'--window-size={int(size[0])},{int(size[1])}')
+    return args
 
 
 def web_shot_capture(src, out, size=WEB_SHOT_SIZE, virtual_time_ms=1200,
@@ -155,11 +190,8 @@ def _served_page(path, inject_js='', head_js=''):
 
 def _render(browser, url, out, size, virtual_time_ms):
     """Один запуск Chrome; ошибки — исключением сразу, файл проверяем на месте."""
-    args = [browser, '--headless=new', '--disable-gpu', '--hide-scrollbars',
-            '--no-first-run', '--no-default-browser-check',
-            '--force-device-scale-factor=1',
-            f'--window-size={int(size[0])},{int(size[1])}',
-            f'--screenshot={os.path.abspath(out)}']
+    args = web_shot_argv(browser, size) + [
+        f'--screenshot={os.path.abspath(out)}']
     if virtual_time_ms:
         args.append(f'--virtual-time-budget={int(virtual_time_ms)}')
     args.append(url)
@@ -199,14 +231,40 @@ def _write_variant(src, dst, inject_js, head_js=''):
 
 
 def _find_browser():
-    """Первый найденный Chromium/Chrome; имена в порядке вероятности установки."""
+    """Первый найденный Chromium/Chrome; имена в порядке вероятности установки.
+
+    PATH, а следом кэш playwright: в контейнере приложения браузер ставят
+    `playwright install chromium-headless-shell`, и в PATH он не попадает
+    никогда — лежит в `~/.cache/ms-playwright/` под именем версии. Без этого
+    шага снимок с сервера недостижим при установленном браузере."""
     for name in ('google-chrome', 'google-chrome-stable', 'chromium',
                  'chromium-browser', 'microsoft-edge'):
         found = shutil.which(name)
         if found:
             return found
+    found = _find_playwright_browser()
+    if found:
+        return found
     raise FileNotFoundError('не найден Chrome/Chromium в PATH '
-                            '(google-chrome, chromium, microsoft-edge)')
+                            '(google-chrome, chromium, microsoft-edge) '
+                            'и в кэше playwright')
+
+
+def _find_playwright_browser():
+    """Бинарь из кэша playwright или пусто. Версия в имени каталога — берём
+    старшую: `sorted` по строке врёт на 1234 против 999, поэтому по числу."""
+    root = (os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
+            or os.path.expanduser('~/.cache/ms-playwright'))
+    names = ('chrome-headless-shell-linux*/chrome-headless-shell',
+             'chrome-linux*/chrome', 'chrome-linux*/headless_shell')
+    found = []
+    for entry in glob.glob(os.path.join(root, 'chromium*')):
+        tail = entry.rsplit('-', 1)[-1]
+        rank = int(tail) if tail.isdigit() else 0
+        for name in names:
+            found += [(rank, path) for path in glob.glob(os.path.join(entry, name))
+                      if os.access(path, os.X_OK)]
+    return max(found)[1] if found else ''
 
 
 if __name__ == '__main__':
