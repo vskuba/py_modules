@@ -23,12 +23,16 @@ same-origin по построению, а `{{ base }}` и относительн
   login-стену вместо данных — поэтому прокси несёт куку панели, а не изобретает
   вход;
 * проксирует ВСЕ методы: страница не только читает — загрузка материалов POST-ом,
-  и страница без этого врёт;
+  и страница без этого врёт. ⚠⚠ Вместе с телом едет и `content-type`: без него
+  панель получает байты без типа, не берётся разбирать JSON и отвечает **422 на
+  исправную ручку**. Ломается это только у пишущих запросов — чтение типа не
+  несёт, — поэтому копия при этом выглядит совершенно рабочей;
 * тело копии живёт в памяти и снимается свежим при каждом входе в контекстный
   менеджер: копия из /tmp, пережившая правку шаблона, врёт незаметно.
 """
 import argparse
 import asyncio
+import concurrent.futures
 import contextlib
 import http.server
 import socketserver
@@ -65,9 +69,28 @@ async def _body_and_origin(page: str, base: str) -> tuple[str, str, httpx.Cookie
     return body, origin, cookies
 
 
+def _run_sync(coro):
+    """Дождаться корутины из синхронного кода — и когда цикл уже крутится.
+
+    ⚠ Голый `asyncio.run` здесь падает «cannot be called from a running event
+    loop»: копию зовут не только из скрипта, но и из async-кода — кронджоба,
+    ручки панели. Цикл чужой, и вложиться в него нельзя; поэтому при живом цикле
+    корутина уезжает в отдельный поток со своим циклом. Без этого вызывающему
+    пришлось бы самому оборачивать `uvicorn_mirror` в `to_thread`, а он
+    contextmanager — обернуть его так не выходит вовсе.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
 @contextlib.contextmanager
 def _mirror(page: str, base: str):
-    body, origin, cookies = asyncio.run(_body_and_origin(page, base))
+    body, origin, cookies = _run_sync(_body_and_origin(page, base))
     api = httpx.Client(base_url=origin, cookies=cookies, timeout=15,
                       follow_redirects=True)
 
@@ -81,8 +104,15 @@ def _mirror(page: str, base: str):
             else:
                 try:
                     n = int(self.headers.get('content-length', 0) or 0)
+                    # ⚠⚠ `content-type` обязан доехать до панели. Без него тело
+                    # уходит байтами без типа, FastAPI не берётся его разбирать
+                    # и отвечает 422 — на совершенно исправную ручку. Ломалось
+                    # это молча и только у пишущих запросов: чтение (GET) типа
+                    # не несёт, и копия выглядела рабочей.
+                    kind = self.headers.get('content-type')
                     res = api.request(self.command, self.path,
-                                      content=self.rfile.read(n) if n else None)
+                                      content=self.rfile.read(n) if n else None,
+                                      headers={'content-type': kind} if kind else None)
                 except Exception as err:        # панель мертва — честная 502
                     self.send_error(502, f'панель недоступна: {type(err).__name__}')
                     return
