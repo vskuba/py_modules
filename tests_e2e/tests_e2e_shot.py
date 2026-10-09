@@ -1,0 +1,54 @@
+"""Рамки проверенных областей поверх кадра.
+
+Кадра два: чистый и размеченный. Размеченный отвечает на вопрос «что именно
+проверили и где это на экране», чистый нужен ровно тогда, когда рамка села
+поверх дефекта — обрезанный текст под красной линией не виден.
+
+⚠⚠ Чистый кадр снимается **не здесь**, а зондом (`tests_e2e_probe`, аргумент
+`shot`). Своей функции «снять кадр» в этом модуле нет намеренно: она была, и
+из-за неё кадр снимался отдельным запуском Chrome — то есть ДО шагов случая.
+Нажатая вкладка на кадре не отражалась, и смотрящий видел не то, что мерили.
+
+⚠ Рамки рисуются двумя заходами: `image_hotspot_overlay` красит одним цветом за
+вызов, а цветов нужно два — зелёный «сошлась» и красный «нет». Сперва зелёные
+на чистый кадр, потом красные поверх полученного.
+"""
+
+import shutil
+
+from image_.image_hotspot import image_hotspot_overlay
+
+# Цвета рамок. Зелёный и красный, а не оттенки: кадр смотрят мельком, плиткой в
+# четверть экрана, и различать там полутона нечем.
+TESTS_E2E_SHOT_OK = '#2f9e44'
+TESTS_E2E_SHOT_BAD = '#e03131'
+TESTS_E2E_SHOT_WIDTH = 3
+
+
+def tests_e2e_shot_marked(plain: str, out: str, areas: list) -> str:
+    """Кадр с рамками областей; вернуть путь размеченного.
+
+    Args:
+        plain: чистый кадр.
+        out: куда положить размеченный.
+        areas: области с `rect` (`[x, y, w, h]` или None), `name` и `status`.
+
+    Returns:
+        str: путь размеченного кадра. Областей с координатами не нашлось —
+        это копия чистого, а не отсутствие файла: страница ждёт кадр всегда.
+    """
+    good = [area for area in areas if area.get('status') == 'ok' and area.get('rect')]
+    bad = [area for area in areas if area.get('status') != 'ok' and area.get('rect')]
+
+    step = plain
+    for group, color in ((good, TESTS_E2E_SHOT_OK), (bad, TESTS_E2E_SHOT_BAD)):
+        if not group:
+            continue
+        image_hotspot_overlay(step, [area['rect'] for area in group], out=out,
+                              labels=[area['name'] for area in group],
+                              color=color, width=TESTS_E2E_SHOT_WIDTH)
+        step = out
+
+    if step is plain:
+        shutil.copyfile(plain, out)
+    return out
