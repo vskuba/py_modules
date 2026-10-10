@@ -32,7 +32,8 @@ from tests_e2e.tests_e2e_shot import tests_e2e_shot_marked
 
 
 def tests_e2e_run_case(case: dict, width: int, folder: str, base: str = '',
-                       names: tuple = (), chrome: str = '') -> dict:
+                       names: tuple = (), chrome: str = '',
+                       user: str = '', password: str = '') -> dict:
     """Прогнать случай в одной ширине.
 
     Args:
@@ -42,6 +43,9 @@ def tests_e2e_run_case(case: dict, width: int, folder: str, base: str = '',
         base: адрес панели; пусто — `uvicorn_panel_base()`.
         names: (имя чистого файла, имя размеченного); пусто — по имени случая.
         chrome: путь к бинарю браузера.
+        user, password: под кем входить в панель; пусто — `ADMIN_USERNAME`/
+            `ADMIN_PASSWORD`. ⚠ Своей учёткой — у автоматики она отдельная от
+            загрузочного администратора.
 
     Returns:
         dict: `name`, `description`, `page`, `width`, `status`, `areas`,
@@ -64,7 +68,8 @@ def tests_e2e_run_case(case: dict, width: int, folder: str, base: str = '',
     try:
         # ⚠⚠ Кадр и замер — ОДИН прогон браузера: см. шапку `tests_e2e_probe`.
         # Разнеси их — и на кадре окажется состояние до шагов случая.
-        with uvicorn_mirror(case['page'], base=base) as url:
+        with uvicorn_mirror(case['page'], base=base,
+                            user=user, password=password) as url:
             seen = tests_e2e_probe(url, case, size, shot=plain, chrome=chrome)
     except Exception as err:
         return {**head, 'status': 'error', 'areas': [], 'console': [],

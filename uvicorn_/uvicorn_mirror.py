@@ -41,7 +41,8 @@ import threading
 import httpx
 
 
-def uvicorn_mirror(page: str, base: str = '') -> contextlib.AbstractContextManager:
+def uvicorn_mirror(page: str, base: str = '', user: str = '',
+                   password: str = '') -> contextlib.AbstractContextManager:
     """Страница панели как полноценный исток; contextmanager, отдающий URL копии.
 
     Тело страницы снимается свежим и отдаётся по своему пути; `/static/`, `/api/`
@@ -50,18 +51,26 @@ def uvicorn_mirror(page: str, base: str = '') -> contextlib.AbstractContextManag
     Args:
         page: путь страницы на панели ('/admin/photo/girls').
         base: адрес панели; пусто — `uvicorn_panel_base()`.
+        user, password: под кем входить; пусто — `ADMIN_USERNAME`/
+            `ADMIN_PASSWORD` из `.env`.
 
     Yields:
         str: «http://127.0.0.1:<порт><page>» — этот URL суют `web_probe`,
         `web_shot_capture` и `web_drive_eval` как обычную страницу.
+
+    ⚠ Учётка доводом, а не только из `.env`: `ADMIN_USERNAME` — это личность
+    **загрузочного администратора** (`panel_/panel_user.py` заводит его, когда
+    таблица пуста), и подменять её служебной учёткой автоматики нельзя. Тому,
+    кто ходит сюда своим человеком, довод и нужен.
     """
-    return _mirror(page, base)
+    return _mirror(page, base, user, password)
 
 
-async def _body_and_origin(page: str, base: str) -> tuple[str, str, httpx.Cookies]:
+async def _body_and_origin(page: str, base: str, user: str = '',
+                           password: str = '') -> tuple[str, str, httpx.Cookies]:
     """Свежая копия страницы и адрес панели с кукой входа — одним заходом."""
     from uvicorn_.uvicorn_panel import uvicorn_panel_client
-    client = await uvicorn_panel_client(base=base)
+    client = await uvicorn_panel_client(base=base, user=user, password=password)
     origin = str(client.base_url).rstrip('/')
     body = (await client.request('GET', page)).text
     cookies = client.cookies
@@ -89,8 +98,8 @@ def _run_sync(coro):
 
 
 @contextlib.contextmanager
-def _mirror(page: str, base: str):
-    body, origin, cookies = _run_sync(_body_and_origin(page, base))
+def _mirror(page: str, base: str, user: str = '', password: str = ''):
+    body, origin, cookies = _run_sync(_body_and_origin(page, base, user, password))
     api = httpx.Client(base_url=origin, cookies=cookies, timeout=15,
                       follow_redirects=True)
 
