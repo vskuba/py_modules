@@ -49,8 +49,14 @@ import json
 
 from web_.web_drive import web_drive_eval
 
-# Потолок ожидания живого прогона. Страница панели добирает данные запросами;
-# пяти секунд ей мало, если база занята.
+# Запас бюджета сверх того, что случай просит своими шагами: на замеры, кадр и
+# на то, что страница панели добирает данные запросами.
+#
+# ⚠⚠ Это ЗАПАС, а не потолок. Потолок считает `tests_e2e_probe_budget` —
+# сумма `timeout` всех шагов плюс этот запас. Пока он был фиксированным, случай
+# с ожиданием в 30 с обрывался на 25-й секунде: зонд не успевал ответить, и
+# строка получала `error` вместо вердикта. Снаружи это выглядело как сбой
+# браузера, а не как «случай просит больше, чем ему дали».
 TESTS_E2E_PROBE_WAIT = 20000
 
 
@@ -81,11 +87,40 @@ def tests_e2e_probe(url: str, case: dict, size: tuple, shot: str = '',
     в кадре.
     """
     answer = web_drive_eval(url, tests_e2e_probe_js(case), size=size,
-                            wait_ms=TESTS_E2E_PROBE_WAIT, shot=shot,
+                            wait_ms=tests_e2e_probe_budget(case), shot=shot,
                             chrome=chrome)
     seen = answer.get('value') or {}
     seen['console'] = [str(line) for line in (answer.get('console') or [])]
     return seen
+
+
+def tests_e2e_probe_budget(case: dict) -> int:
+    """Сколько времени дать зонду: сумма ожиданий случая плюс запас.
+
+    Args:
+        case: случай (или его сторона) — читаются `timeout` шагов.
+
+    Returns:
+        int: потолок в миллисекундах.
+
+    ⚠⚠ Считается по случаю, а не берётся постоянной. Шаг вправе ждать сколько
+    написано — это его договор со страницей; зонд, оборвавший такое ожидание
+    раньше срока, пишет в строку `error`, и снаружи это читается как сбой
+    браузера, а не как «дали меньше, чем попросили». Поймано на проде: шаг с
+    `timeout: 30000` обрывался на 25-й секунде постоянного бюджета.
+
+    ⚠ `wait` (который просто спит) тоже считается: он так же съедает время.
+    """
+    asked = 0
+    for step in (case.get('steps') or []):
+        if not isinstance(step, dict):
+            continue
+        if step.get('wait_for'):
+            asked += int(step.get('timeout') or 15000)
+        if step.get('wait'):
+            asked += int(step.get('wait') or 0)
+
+    return int(asked + TESTS_E2E_PROBE_WAIT)
 
 
 def tests_e2e_probe_js(case: dict) -> str:
