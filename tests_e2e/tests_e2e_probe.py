@@ -9,6 +9,19 @@
 Шаг — это приведение страницы в то состояние, про которое случай; без него
 проверялась бы та вкладка, на которой страница открылась.
 
+Шагов четыре: `click`, `set`, `wait_for`, `wait`.
+
+⚠⚠ `set` — про **формы**, и без него половина страниц панели недостижима:
+отбор там живёт в `<select>`, а щелчок по списку значения не меняет. Поле
+получает `input` и `change` пузырями, потому что страницы слушают разное:
+одна вешает обработчик на `change`, соседняя на `input`, и шаг, шлющий одно
+событие, работал бы через раз — через страницу.
+
+⚠ У `set` два вида: `value` — поставить известное значение (`mail`), `index` —
+выбрать вариант по счёту. Второй нужен спискам, которые приходят с сервера:
+разговор, анкета, узел — их значения номера строк, и в случае их знать
+неоткуда. `index: 0` читается как «первый из того, что пришло».
+
 ⚠⚠ Шагов ожидания два, и это **не** одно и то же. `wait_for` опрашивает условие
 до его наступления — им и надо пользоваться; `wait` просто спит. Ожидание
 временем даёт плавающий тест: на занятой машине лента не успевает прийти, и
@@ -107,6 +120,41 @@ for (const step of steps) {
       const node = document.querySelector(step.click);
       if (!node) { out.steps.push({step: 'click ' + step.click, error: 'узла нет'}); continue; }
       node.click();
+      await nap(300);
+    }
+    if (step.set) {
+      const node = document.querySelector(step.set);
+      if (!node) { out.steps.push({step: 'set ' + step.set, error: 'узла нет'}); continue; }
+
+      if (step.index !== undefined && step.index !== null) {
+        // Вариант по счёту — для списков, пришедших с сервера: их значения
+        // номера строк, и в случае их знать неоткуда.
+        const options = node.options || [];
+        if (!options.length) {
+          out.steps.push({step: 'set ' + step.set, error: 'список пуст: выбирать не из чего'});
+          continue;
+        }
+        const at = Number(step.index) || 0;
+        if (at >= options.length) {
+          out.steps.push({step: 'set ' + step.set,
+                          error: 'вариантов ' + options.length + ', а просят ' + (at + 1) + '-й'});
+          continue;
+        }
+        node.selectedIndex = at;
+      } else {
+        node.value = String(step.value === undefined ? '' : step.value);
+        // Поставили значение, которого в списке нет — браузер молча оставляет
+        // пустое, и дальше случай мерил бы не тот отбор. Говорим прямо.
+        if (node.options && node.selectedIndex < 0) {
+          out.steps.push({step: 'set ' + step.set,
+                          error: 'варианта «' + step.value + '» в списке нет'});
+          continue;
+        }
+      }
+
+      // Оба события и оба пузырём: страницы слушают разное — см. ⚠⚠ в шапке.
+      node.dispatchEvent(new Event('input', {bubbles: true}));
+      node.dispatchEvent(new Event('change', {bubbles: true}));
       await nap(300);
     }
     if (step.wait_for) {
