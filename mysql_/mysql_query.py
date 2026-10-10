@@ -37,6 +37,7 @@ import pymysql.cursors
 
 from config.config import config_get
 from mysql_.mysql_host import mysql_host_address
+from sql_.sql_split import sql_split_statements
 
 # Первое слово читающего запроса. Всё остальное меняет данные или схему и требует `--write`.
 MYSQL_QUERY_READ_ONLY = ('select', 'show', 'describe', 'desc', 'explain', 'with')
@@ -103,7 +104,12 @@ def mysql_query_read_only(sql: str) -> bool:
     Returns:
         True, если каждое выражение начинается со слова из `MYSQL_QUERY_READ_ONLY`.
     """
-    statements = [item.strip() for item in _comments_strip(sql).split(';')]
+    # ⚠⚠ Делим ОБЩИМ разбором, а не `.split(';')`. Наивное деление считает
+    # разделителем точку с запятой внутри строки, и честный читающий запрос
+    # получает отказ «меняет данные»: `… WHERE output LIKE '%;%'` разваливался
+    # на `SELECT …` и огрызок `%'`, чьё первое слово не из белого списка.
+    # Комментарии `sql_split_statements` выбрасывает сам.
+    statements = sql_split_statements(sql)
     words = [item.split(None, 1)[0].lower() for item in statements if item]
     return bool(words) and all(word in MYSQL_QUERY_READ_ONLY for word in words)
 
@@ -152,15 +158,6 @@ def _row_json_safe(row: dict) -> dict:
         else:
             safe[key] = str(value)
     return safe
-
-
-def _comments_strip(sql: str) -> str:
-    lines = []
-    for line in sql.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith('--') and not stripped.startswith('#'):
-            lines.append(line)
-    return '\n'.join(lines)
 
 
 def _cell(value) -> str:
