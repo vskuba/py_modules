@@ -170,6 +170,8 @@ async def _cronicle_api_call(method: str, path: str, payload: dict) -> dict:
     ⚠ Cronicle отвечает **200 даже на отказ**: беда лежит в теле, полем `code`
     (ноль — удача) и `description`. Проверка по HTTP-статусу пропускала бы
     «ключа нет» как успешный пустой ответ.
+
+    ⚠⚠ `code` бывает и числом, и строкой — см. разбор ниже.
     """
     key = cronicle_api_key()
     if not key:
@@ -193,8 +195,15 @@ async def _cronicle_api_call(method: str, path: str, payload: dict) -> dict:
     except ValueError:
         raise RuntimeError(f'Cronicle ответил не JSON ({answer.status_code})')
 
-    if int(body.get('code') or 0) != 0:
-        raise RuntimeError(f"Cronicle отказал: {body.get('description') or body.get('code')}")
+    # ⚠⚠ Код отказа бывает СТРОКОЙ: `session` — ключа нет, `api` — не хватает
+    # параметра, `format` — не разобрал тело. Сравнение через `int()` на них
+    # падало `ValueError: invalid literal for int()` — то есть вместо «Cronicle
+    # сказал, чего не хватает» вызывающий получал поломку разбора ответа и шёл
+    # искать её у себя. Удача — это ноль или его отсутствие, всё прочее отказ.
+    code = body.get('code')
+    if code not in (0, '0', None, ''):
+        raise RuntimeError(f"Cronicle отказал ({code}): "
+                           f"{body.get('description') or 'без пояснения'}")
 
     body.pop('code', None)
     return body
