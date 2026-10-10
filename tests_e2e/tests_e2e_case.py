@@ -104,30 +104,67 @@ def tests_e2e_case_parse(raw: dict, path: str = '') -> dict:
 
     widths = [int(one) for one in (raw.get('widths') or TESTS_E2E_CASE_WIDTHS)]
 
-    areas = []
-    for area in (raw.get('areas') or []):
-        areas.append({
-            'name': str(area.get('name') or area.get('selector') or '—'),
-            'selector': str(area.get('selector') or ''),
-            'rules': list(area.get('rules') or []),
-        })
-
-    checks = []
-    for check in (raw.get('checks') or []):
-        checks.append({
-            'name': str(check.get('name') or '—'),
-            'expect': int(check.get('expect') or 0),
-            'js': str(check.get('js') or ''),
-        })
-
-    return {
+    case = {
         'name': name,
         'description': str(raw.get('description') or '').strip(),
         'page': page,
         'widths': widths,
         'steps': list(raw.get('steps') or []),
-        'areas': areas,
-        'checks': checks,
+        'areas': _tests_e2e_case_areas(raw),
+        'checks': _tests_e2e_case_checks(raw),
+        'file': path,
+    }
+
+    peer = raw.get('peer')
+    if peer:
+        case['peer'] = tests_e2e_case_peer(peer, name, path)
+
+    return case
+
+
+def tests_e2e_case_peer(raw: dict, name: str, path: str = '') -> dict:
+    """Вторая сторона случая — та же проверка на СОСЕДНЕЙ установке.
+
+    Args:
+        raw: блок `peer` из YAML — своя `page`, `steps`, `areas`, `checks`.
+        name: имя случая; попадает в имя стороны для отчёта.
+        path: файл случая — для текста отказа.
+
+    Returns:
+        dict: случай в том же виде, что и основной, — его гоняет та же
+        `tests_e2e_run_case`, только с адресом и учёткой соседа.
+
+    Raises:
+        ValueError: у стороны нет страницы.
+
+    ## ⚠⚠ Зачем вторая сторона, если можно два случая
+
+    Затем, что доказательство здесь — **пара кадров**, а не два отдельных
+    снимка. Вопрос «письмо, доставленное там, отмечено доставленным тут»
+    требует видеть обе стороны одного и того же события; разнеси их по двум
+    случаям на двух установках — и они снимутся в разное время, лягут в разные
+    прогоны и в разные таблицы, а сопоставлять их будет человек глазами по
+    двум вкладкам. Это ровно та работа, которую тест должен снимать.
+
+    ⚠ Ширины сторона не имеет своих: их задаёт случай. Кадры сторон обязаны
+    быть одной ширины, иначе их неудобно класть рядом.
+
+    ⚠ Адрес и учётка соседа в YAML **не пишутся** — они приходят окружением
+    установки (`E2E_PEER_URL`, `E2E_PEER_USER`, `E2E_PEER_PASSWORD`). Случай
+    один на все установки, а сосед у каждой свой: у разработчика контейнер
+    рядом, на проде публичный адрес.
+    """
+    page = str((raw or {}).get('page') or '').strip()
+    if not page:
+        raise ValueError(f'сторона соседа без страницы: {path or name}')
+
+    return {
+        'name': str((raw or {}).get('name') or f'{name} — у соседа').strip(),
+        'description': str((raw or {}).get('description') or '').strip(),
+        'page': page,
+        'steps': list((raw or {}).get('steps') or []),
+        'areas': _tests_e2e_case_areas(raw or {}),
+        'checks': _tests_e2e_case_checks(raw or {}),
         'file': path,
     }
 
@@ -136,3 +173,21 @@ def tests_e2e_case_size(width: int) -> tuple:
     """Вьюпорт под ширину: (ширина, высота)."""
     return int(width), TESTS_E2E_CASE_HEIGHT.get(int(width),
                                                  TESTS_E2E_CASE_HEIGHT_DEFAULT)
+
+
+def _tests_e2e_case_areas(raw: dict) -> list:
+    """Блок `areas` с умолчаниями; общий у случая и у стороны соседа."""
+    return [{
+        'name': str(area.get('name') or area.get('selector') or '—'),
+        'selector': str(area.get('selector') or ''),
+        'rules': list(area.get('rules') or []),
+    } for area in (raw.get('areas') or [])]
+
+
+def _tests_e2e_case_checks(raw: dict) -> list:
+    """Блок `checks` с умолчаниями; общий у случая и у стороны соседа."""
+    return [{
+        'name': str(check.get('name') or '—'),
+        'expect': int(check.get('expect') or 0),
+        'js': str(check.get('js') or ''),
+    } for check in (raw.get('checks') or [])]
