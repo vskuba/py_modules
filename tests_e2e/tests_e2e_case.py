@@ -159,7 +159,11 @@ def tests_e2e_case_peer(raw: dict, name: str, path: str = '') -> dict:
         raise ValueError(f'сторона соседа без страницы: {path or name}')
 
     return {
-        'name': str((raw or {}).get('name') or f'{name} — у соседа').strip(),
+        # ⚠⚠ Имя у стороны ТО ЖЕ, что у случая, и своего ей не положено.
+        # Страница результатов собирает карточку по имени: дай стороне своё —
+        # и пара разъедется на две карточки, то есть ровно в то, ради отказа
+        # от чего она заведена. Сторону различает `page`, он уже в схеме.
+        'name': name,
         'description': str((raw or {}).get('description') or '').strip(),
         'page': page,
         'steps': list((raw or {}).get('steps') or []),

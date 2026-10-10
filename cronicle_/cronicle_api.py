@@ -96,6 +96,66 @@ async def cronicle_api_enable(event_id: str, enabled: bool) -> dict:
                                      'enabled': 1 if enabled else 0})
 
 
+async def cronicle_api_create(title: str, params: dict, timing: dict,
+                              like: dict = None, **extra) -> str:
+    """Завести событие в расписании; вернуть его идентификатор.
+
+    Args:
+        title: имя события — по нему его ищут в ленте и в истории.
+        params: настройки плагина (для `urlplug` — `method`, `url`, `headers`,
+            `data`, `timeout`, `success_match`).
+        timing: когда запускать, словарём Cronicle: `{'hours': [2],
+            'minutes': [0]}` — каждый день в 02:00 UTC.
+        like: событие-образец (из `cronicle_api_schedule`), у которого берутся
+            `category`, `plugin`, `target`. Пусто — нужно задать их в `extra`.
+        extra: прочие поля события — `timeout`, `catch_up`, `retries`,
+            `max_children`, `notes`, `enabled`.
+
+    Returns:
+        str: идентификатор заведённого события.
+
+    Raises:
+        RuntimeError: Cronicle отказал — текст отказа внутри.
+
+    ## ⚠⚠ Заводить по ОБРАЗЦУ соседнего события, а не по памяти
+
+    `category`, `plugin` и `target` — это идентификаторы **конкретной
+    установки**: категория заведена в её панели, цель («allgrp», «main») зависит
+    от того, как собран её кластер. Угаданные значения Cronicle примет молча, а
+    событие не запустится ни разу — и узнают об этом по не случившейся работе,
+    а не по отказу.
+
+    Поэтому `like` — обычный способ, а не удобство:
+
+    ```python
+    rows = await cronicle_api_schedule()
+    like = next(e for e in rows if e['title'] == 'сосед_по_установке')
+    await cronicle_api_create('моё_событие', params, {'hours': [2]}, like=like)
+    ```
+
+    ⚠ Ключу нужно право `create_events` — отдельное от `edit_events`, которым
+    обходится включатель. Отказ придёт текстом Cronicle, а не исключением
+    httpx.
+
+    ⚠ `enabled` по умолчанию **включено**: событие заводят, чтобы оно шло.
+    Нужна пауза — передать `enabled=0` и включить потом руками.
+    """
+    sample = like or {}
+    body = {
+        'title': str(title),
+        'enabled': 1,
+        'category': sample.get('category') or 'general',
+        'plugin': sample.get('plugin') or 'urlplug',
+        'target': sample.get('target') or 'allgrp',
+        'timing': dict(timing or {}),
+        'params': dict(params or {}),
+        **extra,
+    }
+
+    answer = await _cronicle_api_call('post', 'create_event', body)
+    return str(answer.get('id') or '')
+
+
 async def cronicle_api_history(limit: int = CRONICLE_API_HISTORY) -> list:
     """Завершённые прогоны, свежие сверху.
 
