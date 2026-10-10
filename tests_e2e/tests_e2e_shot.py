@@ -16,7 +16,14 @@
 
 import shutil
 
-from image_.image_hotspot import image_hotspot_overlay
+# ⚠⚠ `image_hotspot` (а за ним numpy и Pillow) импортируется ВНУТРИ функции, а
+# не здесь. Рамки нужны только во время прогона, а модуль читается на старте
+# приложения — вместе с роутером страницы. У установки без numpy панель из-за
+# этого не поднималась ВОВСЕ: `ModuleNotFoundError` на импорте роутера, и
+# выглядело это как поломка панели, а не как отсутствие библиотеки для картинок.
+#
+# ⚠ Цена ленивого импорта — миллисекунды на первом прогоне, а платит за него
+# только тот, кто рамки действительно рисует.
 
 # Цвета рамок. Зелёный и красный, а не оттенки: кадр смотрят мельком, плиткой в
 # четверть экрана, и различать там полутона нечем.
@@ -39,6 +46,8 @@ def tests_e2e_shot_marked(plain: str, out: str, areas: list) -> str:
     """
     good = [area for area in areas if area.get('status') == 'ok' and area.get('rect')]
     bad = [area for area in areas if area.get('status') != 'ok' and area.get('rect')]
+
+    from image_.image_hotspot import image_hotspot_overlay
 
     step = plain
     for group, color in ((good, TESTS_E2E_SHOT_OK), (bad, TESTS_E2E_SHOT_BAD)):
