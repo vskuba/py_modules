@@ -16,7 +16,7 @@ steps:
 areas:
   - name: Лента запусков
     selector: '#runsList'
-    rules: [видна, не_вылезла]
+    rules: [visible, inside]
 checks:
   - name: ошибок за сегодня
     expect: 0
