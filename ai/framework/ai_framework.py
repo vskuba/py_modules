@@ -10,6 +10,7 @@ from pydantic_ai import Agent, ModelMessage
 from pydantic_ai.models import Model
 
 from ai.framework.ai_framework_model import AiFrameworkModel
+from ai.provider.ai_provider_fake import AiProviderFake, ai_provider_fake_on
 from ai.provider.ai_provider_registry import ai_provider_registry_model_get
 from config.config import config_get
 from logging_.logging_ import log_request_body, logger_info, log_response_body
@@ -202,6 +203,29 @@ class AbstractAiFramework(ABC):
         """
         Модель для этого хода. Как её собрать, знает стратегия своего сервиса
         (`ai/provider/`) — здесь только общий клиент и журнальная строка.
+
+        ## ⚠⚠ Здесь же включается подмена — и только здесь
+
+        `LLM_FAKE` у процесса-сервера уводит **любой** ход на подменный сервис:
+        имя модели остаётся прежним, меняется адрес. Иначе включить подмену
+        нечем — модель выбирает нода (`ai_llm_node_get`, порядок по позиции), и
+        тестам пришлось бы переставлять `fake/echo` первой на боевой ноде.
+
+        ⚠ Место выбрано не случайно. Перехват в реестре (`имя → класс`) ставил
+        бы ответ справочника в зависимость от окружения процесса: юнит-тесты,
+        спрашивающие «какой класс у `gemini/…`», получали бы подмену и падали.
+        Подмена — политика исполнения хода, а не свойство имени модели.
+
+        ⚠⚠ Как это ломалось: выключатель был написан, а **потребителя у него не
+        было** — ни одного вызова `ai_provider_fake_on` во всём коде. Все
+        `tests_llm` молча шли к живой модели: на установке за всю её историю не
+        случилось ни одного обращения к `fake/echo`. Платили ответами живых
+        людей (нода одна на тесты и на прод), недетерминизмом и прогонами по
+        79 минут — живой ответ не совпадал со сценарием, и цепочка крутилась до
+        предела шагов движка.
+
+        ⚠ На проде переменной нет, значит и способа включить подмену снаружи
+        нет — чем бы ни был запрос. Без неё эта ветка не исполняется вовсе.
         """
         model_name = config_get('llm')
         if framework_model.entity_llm_current:
@@ -216,10 +240,19 @@ class AbstractAiFramework(ABC):
             }
         )
 
-        model = ai_provider_registry_model_get(model_name, framework_model, http_client)
+        # ⚠ Спрашиваем выключатель один раз: ход собирается на каждом шаге
+        # каждого прогона, и второе чтение конфига здесь ничего не добавляет.
+        faked = ai_provider_fake_on()
+
+        if faked:
+            model = AiProviderFake(http_client).model_get(
+                model_name.partition('/')[2] or model_name, framework_model)
+        else:
+            model = ai_provider_registry_model_get(model_name, framework_model, http_client)
 
         logger_info(f'🧠 LLM модель: {model_name} ({type(model).__name__}), размышления: '
-                    f'{"запрещены" if framework_model.thinking_disabled else "как у модели"}')
+                    f'{"запрещены" if framework_model.thinking_disabled else "как у модели"}'
+                    f'{", ПОДМЕНА" if faked else ""}')
 
         return model
 
