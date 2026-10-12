@@ -83,7 +83,7 @@ CLAUDE_GATE_DESIGN_REVIEW_LIVE_SHOT_COMMANDS = ('web_shot', 'web_shot_page', '--
 CLAUDE_GATE_DESIGN_REVIEW_LIVE_EDIT_TOOLS = ('Write', 'Edit', 'MultiEdit', 'NotebookEdit')
 
 
-def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, now=None) -> dict:
+def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, now=None, root=None) -> dict:
     """Снять вердикт с транскрипта: отпущен ход или в нём правка без кадра.
 
     Args:
@@ -91,6 +91,9 @@ def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, 
         session_id: id сессии — по нему живёт счётчик придирок.
         seen_path: где лежит память про эпизод; пусто — `CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN`.
         now: epoch «сейчас»; только для тестов.
+        root: корень проекта (`cwd` из ввода хука) — внутри него ищутся
+            каталоги-маркеры вёрстки. Пусто — маркеры не смотрим, остаются
+            расширения; см. `_inside`.
 
     ⚠ Путь по умолчанию берётся **в момент вызова**, а не в момент объявления:
     привязанный аргументом файл нельзя подменить в тесте, и проверка натыкалась бы
@@ -101,7 +104,7 @@ def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, 
             Правки перечислены, когда они есть, — при `block` непустые всегда.
     """
     seen_path = Path(seen_path or CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN)
-    edits = claude_gate_design_review_live_edits(transcript_path)
+    edits = claude_gate_design_review_live_edits(transcript_path, root=root)
 
     if not edits:
         claude_gate_forget(session_id, seen_path)
@@ -119,12 +122,13 @@ def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, 
     return {'block': True, 'found': edits, 'why': 'правка вёрстки без снятого кадра'}
 
 
-def claude_gate_design_review_live_edits(transcript_path, rows=None) -> list:
+def claude_gate_design_review_live_edits(transcript_path, rows=None, root=None) -> list:
     """Файлы вёрстки, правленные после последнего кадра (пусто — кадров не было).
 
     Args:
         transcript_path: `.jsonl` сессии.
         rows: готовые записи вместо чтения файла; для тестов и переиспользования.
+        root: корень проекта, внутри которого ищутся каталоги-маркеры.
 
     Returns:
         list: пути правок в порядке транскрипта, без повторов.
@@ -139,7 +143,7 @@ def claude_gate_design_review_live_edits(transcript_path, rows=None) -> list:
 
         path = _edited_path(call)
 
-        if path and _is_layout(path) and path not in edits:
+        if path and _is_layout(path, root) and path not in edits:
             edits.append(path)
 
     return edits
@@ -179,10 +183,12 @@ def _look(data) -> str:
     if not transcript or not session:
         return ''
 
-    if not _web_project(str(data.get('cwd') or os.getcwd())):
+    root = str(data.get('cwd') or os.getcwd())
+
+    if not _web_project(root):
         return ''
 
-    verdict = claude_gate_design_review_live(transcript, session)
+    verdict = claude_gate_design_review_live(transcript, session, root=root)
 
     return claude_gate_design_review_live_format(verdict) if verdict['block'] else ''
 
@@ -215,11 +221,31 @@ def _is_shot(call) -> bool:
     return any(marker in command for marker in CLAUDE_GATE_DESIGN_REVIEW_LIVE_SHOT_COMMANDS)
 
 
-def _is_layout(path) -> bool:
-    if any(marker in path for marker in CLAUDE_GATE_DESIGN_REVIEW_LIVE_DIRS):
+def _is_layout(path, root=None) -> bool:
+    if any(marker in _inside(path, root) for marker in CLAUDE_GATE_DESIGN_REVIEW_LIVE_DIRS):
         return True
 
     return path.lower().endswith(CLAUDE_GATE_DESIGN_REVIEW_LIVE_SUFFIXES)
+
+
+def _inside(path, root) -> str:
+    """Путь внутри проекта: корень отрезан, ведущий слеш оставлен для маркеров.
+
+    ⚠ Каталог-маркер ищется **только внутри проекта**, иначе имя предка решает
+    судьбу всех файлов репозитория: проект в `/var/www/<имя>` — стандартный корень
+    PHP-выкладки — целиком попадал под маркер `/www/`, и застава держала ход за
+    правку `.php` и `.xml`. Корень не приставка пути (правка вне cwd) — маркеры не
+    смотрим вовсе: лучше пропустить, чем держать всё.
+    """
+    if not root:
+        return path
+
+    root = str(root).rstrip('/')
+
+    if not path.startswith(root + '/'):
+        return ''
+
+    return path[len(root):]
 
 
 def _web_project(cwd, seen_path=CLAUDE_GATE_DESIGN_REVIEW_LIVE_WEB) -> bool:
