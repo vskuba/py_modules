@@ -21,7 +21,7 @@
 
 | Проверка       | Чем               | Почему это ломает выкладку |
 |----------------|-------------------|----------------------------|
-| `cyrillic`     | `variable_cyrillic` | имена латиницей — правило `code_rules.md` |
+| `cyrillic`     | `variable_cyrillic` + `tool_typo_cyrillic` | имена **и ключи словарей** латиницей — правило `code_rules.md` §1.2 |
 | `order`        | `function_order`  | публичное выше приватного: файл читают сверху |
 | `js`           | `js_check`        | опечатка в модуле = мёртвая страница, и сюита молчит |
 | `migrations`   | `mysql_migration_check_check` | `ALTER` раньше `CREATE`, подкаталоги вне глаз `yoyo` |
@@ -76,6 +76,7 @@ from mysql_.mysql_collate import mysql_collate_risks
 from page_.page_wire import page_wire_check
 from tool_.tool_dead import TOOL_DEAD_GONE, tool_dead
 from tool_.tool_instead import tool_instead
+from tool_.tool_typo import tool_typo_cyrillic
 from variable_.variable_cyrillic import variable_cyrillic
 
 # Строгости. ⚠ Держать выкладку вправе только `стоп`: набор, срабатывающий на
@@ -248,18 +249,44 @@ def main() -> int:
 
 
 def _check_cyrillic(base: Path, going) -> list[dict]:
-    """Кириллица в именах кода: правило — имена латиницей, русский в прозе."""
+    """Кириллица в именах кода и в ключах словарей: имена латиницей, русский в прозе.
+
+    ## ⚠⚠ Две проверки под одной строкой, и вторая появилась позже
+
+    `variable_cyrillic` судит **имена** — `ast` видит их узлами. Ключ словаря для
+    него обычный строковый литерал, и ему он не виден вовсе: `{'текст': ''}` стояло
+    в разборщике таблицы годами при зелёной заставе. Ключи судит
+    `tool_typo_cyrillic`, и зовётся она здесь же — правило §1.2 одно на имена и
+    ключи, и разводить его по двум строкам отчёта значило бы разводить и внимание.
+
+    ⚠ Чужой ключ (имя шага сценария, поле протокола) помечается в коде
+    `# cyrillic-key: причина` — пометка без причины находкой **остаётся**.
+    """
     spots = [base / one for one in (DEPLOY_PRECHECK_SRC, DEPLOY_PRECHECK_HOOKS)
              if (base / one).exists()]
     if not spots:
         return [_note('cyrillic', f'{DEPLOY_PRECHECK_SRC}/ нет — пропущено')]
 
-    return [{'check': 'cyrillic', 'level': DEPLOY_PRECHECK_STOP,
-             'where': f"{_short(base, one['file'])}:{one['line']}",
-             'what': f"имя `{one['name']}`"}
-            for spot in spots
-            for one in variable_cyrillic(str(spot))
-            if _going(base, one['file'], going)]
+    out = [{'check': 'cyrillic', 'level': DEPLOY_PRECHECK_STOP,
+            'where': f"{_short(base, one['file'])}:{one['line']}",
+            'what': f"имя `{one['name']}`"}
+           for spot in spots
+           for one in variable_cyrillic(str(spot))
+           if _going(base, one['file'], going)]
+
+    for spot in spots:
+        for one in tool_typo_cyrillic(str(spot)):
+            # ⚠ `where` у этой проверки — путь **от своего корня**, а не от корня
+            # проекта: собираем полный, иначе отбор по уезжающим файлам не сойдётся.
+            where = str(spot / one['where'])
+            if not _going(base, where, going):
+                continue
+
+            out.append({'check': 'cyrillic', 'level': DEPLOY_PRECHECK_STOP,
+                        'where': f"{_short(base, where)}:{one['line']}",
+                        'what': f"{one['hint']}: `{one['word']}`"})
+
+    return out
 
 
 def _check_order(base: Path, going) -> list[dict]:

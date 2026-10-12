@@ -43,6 +43,20 @@ TOOL_TYPO_ROOT = Path(__file__).resolve().parents[1]
 
 TOOL_TYPO_CYRILLIC = re.compile(r'[а-яёА-ЯЁ]')
 TOOL_TYPO_LATIN = re.compile(r'[a-zA-Z]')
+
+# Методы словаря, у которых первый довод — ключ: `row.get('ссылка')`.
+#
+# ⚠ `get` сюда входит, и это даёт редкую ложь: `client.get('/путь')` у HTTP-клиента
+# — не ключ. Цена принята: кириллический путь в URL куда реже кириллического ключа,
+# а различить их статически нечем — тип принимающего неизвестен.
+TOOL_TYPO_KEY_CALLS = ('get', 'pop', 'setdefault')
+
+# Пометка «ключ чужой, переименовать нельзя» и причина за ней.
+#
+# ⚠⚠ Причина обязательна (`.+` непустая): пометка без слов находкой **остаётся**.
+# `# cyrillic-key:` без объяснения — это «замолчи», а не «вот владелец имени», и
+# через полгода её не отличить от забытой.
+TOOL_TYPO_KEY_ALLOW = re.compile(r'#\s*cyrillic-key:\s*(?P<why>.*)$')
 TOOL_TYPO_LETTERS = re.compile(r'[^a-zA-Zа-яёА-ЯЁ]+')
 # Повтор подряд — след правки. Промежуток между словами: пробелы и не более
 # одного перевода строки; **пустой строки между повторами быть не может** —
@@ -123,8 +137,9 @@ def tool_typo_cyrillic(root=None) -> list[dict]:
     """Имена и ключи на кириллице — код, а не проза; правило `code_rules.md` §1.2.
 
     Смотрит `*.py` синтаксическим деревом: имена функций, классов, переменных
-    и параметров, ключи литералов-словарей и строковые ключи в скобках
-    (`словарь['ключ']`). Что не дерево (js, html, sql) деревом не видно — там
+    и параметров, ключи литералов-словарей, строковые ключи в скобках
+    (`словарь['ключ']`) и те же ключи у методов чтения (`row.get('ключ')`,
+    `pop`, `setdefault`). Что не дерево (js, html, sql) деревом не видно — там
     остаются grep-шаблоны §1.2.
 
     Args:
@@ -141,39 +156,88 @@ def tool_typo_cyrillic(root=None) -> list[dict]:
     транслитерации (`i18n_`) законно ключуется буквами алфавита, и без этого
     послабления проверка выдавала 97 находок на одном словаре — то есть не
     выдавала ничего, потому что её переставали читать.
+
+    ## ⚠⚠ Чужой ключ: пометка с причиной
+
+    Имя поля бывает задано **не нами** — шагом `extract` в сценарии, схемой или
+    протоколом на той стороне, — и переименование в одиночку разъехалось бы с ними
+    молча. Такое место помечается в той же строке:
+
+        link = row.get('ссылка')  # cyrillic-key: шаг extract сценария соседа
+
+    У словаря пометка действует на весь словарь, если стоит в строке открывающей
+    скобки или над ней: у таблицы на тридцать ключей причина одна на всех, и
+    повторённая тридцать раз она стала бы шумом.
+
+    ⚠ Причина **обязательна**: пустая пометка остаётся находкой (см.
+    `TOOL_TYPO_KEY_ALLOW`).
+
+    ## ⚠ Чего здесь нет: `in` и `not in`
+
+    `'ключ' in row` — тоже чтение ключа, но тем же `in` проверяют **подстроку**
+    (`'отказ' in str(error)`). Для дерева это один и тот же `Compare` со строкой
+    слева, и различить их нечем: тип правого довода статически неизвестен. В этих
+    проектах подстрочных проверок кратно больше, чем ключей, — ловля `in` дала бы
+    проверку, которая ошибается чаще, чем находит, а такую снимают через неделю.
     """
     base = Path(root) if root else TOOL_TYPO_ROOT
     out = []
     for path in file_walk(base, ('.py',)):
         try:
-            tree = ast.parse(path.read_text(encoding='utf-8'))
+            src = path.read_text(encoding='utf-8')
+            tree = ast.parse(src)
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
 
+        lines = src.split('\n')
         where = path.relative_to(base).as_posix()
         for node in ast.walk(tree):
+            # ⚠ Строка находки у ключа — строка **самого ключа**, а не словаря:
+            # иначе у словаря на тридцать ключей все находки пришлись бы на одну
+            # строку, и чинить их было бы не по чему. Поэтому `names` несёт
+            # четвёркой ещё и номер строки, и строку владельца для пометки.
+            own = getattr(node, 'lineno', 1)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                names = [(node.name, 'имя функции — по правилу только латиницей')]
+                names = [(node.name, 'имя функции — по правилу только латиницей',
+                          own, 0)]
             elif isinstance(node, ast.ClassDef):
-                names = [(node.name, 'имя класса — по правилу только латиницей')]
+                names = [(node.name, 'имя класса — по правилу только латиницей',
+                          own, 0)]
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                names = [(node.id, 'имя переменной — по правилу только латиницей')]
+                names = [(node.id, 'имя переменной — по правилу только латиницей',
+                          own, 0)]
             elif isinstance(node, ast.arg):
-                names = [(node.arg, 'имя параметра — по правилу только латиницей')]
+                names = [(node.arg, 'имя параметра — по правилу только латиницей',
+                          own, 0)]
             elif isinstance(node, ast.Dict):
-                names = [(k.value, 'ключ словаря на кириллице')
+                names = [(k.value, 'ключ словаря на кириллице', k.lineno, own)
                          for k in node.keys
                          if isinstance(k, ast.Constant) and isinstance(k.value, str)]
             elif (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
                     and isinstance(node.slice.value, str)):
-                names = [(node.slice.value, 'ключ словаря на кириллице')]
+                names = [(node.slice.value, 'ключ словаря на кириллице',
+                          node.slice.lineno, 0)]
+            elif (isinstance(node, ast.Call)
+                    and getattr(node.func, 'attr', '') in TOOL_TYPO_KEY_CALLS
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                names = [(node.args[0].value, 'ключ словаря на кириллице',
+                          node.args[0].lineno, 0)]
             else:
                 continue
-            for name, tip in names:
+            for name, tip, line, owns in names:
                 # Один символ — буква алфавита в таблице перевода, не имя (см. ⚠).
-                if len(name) > 1 and TOOL_TYPO_CYRILLIC.search(name):
-                    out.append({'kind': 'cyrillic', 'word': name[:60], 'where': where,
-                                'line': getattr(node, 'lineno', 1), 'hint': tip})
+                if len(name) < 2 or not TOOL_TYPO_CYRILLIC.search(name):
+                    continue
+
+                said = _key_allowed(lines, line, owns)
+                if said and said.group('why').strip():
+                    continue
+
+                out.append({'kind': 'cyrillic', 'word': name[:60], 'where': where,
+                            'line': line,
+                            'hint': ('пометка `cyrillic-key:` без причины — '
+                                     'она не считается') if said else tip})
     return sorted(out, key=lambda r: (r['where'], r['line'], r['word']))
 
 
@@ -230,6 +294,26 @@ def main() -> int:
             print(f"  {row['where']}:{row['line']}  «{row['word']}»  {row['hint']}")
 
     return min(len(found), 125)
+
+
+def _key_allowed(lines: list, line: int, owns: int):
+    """Пометка `cyrillic-key:` для ключа. `None` — её нет.
+
+    Ищется в трёх строках: самого ключа, открывающей скобки словаря (`owns`) и
+    **над** ней. Третья — потому что комментарий перед определением это основной
+    способ комментировать в питоне; у таблицы на тридцать ключей причина одна, и
+    повторённая тридцать раз она превратилась бы в шум.
+
+    ⚠ `owns` равен нулю там, где владельца нет (имя, индекс, вызов): тогда
+    смотрится только строка самого ключа.
+    """
+    for at in (line, owns, owns - 1 if owns else 0):
+        if 0 < at <= len(lines):
+            said = TOOL_TYPO_KEY_ALLOW.search(lines[at - 1])
+            if said:
+                return said
+
+    return None
 
 
 def _prose(base: Path) -> list[tuple]:
