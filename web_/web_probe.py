@@ -35,7 +35,7 @@ import re
 import subprocess
 
 from web_.web_shot import (WEB_SHOT_ERR_TAIL, WEB_SHOT_SIZE, WEB_SHOT_TIMEOUT,
-                           _find_browser, _served_page)
+                           _find_browser, _served_page, web_shot_argv)
 
 # Бюджет виртуального времени для дампа, мс: больше снимочных 1200 — зонду
 # мало «после анимаций», ему нужны загруженные шрифты (метрики строк!) и
@@ -55,8 +55,9 @@ def web_probe(src, probe_js, seed_js='', size=WEB_SHOT_SIZE,
     Исполнить JS на странице и вернуть результат как объект Python.
 
     Args:
-        src: http(s)-URL или путь к локальному HTML (раздаётся со своего
-            каталога, как в `web_shot` — корневые ссылки живут).
+        src: путь к локальному HTML (раздаётся со своего каталога, как в
+            `web_shot` — корневые ссылки живут). ⚠ Адрес в сети зонду не
+            годится: подменить чужую страницу нечем — см. Raises.
         probe_js: тело функции-зонда; обязан что-то `return`-нуть (значение и
             вернётся). Исполняется после всех скриптов страницы; внутри async
             функции — тело умеет `await`.
@@ -75,12 +76,17 @@ def web_probe(src, probe_js, seed_js='', size=WEB_SHOT_SIZE,
             до скрипта) или сам зонд упал — текст ошибки внутри.
     """
     browser = chrome or _find_browser()
-    is_url = src.startswith(('http://', 'https://'))
-    if is_url:
-        dom = _dump_dom(browser, src, size, budget)
-    else:
-        with _served_page(src, _probe_script(probe_js), seed_js) as url:
-            dom = _dump_dom(browser, url, size, budget)
+    if src.startswith(('http://', 'https://')):
+        # Зонд вставляется в КОПИЮ файла (`_served_page`), а чужую страницу по
+        # адресу подменить нечем: `--dump-dom` отдаёт её как есть, узла зонда в
+        # ней нет никогда. Раньше это приходило как «страница не дописала
+        # зонд» — то есть как дефект страницы, которого нет.
+        raise ValueError(
+            f'зонд по адресу не ставится ({src}): страницу в сети не подменить. '
+            'Живому адресу — `web_drive_eval` (CDP, тот же JS и `--shot`); '
+            'странице панели за входом — `uvicorn_mirror`')
+    with _served_page(src, _probe_script(probe_js), seed_js) as url:
+        dom = _dump_dom(browser, url, size, budget)
     match = _PROBE_RE.search(dom)
     if not match:
         raise RuntimeError('страница не дописала зонд: скрипт не дошёл до '
@@ -123,15 +129,17 @@ def _probe_script(probe_js) -> str:
 
 def _dump_dom(browser, url, size, budget) -> str:
     """Один запуск Chrome --dump-dom; stdout — сериализованный DOM."""
-    args = [browser, '--headless=new', '--disable-gpu', '--hide-scrollbars',
-            '--no-first-run', '--no-default-browser-check',
-            '--force-device-scale-factor=1',
-            f'--window-size={int(size[0])},{int(size[1])}']
+    args = web_shot_argv(browser, size)
     if budget:
         args.append(f'--virtual-time-budget={int(budget)}')
     args += ['--dump-dom', url]
     try:
+        # ⚠ encoding задан явно: `text=True` декодирует локалью процесса, и
+        # значения зонда (текст карточек, подписи) зависели бы от машины.
+        # ⚠⚠ Кашу «Ð½ÐµÑ‚» в ответе этим НЕ лечат: её делает сам Chrome на
+        # странице без `<meta charset>` — бьётся DOM, а не декодирование.
         done = subprocess.run(args, capture_output=True, text=True,
+                              encoding='utf-8', errors='replace',
                               timeout=WEB_SHOT_TIMEOUT)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f'Chrome не завершился за {WEB_SHOT_TIMEOUT:g} с: '

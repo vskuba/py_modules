@@ -36,8 +36,10 @@ AI_PROVIDER_REGISTRY: dict[str, type[AiProvider]] = {
         AiProviderMistral,
         AiProviderHuggingface,
         AiProviderCerebras,
-        # ⚠ Подменный сервис тестов: сюда попадают, только когда
-        # у сервера включён `LLM_FAKE`. В базе моделей его нет.
+        # ⚠⚠ Подменный сервис тестов. Выбирается **именем модели**, как любой
+        # другой: тестовая нода держит `fake/echo`, и реестр находит его по
+        # префиксу. Никакого режима процесса для этого не нужно — подмена есть
+        # свойство ноды, то есть тех же данных, где и так выбирается модель.
         AiProviderFake,
     )
 }
@@ -81,6 +83,9 @@ def ai_provider_registry_model_get(model_name: str, framework_model: AiFramework
     Raises:
         ValueError: имя без известного префикса. Отказываем сразу и по имени: без
             этого вызов уходил бы в никуда и падал позже, уже на ответе провайдера.
+
+    ⚠ Про подмену здесь ничего знать не надо: `fake/echo` — такое же имя с
+    префиксом сервиса, как `openrouter/…`, и разбирается тем же правилом.
     """
     provider_name, _, model_name_clean = str(model_name or '').partition('/')
     provider_class = AI_PROVIDER_REGISTRY.get(provider_name.lower())
