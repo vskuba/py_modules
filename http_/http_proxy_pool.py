@@ -19,6 +19,7 @@
 и смешивать выходы в одном соединении нельзя (`http_pool.py`).
 """
 import asyncio
+import re
 import urllib.parse
 
 import httpx
@@ -34,6 +35,9 @@ HTTP_PROXY_POOL_SOURCES = (
     '/proxy_types%5B%5D=http&format=json&limit=300',
     'https://www.proxyscrape.com/v2/?request=displayproxies&protocol=http'
     '&timeout=6000&country=all&ssl=all&anonymity=elite',
+    # гитхаб-листы: тысячи строк, обновляются каждые минуты, формат — строка на прокси
+    'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
+    'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
 )
 
 
@@ -62,7 +66,8 @@ async def http_proxy_pool_fetch(sources: tuple = HTTP_PROXY_POOL_SOURCES,
                     or raw.get('member') or [])]
         except (ValueError, AttributeError, KeyError, TypeError):
             try:
-                raw = [ln.strip() for ln in a.text.splitlines() if ln.count(':') == 1]
+                # текстовые листы бывают 'ip:port', 'ip:port:страна' и с шапкой-комментом
+                raw = re.findall(r'\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}', a.text)
             except AttributeError:
                 errors.append(urllib.parse.urlsplit(str(src)).netloc)
                 continue
