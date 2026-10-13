@@ -82,12 +82,13 @@ async def web_login_try(url: str, user: str, password: str, user_field: str = 'u
     try:
         kw = {'follow_redirects': True, 'timeout': timeout}
         if proxy:
-            from http_.http_pool import http_pool_transport
-            kw['transport'] = http_pool_transport(proxy)
+            # транспорт именно свой: общий кэш-транспорт (http_pool_transport) параллельные
+            # клиенты на одном IP добивают гонкой (ClosedResourceError)
+            kw['proxy'] = proxy
         async with httpx.AsyncClient(**kw) as c:
             r = await c.post(url, data={user_field: user, pass_field: password},
                              headers={'User-Agent': 'Mozilla/5.0'})
-    except httpx.HTTPError as e:
+    except Exception as e:  # и anyio.ClosedResourceError — не только наследники httpx.HTTPError
         return {'verdict': 'сбой', 'status': 0, 'sign': type(e).__name__}
     if lock_marker and lock_marker in r.text:
         return {'verdict': 'замок', 'status': r.status_code, 'sign': lock_marker}
