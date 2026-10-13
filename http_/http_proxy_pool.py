@@ -24,9 +24,14 @@ import urllib.parse
 import httpx
 
 HTTP_PROXY_POOL_SOURCES = (
-    # лист-апи без ключа: geonode отдаёт JSON, proxyscrape — голые строки
+    # лист-апи без ключа: geonode/openproxylist отдают JSON, proxyscrape — строки;
+    # живых в листах ~5%, поэтому страниц несколько, а не одна
     'https://proxylist.geonode.com/api/proxy-list?limit=250&page=1'
     '&sort_by=lastChecked&sort_type=desc&protocols=http%2Chttps&anonymity=high%2Celite',
+    'https://proxylist.geonode.com/api/proxy-list?limit=250&page=2'
+    '&sort_by=lastChecked&sort_type=desc&protocols=http%2Chttps&anonymity=high%2Celite',
+    'https://proxylist.openproxylist.org/api/v2/proxy/list'
+    '/proxy_types%5B%5D=http&format=json&limit=300',
     'https://www.proxyscrape.com/v2/?request=displayproxies&protocol=http'
     '&timeout=6000&country=all&ssl=all&anonymity=elite',
 )
@@ -64,6 +69,7 @@ async def http_proxy_pool_fetch(sources: tuple = HTTP_PROXY_POOL_SOURCES,
         proxies += raw
         if not raw:
             errors.append(urllib.parse.urlsplit(str(src)).netloc)
+    proxies = list(dict.fromkeys(proxies))  # источники пересекаются, дубли режем
     return {'ok': bool(proxies), 'count': len(proxies),
             'proxies': proxies[:limit or None], 'errors': errors}
 
