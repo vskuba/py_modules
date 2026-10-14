@@ -1,18 +1,18 @@
 """Подписчики каналов и чатов с открытым номером телефона: строки для базы номеров.
 
 Здесь только сбор: вход — в `telegram_session`, куда сохранять — решает
-вызывающий. Список подписчиков Telegram открывает не всем и не везде: чужой
-канал молчит, пока аккаунт в нём не админ, а чаты, куда аккаунт вписан,
-отдают список сами. Номер при этом показывают единицы — те, кому он открыт
-настройками приватности: молчаливое большинство за этой стеной, и это не
-поломка, а Telegram.
+вызывающий, а как номер выглядит канонно — в `phone_.phone_country`. Список
+подписчиков Telegram открывает не всем и не везде: чужой канал молчит, пока
+аккаунт в нём не админ, а чаты, куда аккаунт вписан, отдают список сами.
+Номер при этом показывают единицы — те, кому он открыт настройками
+приватности: молчаливое большинство за этой стеной, и это не поломка, а
+Telegram.
 """
 import argparse
 import asyncio
 import json
 
-# Украинский мобильный: 12 цифр с +380, код оператора — 3-я и 4-я цифры.
-TELEGRAM_MEMBERS_COUNTRY = '380'
+from phone_.phone_country import phone_parse
 
 
 async def telegram_members_phones(client, channels: list, limit: int = 0) -> dict:
@@ -51,16 +51,16 @@ async def telegram_members_phones(client, channels: list, limit: int = 0) -> dic
             async for user in client.iter_participants(entity, limit or None):
                 if getattr(user, 'self', False) or not getattr(user, 'phone', None):
                     continue
-                phone = _telegram_members_phone(user.phone)
-                if not phone or phone in seen:
+                parsed = phone_parse(user.phone)
+                if not parsed['phone'] or parsed['phone'] in seen:
                     continue
-                seen.add(phone)
+                seen.add(parsed['phone'])
                 rows.append({
-                    'phone': phone,
+                    'phone': parsed['phone'],
                     'first_name': user.first_name or '',
                     'last_name': user.last_name or '',
                     'middle_name': '',
-                    'operator_code': _telegram_members_operator(phone),
+                    'operator_code': parsed['operator_code'],
                     'username': getattr(user, 'username', None) or '',
                     'channel': name,
                 })
@@ -69,23 +69,6 @@ async def telegram_members_phones(client, channels: list, limit: int = 0) -> dic
             # руками, и одна опечатка — строка в ведомости, а не трейсбек
             failed.append({'channel': name, 'err': f'{type(exc).__name__}: {exc}'})
     return {'rows': rows, 'failed': failed}
-
-
-def _telegram_members_phone(raw: str) -> str:
-    """Номер подписчика к канону базы: без пробелов и черточек, с ведущим '+'.
-
-    Пусто — если из строки не осталось ни одной цифры: там был не номер.
-    """
-    digits = ''.join(c for c in str(raw) if c.isdigit())
-    return f'+{digits}' if digits else ''
-
-
-def _telegram_members_operator(phone: str) -> str:
-    """Код оператора украинского номера: 0XX из +3800XX…; у чужих стран — пусто."""
-    digits = phone.removeprefix('+')
-    if digits.startswith(TELEGRAM_MEMBERS_COUNTRY) and len(digits) == 12:
-        return f'0{digits.removeprefix(TELEGRAM_MEMBERS_COUNTRY)[:2]}'
-    return ''
 
 
 if __name__ == '__main__':

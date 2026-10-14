@@ -11,7 +11,9 @@
 Здесь два вопроса, на которые модуль отвечает словами, и один танец делает сам:
 
 * **что сейчас**: gitlink (что зафиксировано проектом), кончик чекаута, их родство
-  (кто кому предок — `merge-base --is-ancestor`), и чем именно отличается файл;
+  (кто кому предок — `merge-base --is-ancestor`), долетел ли кончик до origin
+  (`pushed`) — вслепую сдвинутый на незапушенное указатель валит выкладку на
+  `upload-pack: not our ref`, и чем именно отличается файл;
 * **что принесёт bump**: список файлов между gitlink и целью; если кончик чекаута
   не предок цели, bump без слияния **украдёт** строку чекаута — модуль это
   говорит до, а не после;
@@ -38,16 +40,23 @@ if __package__ in (None, ''):
 from project_.project_ import project_git
 
 
-def project_submodule_state() -> dict:
-    """Что сейчас: gitlink, чекаут, родство линий, чем отличаются.
+def project_submodule_state(fetch: bool = True) -> dict:
+    """Что сейчас: gitlink, чекаут, родство линий, долетел ли push, чем отличаются.
 
     Вне submodule-контекста (самостоятельный чекаут общего слоя) gitlink пуст —
     это не ошибка, а факт: здесь правят линию сразу, а не указатель.
 
+    Args:
+        fetch: взглянуть на origin свежим взглядом (`fetch -q`, тихий); сеть
+            могла не доехать — тогда вердикт по последним привезённым линиям.
+
     Returns:
         {'gitlink': sha из дерева проекта ('' — submodule-контекста нет),
          'checkout': HEAD чекаута, 'synced': равны, 'ancestor': gitlink предок
-         чекаута (без слияния bump ничего не украдёт), 'files':
+         чекаута (без слияния bump ничего не украдёт), 'pushed': кончик
+         чекаута нашёлся на барах origin (False — push не долетел, и указатель
+         на такой sha валит выкладку в `upload-pack: not our ref`), 'remote':
+         имя бара, где кончик нашёлся ('' — нигде), 'files':
          `diff --stat gitlink..checkout` — что приедет в панель при bump}
     """
     root, sub = _repo()
@@ -57,10 +66,12 @@ def project_submodule_state() -> dict:
     checkout = project_git(sub, 'rev-parse', 'HEAD')
     ancestor = bool(gitlink and checkout) and _run_ok(
         sub, 'merge-base', '--is-ancestor', gitlink, checkout)
+    remote = _on_origin(sub, checkout, fetch)
     files = project_git(sub, 'diff', '--stat', gitlink, checkout).splitlines() \
         if gitlink and checkout else []
     return {'gitlink': gitlink, 'checkout': checkout,
             'synced': bool(gitlink) and gitlink == checkout, 'ancestor': ancestor,
+            'pushed': bool(remote), 'remote': remote,
             'files': files}
 
 
@@ -156,6 +167,28 @@ def project_submodule_bump(line: str = 'master', from_repo: str = '') -> dict:
 
 # ── детали реализации ──
 
+def _on_origin(sub: Path, sha: str, fetch: bool) -> str:
+    """Имя бара origin, который содержит кончик; '' — не содержит нигде.
+
+    ⚠ Вердикт нужен словами: push #1 при сборке phone молча умер на
+    `Failed to connect to github.com port 443 after 134386 ms`, указатель
+    сдвинули вслепую — и выкладка упала в `upload-pack: not our ref`.
+    Молчаливый fetch тут же за молчанием: сеть не доехала — вердикт по
+    последним привезённым линиям, а не отказ отвечать.
+    """
+    if not sha:
+        return ''
+    if fetch:
+        _run_ok(sub, 'fetch', '-q', 'origin')
+    for line in project_git(sub, 'branch', '-r', '--contains', sha).splitlines():
+        # «remotes/origin/master», без звёздочек текущей ветки; `origin/HEAD ->`
+        # — символка, не отдельный бар
+        ref = line.strip().removeprefix('remotes/').lstrip('*+ ').strip()
+        if ref and '->' not in ref:
+            return ref
+    return ''
+
+
 def _repo() -> tuple[Path, Path]:
     """(корень проекта, чекаут py_modules).
 
@@ -239,9 +272,11 @@ if __name__ == '__main__':
     ap.add_argument('--line', default='master', help='цель: ветка или sha')
     ap.add_argument('--from', dest='from_repo', default='',
                     help='путь второго чекаута, откуда взять линию')
+    ap.add_argument('--no-fetch', action='store_true',
+                    help='state: вердикт про push по уже привезённым барам, без сети')
     ns = ap.parse_args()
     try:
-        out = (project_submodule_state() if ns.command == 'state'
+        out = (project_submodule_state(fetch=not ns.no_fetch) if ns.command == 'state'
                else project_submodule_bump(ns.line, ns.from_repo))
         print(json.dumps(out, ensure_ascii=False, indent=1))
     except (ValueError, subprocess.CalledProcessError) as err:
