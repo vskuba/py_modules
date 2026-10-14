@@ -1,9 +1,11 @@
-"""Подписчики каналов с открытым номером телефона: строки для базы номеров.
+"""Подписчики каналов и чатов с открытым номером телефона: строки для базы номеров.
 
 Здесь только сбор: вход — в `telegram_session`, куда сохранять — решает
-вызывающий. Из миллиона подписчиков канала номер показывают единицы — те, кому
-он открыт настройками приватности: молчаливое большинство за этой стеной, и
-это не поломка, а Telegram.
+вызывающий. Список подписчиков Telegram открывает не всем и не везде: чужой
+канал молчит, пока аккаунт в нём не админ, а чаты, куда аккаунт вписан,
+отдают список сами. Номер при этом показывают единицы — те, кому он открыт
+настройками приватности: молчаливое большинство за этой стеной, и это не
+поломка, а Telegram.
 """
 import argparse
 import asyncio
@@ -18,7 +20,8 @@ async def telegram_members_phones(client, channels: list, limit: int = 0) -> dic
 
     Args:
         client: авторизованный TelegramClient (см. `telegram_session_start`).
-        channels: каналы — `@имя` или ссылки `t.me/имя`, можно вперемешку.
+        channels: что читать — `@имя`, ссылки `t.me/имя` или entity из
+            `client.get_dialogs()` (свои чаты аккаунта); можно вперемешку.
         limit: первых N подписчиков на канал; 0 — сколько канал отдаст.
 
     Returns:
@@ -30,14 +33,21 @@ async def telegram_members_phones(client, channels: list, limit: int = 0) -> dic
         канал, который не разрешён или не найден, — в `failed`, а не отказ всего
         сбора; подписчик без видимого номера в `rows` не попадает вовсе.
 
-    ⚠ Больше ~10 000 последних подписчиков канал не отдаёт никому — это потолок
-    MTProto, а не ошибка сборки: «все подписчики» крупного канала недостижимы.
+    ⚠ Список подписчиков Telegram открывает не всем и не везде: чужой канал
+    молчит, пока аккаунт в нём не админ; чаты, куда аккаунт вписан, отдают
+    список сами. И всё равно дальше ~10 000 подписчиков список не идёт —
+    потолок MTProto: «все подписчики» крупного канала недостижимы.
     """
     rows, failed, seen = [], [], set()
     for channel in channels:
-        name = str(channel).strip().rstrip('/').split('/')[-1].removeprefix('@')
+        # строку правят руками (там опечатка — не трейсбек), entity приходит из
+        # get_dialogs уже готовым: имя чата берётся из него самого
+        if isinstance(channel, str):
+            name = channel.strip().rstrip('/').split('/')[-1].removeprefix('@')
+        else:
+            name = getattr(channel, 'title', '') or str(channel)
         try:
-            entity = await client.get_entity(name)
+            entity = await client.get_entity(channel)
             async for user in client.iter_participants(entity, limit or None):
                 if getattr(user, 'self', False) or not getattr(user, 'phone', None):
                     continue
@@ -57,7 +67,7 @@ async def telegram_members_phones(client, channels: list, limit: int = 0) -> dic
         except Exception as exc:
             # сорванный канал не должен хоронить остальные: имена каналов правят
             # руками, и одна опечатка — строка в ведомости, а не трейсбек
-            failed.append({'channel': str(channel), 'err': f'{type(exc).__name__}: {exc}'})
+            failed.append({'channel': name, 'err': f'{type(exc).__name__}: {exc}'})
     return {'rows': rows, 'failed': failed}
 
 
