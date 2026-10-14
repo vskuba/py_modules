@@ -26,7 +26,8 @@ import httpx
 
 
 async def web_peek(url: str, method: str = 'GET', content: str = '',
-                   headers: dict | None = None, timeout: float = 15) -> dict:
+                   headers: dict | None = None, timeout: float = 15,
+                   follow_redirects: bool = False) -> dict:
     """Один запрос без браузера — весь ответ как есть.
 
     Args:
@@ -35,12 +36,22 @@ async def web_peek(url: str, method: str = 'GET', content: str = '',
         content: тело как есть (JSON-строку сервер поймёт по content-type).
         headers: заголовки запроса (свой Content-Type — сюда).
         timeout: секунды.
+        follow_redirects: пройти по 30x до конечной страницы. ⚠ Умолчание —
+            **не ходить**: смысл этой функции в том, что сервер реально
+            прислал, и проглоченный редирект скрыл бы и код, и заголовок
+            `Location`, которые чаще всего и проверяют. Включают его, когда
+            нужна конечная страница, а не ответ по этому адресу: ЧПУ магазинов
+            сплошь и рядом отвечают `301` на вложенный путь, и без перехода
+            приходит пустое тело при живом разделе.
 
     Returns:
         {'status': код, 'headers': заголовки словарём, 'length': байт,
-         'text': тело текстом, 'json': объект, если это JSON, иначе None}
+         'text': тело текстом, 'json': объект, если это JSON, иначе None,
+         'url': конечный адрес — он отличается от запрошенного, если шли по
+         редиректам}
     """
-    async with httpx.AsyncClient(transport=_transport(), timeout=timeout) as c:
+    async with httpx.AsyncClient(transport=_transport(), timeout=timeout,
+                                 follow_redirects=follow_redirects) as c:
         r = await c.request(method, url, content=content or None,
                             headers=headers)
     try:
@@ -48,7 +59,8 @@ async def web_peek(url: str, method: str = 'GET', content: str = '',
     except ValueError:
         parsed = None
     return {'status': r.status_code, 'headers': dict(r.headers),
-            'length': len(r.content), 'text': r.text, 'json': parsed}
+            'length': len(r.content), 'text': r.text, 'json': parsed,
+            'url': str(r.url)}
 
 
 async def web_peek_markers(url: str, markers: list, **kw) -> dict:
