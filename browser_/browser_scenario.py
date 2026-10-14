@@ -195,6 +195,15 @@ class BrowserScenarioStep(BaseModel):
     name: str = Field('', max_length=50, description='Под каким именем сложить результат extract')
     timeout_ms: int = Field(BROWSER_SCENARIO_STEP_TIMEOUT_MS, ge=100, le=120000)
     optional: bool = Field(False, description='Шаг может не сработать — прогон продолжится')
+    # ⚠⚠ Признак **последнего, необратимого** шага: нажатия «Оформить заказ»,
+    # «Отправить», «Оплатить». До него сценарий можно прогнать сколько угодно
+    # раз — он только смотрит и заполняет; после него на той стороне появился
+    # заказ, и отменить его нельзя.
+    #
+    # Поле читает НАШ исполнитель, а не контейнер: он просто не посылает
+    # хвост, начиная с этого шага. Так репетиция («заполнить и показать») и
+    # отправка — один и тот же сценарий, а не два расходящихся.
+    submit: bool = Field(False, description='Необратимый шаг: нажатие «оформить»')
     fields: list[BrowserScenarioField] = Field(
         default_factory=list, description='Только у extract_rows: что брать внутри строки')
 
@@ -239,6 +248,32 @@ class BrowserScenario(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     goal: str = Field('', max_length=255)
     steps: list[BrowserScenarioStep] = Field(..., min_length=1, max_length=BROWSER_SCENARIO_STEP_LIMIT)
+
+
+def browser_scenario_split(steps: list) -> tuple:
+    """Разделить шаги на «до отправки» и «сама отправка».
+
+    Returns:
+        `(до, отправка)` — два списка. Шага с `submit` нет вовсе: вся работа
+        попадает в первый список, второй пуст.
+
+    ⚠⚠ Это делает НАШ код, а не контейнер. Репетиция — не отдельный режим
+    браузера, а тот же сценарий без хвоста: заполнить форму, снять кадр и
+    остановиться перед кнопкой. Два разных сценария («с нажатием» и «без»)
+    разошлись бы в первую же правку селектора, и репетиция проверяла бы не то,
+    что уезжает на площадку.
+
+    ⚠ Делится по ПЕРВОМУ `submit`: всё после него — тоже отправка (страница
+    «спасибо», проверка номера заказа), и прогонять это без нажатия
+    бессмысленно.
+    """
+    rows = list(steps or [])
+    for at, step in enumerate(rows):
+        flag = step.get('submit') if isinstance(step, dict) else getattr(step, 'submit', False)
+        if flag:
+            return rows[:at], rows[at:]
+
+    return rows, []
 
 
 def browser_scenario_variables_used(scenario: BrowserScenario) -> list[str]:
