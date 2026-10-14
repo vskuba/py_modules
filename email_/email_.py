@@ -55,6 +55,11 @@ EMAIL_TAILS = (
     ('', 34), ('digits', 26), ('year', 22), ('year2', 10), ('number', 8),
 )
 
+# То же, но без пустого варианта — для адреса из одного имени (см.
+# `email_local`). Собирается из основного списка, а не вторым набором весов:
+# две таблицы разошлись бы при первой правке долей.
+EMAIL_TAILS_FORCED = tuple((kind, weight) for kind, weight in EMAIL_TAILS if kind)
+
 # Разделитель перед цифрами: чаще всего его нет.
 EMAIL_TAIL_SEPARATORS = (('', 74), ('.', 13), ('_', 13))
 
@@ -127,7 +132,17 @@ def email_local(first: str, last: str = '', rand: random.Random = None) -> str:
     if not local:
         return ''
 
-    tail = _tail_make(_pick(EMAIL_TAILS, rand), rand)
+    # ⚠⚠ Голое имя без различителя не бывает занятым — оно бывает ЧУЖИМ.
+    # `sergey@gmail.com` и `anton@ukr.net` разобрали два десятка лет назад, и
+    # человек, заводящий ящик сегодня, такого не получит ни на одном крупном
+    # домене. Поэтому форме из одного имени хвост обязателен: пустой вариант из
+    # `EMAIL_TAILS` для неё выбрасывается.
+    #
+    # ⚠ Признак — совпадение с самим именем, а не выпавшая форма: `first`
+    # приходит и от списка форм, и от ветки «фамилии нет», и проверять надо
+    # результат, а не дорогу к нему.
+    tails = EMAIL_TAILS if local != first else EMAIL_TAILS_FORCED
+    tail = _tail_make(_pick(tails, rand), rand)
     if tail:
         local += _pick(EMAIL_TAIL_SEPARATORS, rand) + tail
 
