@@ -87,6 +87,29 @@ HTTP_PROXY_CHECK_URL = 'https://ipinfo.io/json'
 # который думает дольше пятнадцати секунд, для работы всё равно не годится.
 HTTP_PROXY_CHECK_TIMEOUT = 15.0
 
+# Куда ходим за заголовками. ⚠ Отдельная служба от `HTTP_PROXY_CHECK_URL`, и это
+# не дубль: та отвечает на вопрос «каким адресом нас видят», эта — «что ещё
+# уехало вместе с запросом». Второе спрашивают реже (проверка анонимности),
+# первое — на каждом обходе реестра.
+HTTP_PROXY_HEADERS_URL = 'https://httpbin.org/get'
+
+# Заголовки, которыми прокси выдаёт того, кто за ним. ⚠ Список закрытый и
+# короткий намеренно: ищем мы в них НАШ адрес, а не факт их наличия, и лишнее
+# имя сюда ничего не добавляет.
+HTTP_PROXY_LEAK_HEADERS = (
+    'x-forwarded-for', 'x-real-ip', 'forwarded', 'client-ip', 'x-client-ip',
+    'x-originating-ip', 'true-client-ip', 'cf-connecting-ip',
+)
+
+# Заголовки, по которым видно, что запрос шёл через посредника, — даже когда наш
+# адрес не утёк. Сайту этого хватает, чтобы отличить прокси от обычного гостя.
+HTTP_PROXY_MARK_HEADERS = ('via', 'x-proxy-id', 'proxy-connection', 'x-cache')
+
+# Чем отвечаем об анонимности. ⚠ Три состояния, а не «да/нет»: «наш адрес виден»
+# и «виден только факт прокси» — разные беды с разной ценой, и сливать их в одно
+# «не анонимен» значит выбрасывать рабочие каналы вместе с дырявыми.
+HTTP_PROXY_ANONYMITY = ('transparent', 'anonymous', 'elite')
+
 
 def http_proxy_parse(text: str, scheme: str = 'http') -> dict:
     """Строка провайдера → части: `{scheme, host, port, username, password}`.
@@ -334,6 +357,78 @@ async def http_proxy_check(url: str = '', check_url: str = HTTP_PROXY_CHECK_URL,
     return {'ok': True, 'ip': ip, 'country': country, 'ms': _ms(started), 'error': ''}
 
 
+async def http_proxy_anonymity(url: str, direct_ip: str = '',
+                               check_url: str = HTTP_PROXY_HEADERS_URL,
+                               timeout: float = HTTP_PROXY_CHECK_TIMEOUT) -> dict:
+    """Скрывает ли прокси нас на самом деле: адрес, заголовки, вердикт.
+
+    Args:
+        url: адрес прокси (`http_proxy_url`). Пусто — отказ: вопрос «скрывает
+            ли нас прямой выход» смысла не имеет.
+        direct_ip: наш настоящий адрес. Пусто — спросит сам
+            (`http_proxy_direct_ip`), но на обходе реестра его передают готовым:
+            иначе это лишний поход наружу на каждую строку.
+        check_url: служба, отдающая `origin` и `headers`.
+        timeout: предел ожидания, секунды.
+
+    Returns:
+        dict: `ok` — дошли ли; `ip` — каким адресом нас видят; `anonymity` —
+        одно из `HTTP_PROXY_ANONYMITY`; `leak` — заголовок, которым утёк наш
+        адрес (пусто, если не утёк); `marks` — заголовки-признаки посредника;
+        `ms`, `error`.
+
+    ⚠⚠ **Совпадения адресов мало.** Прокси может выходить своим IP и при этом
+    слать `X-Forwarded-For: <наш адрес>` — сайт прочтёт заголовок и увидит нас.
+    Это самый частый случай дешёвых каналов, и по одному `origin` он неотличим
+    от честного: адрес-то чужой.
+
+    ⚠ `elite` не означает «безопасно» — означает «по этому запросу нас не
+    видно». Прокси, подставляющий себя в TLS или ведущий свой журнал, выглядит
+    так же; проверка отвечает на вопрос «что уехало сайту», и только.
+
+    ⚠ Ничего не бросает, как и `http_proxy_check`: отказ — результат проверки,
+    а не происшествие. Пачку строк он ронять не должен.
+    """
+    started = time.monotonic()
+    if not str(url or '').strip():
+        return {**_fail('адрес прокси не задан', started),
+                'anonymity': '', 'leak': '', 'marks': []}
+
+    mine = str(direct_ip or '').strip()
+    if not mine:
+        mine = (await http_proxy_direct_ip())['ip']
+
+    try:
+        async with httpx.AsyncClient(proxy=url, timeout=timeout,
+                                     follow_redirects=False) as client:
+            response = await client.get(check_url)
+            response.raise_for_status()
+            body = response.json()
+    except ImportError as e:
+        return {**_fail(f'нет поддержки SOCKS: {e}; поставьте httpx[socks]', started),
+                'anonymity': '', 'leak': '', 'marks': []}
+    except httpx.HTTPError as e:
+        return {**_fail(_why(e), started), 'anonymity': '', 'leak': '', 'marks': []}
+    except ValueError as e:
+        return {**_fail(f'ответ не похож на ожидаемый: {e}'[:200], started),
+                'anonymity': '', 'leak': '', 'marks': []}
+
+    seen = str((body or {}).get('origin') or '').strip()
+    headers = {str(k).lower(): str(v) for k, v in ((body or {}).get('headers') or {}).items()}
+    leak, marks = _leak_find(headers, mine)
+
+    # ⚠ Наш адрес в `origin` — тоже утечка, и самая грубая: запрос вышел мимо
+    # прокси либо прокси прозрачный. Отмечается тем же полем, чтобы вызывающий
+    # разбирал один случай, а не два.
+    if mine and mine in seen:
+        leak = leak or 'origin'
+
+    anonymity = 'transparent' if leak else ('anonymous' if marks else 'elite')
+
+    return {'ok': True, 'ip': seen, 'country': '', 'ms': _ms(started), 'error': '',
+            'anonymity': anonymity, 'leak': leak, 'marks': marks}
+
+
 # Отказы, которые случаются чаще прочих, — словами. Остальные показываются
 # именем типа: оно хотя бы отличает одно от другого.
 HTTP_PROXY_WHY = {
@@ -347,6 +442,27 @@ HTTP_PROXY_WHY = {
     'ConnectionResetError': 'прокси сбросил соединение',
     'PoolTimeout': 'не дождались свободного соединения',
 }
+
+
+def _leak_find(headers: dict, mine: str) -> tuple:
+    """Утёк ли наш адрес в заголовках и видно ли посредника.
+
+    Returns:
+        `(имя заголовка с нашим адресом или '', список заголовков-признаков)`.
+
+    ⚠ Ищем **наш адрес внутри значения**, а не само наличие заголовка:
+    `X-Forwarded-For` бывает и у честного канала — туда он кладёт свой
+    предыдущий хоп. Беда начинается, когда в нём стоим мы.
+    """
+    leak = ''
+    for name in HTTP_PROXY_LEAK_HEADERS:
+        if mine and mine in headers.get(name, ''):
+            leak = name
+            break
+
+    marks = [name for name in HTTP_PROXY_MARK_HEADERS if headers.get(name)]
+
+    return leak, marks
 
 
 def _host_port(text: str) -> bool:
