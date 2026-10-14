@@ -47,16 +47,19 @@ db = config_get('MYSQL_DATABASE', 'project')
 class MySQLConnectionManager:
     """Собственная реализация асинхронного контекстного менеджера для БД"""
 
-    def __init__(self):
+    def __init__(self, host: str = '', port: int = 0):
         self.pool = None
         self.conn = None
         self.cursor_ctx = None
+        # адрес этого процесса: пусто — берёт `.env` (см. `mysql_pool_get`)
+        self._host = host
+        self._port = port
         # Инициализируем пустой строкой или None, но обрабатываем это в __getattr__
         self._cursor = None
         self._seq = None
 
     async def __aenter__(self):
-        self.pool = await mysql_pool_get()
+        self.pool = await mysql_pool_get(self._host, self._port)
         self.conn = await self.pool.acquire()
 
         global _conn_seq
@@ -241,8 +244,13 @@ def mysql_get_db():
         connection.close()
 
 
-def mysql_get_db_async():
+def mysql_get_db_async(host: str = '', port: int = 0):
     """Курсор из общего пула — обычный способ сходить в базу: `async with … as db`.
+
+    Args:
+        host: адрес базы для этого процесса; пусто — как в `.env`. С хоста это
+            `mysql_host_address()`: имя контейнера отсюда не видно.
+        port: порт наружу; пусто — `MYSQL_PORT` из `.env`.
 
     Returns:
         MySQLConnectionManager: менеджер контекста; внутри — курсор со строками-
@@ -253,17 +261,25 @@ def mysql_get_db_async():
 
     ⚠ Пул заводится с `autocommit=True` — отдельная транзакция не открывается,
     каждый запрос фиксируется сам по себе.
+
+    ⚠ `host`/`port` из параметров действуют лишь на самое первое создание пула
+    в процессе: переопределение, пришедшее к уже живому пулу, ничего не изменит.
     """
-    return MySQLConnectionManager()
+    return MySQLConnectionManager(host, port)
 
 
-async def mysql_pool_get() -> Pool:
+async def mysql_pool_get(host: str = '', port: int = 0) -> Pool:
     """Общий пул соединений с базой — один на процесс, заводится при первом обращении.
+
+    Args:
+        host: адрес базы вместо `.env`-ного; пусто — `.env` как есть.
+        port: порт вместо `MYSQL_PORT`; пусто — `.env` как есть.
 
     Returns:
         Пул aiomysql: 5–10 соединений, autocommit, DictCursor.
 
     ⚠ Пул лежит в модульной переменной и привязан к event loop, в котором создан.
+    Переопределение адреса видит только то обращение, которое пул и создало.
     Импорт длинной формой (`py_modules.mysql_.mysql_`) загрузит модуль второй раз —
     и пулов станет два.
     """
@@ -272,8 +288,8 @@ async def mysql_pool_get() -> Pool:
         async with pool_lock:
             loop = asyncio.get_running_loop()
             pool = await _create_pool(
-                host=host,
-                port=port,
+                host=host or globals()['host'],
+                port=port or globals()['port'],
                 user=user,
                 password=password,
                 db=db,
