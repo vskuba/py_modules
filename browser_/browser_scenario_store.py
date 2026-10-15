@@ -13,7 +13,10 @@
 import json
 import time
 
-from browser_.browser_scenario import BrowserScenario, browser_scenario_variables_used
+from browser_.browser_scenario import (BROWSER_SCENARIO_PACE_MAX_MS,
+                                       BROWSER_SCENARIO_PACE_MIN_MS,
+                                       BrowserScenario,
+                                       browser_scenario_variables_used)
 from browser_.browser_upstream import (browser_upstream_request,
                                        BROWSER_UPSTREAM_SCENARIO_TIMEOUT)
 from browser_.browser_site_variable import browser_site_variable_values
@@ -31,7 +34,9 @@ _CACHE: dict[str, tuple] = {}
 
 async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: str = '',
                                 start_url: str = '', variables: dict | None = None,
-                                status: str = 'draft', scenario_id: int = 0) -> int:
+                                status: str = 'draft', scenario_id: int = 0,
+                                pace_min_ms: int | None = None,
+                                pace_max_ms: int | None = None) -> int:
     """Завести или переписать сценарий; возвращает его номер.
 
     Шаги проходят проверку схемой контейнера здесь, при сохранении: ошибку лучше
@@ -39,11 +44,19 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
     по умолчанию едут в журнал открытыми; секреты живут у сайта
     (`browser_site_variable`).
 
+    `pace_min_ms`/`pace_max_ms` — темп: пауза перед каждым шагом, случайная в
+    этих пределах (`browser_scenario_pace`). `None` — оставить как есть у
+    существующего и взять умолчание слоя у нового.
+
+    ⚠ Перевёрнутые пределы выпрямляются молча: это опечатка в форме, а не
+    повод не дать человеку сохранить сценарий.
+
     Raises:
         ValueError: шаги не прошли схему, имя занято другим сценарием или статусу
             такой не положен.
     """
     scenario = _scenario_check(name, goal, steps)
+    pace = _pace_values(pace_min_ms, pace_max_ms)
     async with mysql_get_db_async() as db:
         if scenario_id:
             await db.execute('SELECT id FROM browser_scenario WHERE id = %s', (int(scenario_id),))
@@ -52,10 +65,12 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
             await db.execute(
                 'UPDATE browser_scenario'
                 '   SET site_id = %s, name = %s, goal = %s, start_url = %s,'
-                '       steps = %s, variables = %s, status = %s WHERE id = %s',
+                '       steps = %s, variables = %s, status = %s,'
+                '       pace_min_ms = %s, pace_max_ms = %s WHERE id = %s',
                 (site_id or None, name, goal, start_url,
                  json.dumps([s.model_dump() for s in scenario.steps], ensure_ascii=False),
-                 json.dumps(variables or {}, ensure_ascii=False), status, int(scenario_id)))
+                 json.dumps(variables or {}, ensure_ascii=False), status,
+                 pace[0], pace[1], int(scenario_id)))
 
             browser_scenario_forget(name)
 
@@ -66,11 +81,13 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
         if await db.fetchone():
             raise ValueError(f'сценарий с именем «{name}» уже есть')
         await db.execute(
-            'INSERT INTO browser_scenario (site_id, name, goal, start_url, steps, variables, status) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s)',
+            'INSERT INTO browser_scenario (site_id, name, goal, start_url, steps,'
+            '  variables, status, pace_min_ms, pace_max_ms) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
             (site_id or None, name, goal, start_url,
              json.dumps([s.model_dump() for s in scenario.steps], ensure_ascii=False),
-             json.dumps(variables or {}, ensure_ascii=False), status))
+             json.dumps(variables or {}, ensure_ascii=False), status,
+             pace[0], pace[1]))
         browser_scenario_forget(name)
 
         return int(db.lastrowid)
@@ -87,7 +104,7 @@ async def browser_scenario_list(site_id: int = 0) -> list:
     async with mysql_get_db_async() as db:
         await db.execute(
             'SELECT id, site_id, name, goal, start_url, status, steps, variables,'
-            '       created_at, updated_at '
+            '       pace_min_ms, pace_max_ms, created_at, updated_at '
             f'FROM browser_scenario {where} ORDER BY id DESC', params)
         rows = await db.fetchall() or []
 
@@ -229,6 +246,28 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
         browser_scenario_forget(row['name'])
 
     return result
+
+
+def _pace_values(low, high) -> tuple:
+    """Пределы темпа к записи: `(низ, верх)`, оба в границах колонки.
+
+    ⚠ `None` у обоих — умолчания слоя: так заводится новый сценарий, и ноль
+    здесь был бы хуже — он значит «без пауз», то есть нечеловеческий ритм по
+    умолчанию.
+
+    ⚠ Перевёрнутые границы выпрямляются: опечатка в форме не повод не дать
+    сохранить.
+
+    ⚠ Потолок — 60 000 мс: столько же, сколько у колонки `SMALLINT UNSIGNED`
+    (65 535). Больше минуты между шагами — это уже не ритм, а остановка.
+    """
+    if low is None and high is None:
+        return BROWSER_SCENARIO_PACE_MIN_MS, BROWSER_SCENARIO_PACE_MAX_MS
+
+    low = max(0, min(60000, int(low or 0)))
+    high = max(0, min(60000, int(high or 0)))
+
+    return (high, low) if low > high else (low, high)
 
 
 def _scenario_check(name: str, goal: str, steps: list) -> BrowserScenario:
