@@ -175,7 +175,8 @@ async def browser_scenario_runs(scenario_id: int, limit: int = 50, offset: int =
 
 async def browser_scenario_execute(scenario: dict, session_id: str = '', variables: dict | None = None,
                                    secrets: dict | None = None, keep_session: bool = False,
-                                   proxy: str = '') -> dict:
+                                   proxy: str = '', user_agent: str = '',
+                                   extra_headers: dict | None = None) -> dict:
     """Один прогон сохранённого сценария: отдать контейнеру, записать журнал, поправить метку.
 
     Возвращает ответ контейнера как есть: код запроса тут ни при чём, упавший на
@@ -211,6 +212,10 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
             'secrets': {**site_secret, **_filled(secrets)},
             'keep_session': keep_session,
             'proxy': proxy,
+            # Кем представляется вкладка. ⚠ Берутся **вместе**: строка без
+            # согласованных заголовков хуже честного умолчания (`useragent_`).
+            'user_agent': user_agent,
+            'extra_headers': extra_headers or None,
         }, timeout=BROWSER_UPSTREAM_SCENARIO_TIMEOUT)
 
     await _run_save(int(row['id']), result)

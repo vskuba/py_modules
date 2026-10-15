@@ -84,7 +84,8 @@ async def browser_pool_stop():
 async def browser_pool_session_open(name: str = '', url: str = '', storage_state: dict | None = None,
                                     viewport: dict | None = None, site_id: int = 0,
                                     locale: str = '', timezone_id: str = '',
-                                    proxy: str = '') -> dict:
+                                    proxy: str = '', user_agent: str = '',
+                                    extra_headers: dict | None = None) -> dict:
     """Заводит сессию: свой контекст, одна страница в нём.
 
     `storage_state` — сохранённые cookie и localStorage прошлой сессии: с ним
@@ -99,6 +100,11 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
     уезжает и уезжать не должна — сессия живёт в памяти и умирает вместе с процессом.
 
     `proxy` — выход наружу для **этой** сессии: `socks5://user:pass@host:1080`.
+
+    `user_agent` и `extra_headers` — кем представляется эта сессия. ⚠⚠ Берут их
+    **вместе**: строка `User-Agent` без согласованных `Sec-CH-UA`,
+    `Accept-Language` и `Sec-Fetch-*` выглядит хуже честного умолчания — сайт
+    смотрит на набор, а не на строку (`useragent_.py`). Пусто — как в образе.
 
     ⚠ **Прокси на контекст, а не на браузер.** Chromium здесь один на процесс, и
     задай мы выход при запуске — через него пошли бы все сессии разом. Сайтам
@@ -131,6 +137,14 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
             options['timezone_id'] = timezone_id
         if proxy:
             options['proxy'] = _proxy_options(proxy)
+        if user_agent:
+            options['user_agent'] = user_agent
+        if extra_headers:
+            # ⚠ Заголовки на контекст, а не на запрос: их должны нести и
+            # переходы внутри сайта, и подзапросы страницы, иначе первый же
+            # XHR уедет с умолчанием образа и выдаст подмену.
+            options['extra_http_headers'] = {str(k): str(v)
+                                             for k, v in extra_headers.items()}
 
         context = await _browser.new_context(**options)
         page = await context.new_page()

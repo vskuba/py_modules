@@ -53,6 +53,10 @@ class BrowserScenarioRunRequest(BaseModel):
     keep_session: bool = Field(False, description='Не гасить временную сессию после прогона')
     # Выход наружу для временной вкладки — строкой, а не номером: у контейнера
     # базы нет, реестр разворачивает тот, кто его ведёт.
+    user_agent: str = Field('', max_length=400,
+                            description='Кем представляется браузер')
+    extra_headers: dict | None = Field(
+        None, description='Заголовки, согласованные с user_agent')
     proxy: str = Field('', max_length=500,
                        description='Выход временной вкладки: socks5://user:pass@host:1080')
 
@@ -73,6 +77,8 @@ async def browser_scenario_run_post(data: BrowserScenarioRunRequest):
             secrets=data.secrets,
             keep_session=data.keep_session,
             proxy=data.proxy,
+            user_agent=data.user_agent,
+            extra_headers=data.extra_headers,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail='сессия не найдена')
@@ -84,8 +90,14 @@ async def browser_scenario_run_post(data: BrowserScenarioRunRequest):
 
 async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
                                variables: dict | None = None, secrets: dict | None = None,
-                               keep_session: bool = False, proxy: str = '') -> dict:
+                               keep_session: bool = False, proxy: str = '',
+                               user_agent: str = '',
+                               extra_headers: dict | None = None) -> dict:
     """Выполняет шаги по порядку и возвращает трассу прогона.
+
+    `user_agent` и `extra_headers` — кем представляется временная вкладка.
+    ⚠ У готовой сессии (`session_id` задан) они уже заданы при открытии и здесь
+    не действуют: заголовки контекста Playwright по ходу не меняет.
 
     `proxy` — выход наружу для **временной** вкладки, которую прогон заводит сам
     (`session_id` пуст). Готовая сессия свой выход уже имеет, и подменять его
@@ -109,7 +121,8 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     if missing:
         raise ValueError(f'не переданы переменные: {", ".join(missing)}')
 
-    entry, own_session = await _session_take(session_id, scenario.name, proxy)
+    entry, own_session = await _session_take(session_id, scenario.name, proxy,
+                                             user_agent, extra_headers)
     page = entry['page']
     # Наблюдатели — состояние **на прогон**, а не на страницу.
     #
@@ -187,7 +200,9 @@ async def _session_take(session_id: str, name: str, proxy: str = '') -> tuple[di
             raise RuntimeError('страница сессии закрыта')
         return entry, False
 
-    session = await browser_pool_session_open(name=f'сценарий: {name}'[:100], proxy=proxy)
+    session = await browser_pool_session_open(
+        name=f'сценарий: {name}'[:100], proxy=proxy,
+        user_agent=user_agent, extra_headers=extra_headers)
     return browser_pool_session_get(session['session_id']), True
 
 

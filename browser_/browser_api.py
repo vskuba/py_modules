@@ -53,6 +53,13 @@ class BrowserSessionCreate(BaseModel):
     # вызывающий; сюда приезжает готовый адрес.
     proxy: str = Field('', max_length=500,
                        description='Выход наружу: socks5://user:pass@host:1080')
+    # Кем представляется сессия. ⚠⚠ Строку и заголовки берут **вместе**: один
+    # `User-Agent` без согласованных `Sec-CH-UA` и `Accept-Language` выглядит
+    # хуже честного умолчания — сайт смотрит на набор (`useragent_.py`).
+    user_agent: str = Field('', max_length=400,
+                            description='Кем представляется браузер')
+    extra_headers: dict | None = Field(
+        None, description='Заголовки, согласованные с user_agent')
 
     @field_validator('url')
     @classmethod
@@ -140,6 +147,8 @@ async def browser_api_session_create(data: BrowserSessionCreate):
             locale=data.locale,
             timezone_id=data.timezone_id,
             proxy=data.proxy,
+            user_agent=data.user_agent,
+            extra_headers=data.extra_headers,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
