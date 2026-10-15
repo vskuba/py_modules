@@ -79,7 +79,18 @@ CLAUDE_GATE_DESIGN_REVIEW_LIVE_WALK_SKIP = ('node_modules', '.git', 'dist', 'bui
 # Что считается кадром: настоящий снимок страницы, а не дамп DOM и не просмотр
 # картинки, снятой до правки.
 CLAUDE_GATE_DESIGN_REVIEW_LIVE_SHOT_TOOLS = ('browser_take_screenshot',)
-CLAUDE_GATE_DESIGN_REVIEW_LIVE_SHOT_COMMANDS = ('web_shot', 'web_shot_page', '--shot')
+#
+# ⚠⚠ `shot=` без дефисов — не оплошность списка, а штатный способ: страницу за
+# входом снимают из питона (`uvicorn_mirror` + `web_drive_eval(…, shot=…)`), и
+# флага `--shot` в такой команде нет вовсе. Без этой приметы застава держала
+# ход у того, кто кадр снял и в него посмотрел, — то есть наказывала за
+# правильную работу и толкала снимать второй раз ради формы.
+#
+# ⚠ `uvicorn_mirror` в приметы НЕ входит, хотя кадр обычно снимают через него:
+# зеркало можно поднять и ничего не снять, а примета, которую легко поставить
+# не глядя, превращает заставу в формальность.
+CLAUDE_GATE_DESIGN_REVIEW_LIVE_SHOT_COMMANDS = ('web_shot', 'web_shot_page',
+                                                '--shot', 'shot=', 'shot =')
 CLAUDE_GATE_DESIGN_REVIEW_LIVE_EDIT_TOOLS = ('Write', 'Edit', 'MultiEdit', 'NotebookEdit')
 
 
