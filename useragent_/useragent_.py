@@ -137,11 +137,17 @@ USERAGENT_PROFILES = (
 #
 # ⚠⚠ `Sec-Fetch-*` — не мелочь. Их шлёт сам браузер, подделать забывают, и
 # запрос без них при современном `User-Agent` выглядит ровно тем, чем является.
+#
+# ⚠⚠ `Accept-Encoding` здесь НЕТ намеренно, и это не забывчивость. Его ставит
+# сам клиент — тем, что умеет разжать. Объяви мы `br`, а библиотека без brotli
+# — и сервер пришлёт сжатое тело, которое не развернётся: страница приедет
+# двоичным мусором, разбор найдёт ноль товаров, и выглядеть это будет как
+# «магазин опустел». Поймано ровно так: после подстановки заголовков поиск,
+# находивший пятнадцать товаров, стал находить ноль.
 USERAGENT_COMMON_HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,'
               'image/avif,image/webp,image/apng,*/*;q=0.8,'
               'application/signed-exchange;v=b3;q=0.7',
-    'Accept-Encoding': 'gzip, deflate, br',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'none',
