@@ -31,6 +31,7 @@ same-origin по построению, а `{{ base }}` и относительн
   менеджер: копия из /tmp, пережившая правку шаблона, врёт незаметно.
 """
 import argparse
+import json
 import asyncio
 import concurrent.futures
 import contextlib
@@ -181,6 +182,11 @@ if __name__ == '__main__':
             bad = [one for one in got.get('console') or []
                    if one['level'] == 'error']
             print(ns.shot)
+            # ⚠⚠ Ответ `--js` печатается тоже: его `return` — это числа из
+            # DOM, ради которых зонд и писали. Без этого приходится снимать
+            # кадр дважды — один раз ради картинки, другой ради чисел.
+            if got.get('value') is not None:
+                print(json.dumps(got['value'], ensure_ascii=False))
             # ⚠ Ошибки страницы печатаются рядом с кадром: кадр показывает,
             # что человек увидел, а консоль — что при этом сломалось молча.
             for one in bad:
