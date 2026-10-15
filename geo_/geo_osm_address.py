@@ -37,11 +37,19 @@ import re
 
 import httpx
 
-# Куда спрашивать. ⚠ По порядку: первый не ответил — идём ко второму. Зеркала
-# отвечают одним и тем же, разница только в очереди и настроении.
+# Куда спрашивать. ⚠ По порядку: первый не ответил — идём ко второму.
+#
+# ⚠⚠ Зеркал ПЯТЬ, а не два, и это не запасливость. Замер на живом заходе: из
+# четырёх опрошенных разом работало ОДНО — главный `overpass-api.de` не
+# отвечал вовсе, `kumi` и `private.coffee` давали 500, а `osm.ch` отвечал за
+# секунду. Какое именно живо, заранее не известно и меняется в течение дня,
+# поэтому перебор идёт до первого ответившего.
 GEO_OSM_ADDRESS_SERVERS = (
     'https://overpass-api.de/api/interpreter',
+    'https://overpass.osm.ch/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.osm.jp/api/interpreter',
 )
 
 # ⚠⚠ Без него Overpass отвечает 406 и не объясняет. Поймано живьём.
@@ -53,8 +61,12 @@ GEO_OSM_ADDRESS_LIVING = (
     'terrace', 'dormitory', 'bungalow',
 )
 
-# Сколько ждать ответа: Overpass считает долго, а наш запрос — на километр.
-GEO_OSM_ADDRESS_TIMEOUT = 60
+# Сколько ждать ответа, секунды. ⚠⚠ Не «побольше на всякий случай»: зеркал
+# пять, и щедрый таймаут на каждом превращает один вопрос к карте в пять минут
+# ожидания. Мёртвое зеркало должно отваливаться быстро, чтобы очередь дошла до
+# живого, — отсюда короткое ожидание соединения и умеренное ответа.
+GEO_OSM_ADDRESS_TIMEOUT = 30
+GEO_OSM_ADDRESS_CONNECT = 7
 
 # Как далеко от точки искать, когда радиус не задан.
 GEO_OSM_ADDRESS_RADIUS = 800
@@ -219,7 +231,8 @@ async def _osm_ask(query: str) -> list:
     for where in GEO_OSM_ADDRESS_SERVERS:
         try:
             async with httpx.AsyncClient(
-                    timeout=GEO_OSM_ADDRESS_TIMEOUT,
+                    timeout=httpx.Timeout(GEO_OSM_ADDRESS_TIMEOUT,
+                                          connect=GEO_OSM_ADDRESS_CONNECT),
                     headers={'User-Agent': GEO_OSM_ADDRESS_AGENT}) as client:
                 answer = await client.post(where, data={'data': query})
 
