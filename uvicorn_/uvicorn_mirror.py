@@ -158,9 +158,34 @@ if __name__ == '__main__':
     ap.add_argument('--probe', default='', help='тело async-зонда с return; '
                     'пусто — напечатать URL копии и ждать Enter')
     ap.add_argument('--base', default='', help='адрес панели; пусто — сам')
+    # ⚠⚠ Кадр страницы за входом иначе одной командой не снять: `web_shot`
+    # по адресу панели получит login-стену, а скрипт на питоне прячет саму
+    # работу — по его команде не видно, снимали кадр или нет. И человеку, и
+    # заставе вёрстки (`claude_gate_design_review_live`) нужна команда, в
+    # которой это написано.
+    ap.add_argument('--shot', default='', help='снять кадр страницы в файл')
+    ap.add_argument('--size', default='1700x900', help='вьюпорт кадра, ШxВ')
+    # ⚠ Страница открывается на вкладке из `localStorage`, а у свежего Chrome
+    # он пуст: кадр приходит с умолчательной вкладки, а не с той, которую
+    # правили. Этот JS выполняется перед съёмкой — им и переключают.
+    ap.add_argument('--js', default='', help='тело async-функции перед кадром')
     ns = ap.parse_args()
     with uvicorn_mirror(ns.page, ns.base) as url:
-        if ns.probe:
+        if ns.shot:
+            from web_.web_drive import web_drive_eval
+
+            width, _, height = ns.size.partition('x')
+            got = web_drive_eval(url, ns.js or 'return 1;', shot=ns.shot,
+                                 size=(int(width), int(height or 900)),
+                                 wait_ms=15000)
+            bad = [one for one in got.get('console') or []
+                   if one['level'] == 'error']
+            print(ns.shot)
+            # ⚠ Ошибки страницы печатаются рядом с кадром: кадр показывает,
+            # что человек увидел, а консоль — что при этом сломалось молча.
+            for one in bad:
+                print('консоль:', one['text'][:160])
+        elif ns.probe:
             from web_.web_drive import web_drive_eval
             print(web_drive_eval(url, ns.probe)['value'])
         else:
