@@ -40,6 +40,46 @@ HTTP_PROXY_POOL_SOURCES = (
     'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
 )
 
+# Листы с фильтром по стране. ⚠⚠ Заведены отдельно, потому что отвечают на
+# ДРУГОЙ вопрос: общий лист даёт «живой прокси откуда угодно», а здесь нужен
+# выход из нужной страны. Украинскому магазину заказ из Эквадора виден сразу, и
+# никакой отпечаток браузера этого не прикроет.
+#
+# ⚠ `{country}` подставляется в нижнем или верхнем регистре по месту: у
+# proxyscrape код страны строчный, у geonode и proxifly — заглавный. Это не
+# придирка, а условие ответа: не тот регистр — пустой лист без объяснений.
+HTTP_PROXY_POOL_COUNTRY_SOURCES = (
+    'https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies'
+    '&protocol=http&country={lower}&proxy_format=ipport&format=text',
+    'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http'
+    '&timeout=10000&country={upper}',
+    'https://proxylist.geonode.com/api/proxy-list?limit=500&page=1'
+    '&sort_by=lastChecked&sort_type=desc&country={upper}&protocols=http%2Chttps',
+    'https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/'
+    'countries/{upper}/data.txt',
+)
+
+
+def http_proxy_pool_country_sources(country: str) -> tuple:
+    """Лист-апи, отдающие прокси **этой** страны.
+
+    Args:
+        country: код ISO-3166 alpha-2 («UA»).
+
+    Returns:
+        кортеж URL, готовых для `http_proxy_pool_fetch`.
+
+    ⚠⚠ Заявленная страна — не проверенная. Листы помечают адреса по своей базе
+    геолокации, и она врёт: из сотни адресов, объявленных украинскими, таковыми
+    оказались 78, остальные — Германия, Испания, Турция, Индия. Поэтому после
+    сбора страну подтверждают по самому адресу (`http_proxy_country`), а не
+    верят источнику на слово.
+    """
+    code = str(country or '').strip()[:2]
+
+    return tuple(one.format(lower=code.lower(), upper=code.upper())
+                 for one in HTTP_PROXY_POOL_COUNTRY_SOURCES)
+
 
 async def http_proxy_pool_fetch(sources: tuple = HTTP_PROXY_POOL_SOURCES,
                                 limit: int = 0) -> dict:

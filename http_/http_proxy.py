@@ -58,6 +58,7 @@
 разбирается отдельно и называется словами.
 """
 
+import asyncio
 import time
 from urllib.parse import quote, unquote
 
@@ -91,6 +92,20 @@ HTTP_PROXY_CHECK_TIMEOUT = 15.0
 # сервис проверки близко и отвечает быстро, а чужой магазин через бесплатный
 # выход отдаёт главную и за пятнадцать секунд — и при этом совершенно жив.
 HTTP_PROXY_REACH_TIMEOUT = 25.0
+
+# Куда ходим за страной адреса. ⚠ Batch-метод: сто адресов за один поход.
+# По одному это сто походов, и бесплатная служба отвечает отказом раньше, чем
+# мы закончим.
+HTTP_PROXY_COUNTRY_URL = 'http://ip-api.com/batch?fields=status,countryCode,query,isp'
+
+# Сколько адресов в пачке — предел самой службы.
+HTTP_PROXY_COUNTRY_BATCH = 100
+
+# Пауза между пачками. ⚠ Бесплатный предел — 15 запросов в минуту; меньше
+# четырёх секунд, и остаток списка приходит отказом.
+HTTP_PROXY_COUNTRY_NAP = 4.2
+
+HTTP_PROXY_COUNTRY_TIMEOUT = 30.0
 
 # Куда ходим за заголовками. ⚠ Отдельная служба от `HTTP_PROXY_CHECK_URL`, и это
 # не дубль: та отвечает на вопрос «каким адресом нас видят», эта — «что ещё
@@ -484,6 +499,70 @@ async def http_proxy_reach(url: str, target: str,
     return {'ok': ok, 'status': code, 'ms': _ms(started),
             'bytes': len(response.content),
             'error': '' if ok else f'сайт ответил {code}'}
+
+
+async def http_proxy_country(ips: list,
+                             timeout: float = HTTP_PROXY_COUNTRY_TIMEOUT) -> dict:
+    """Страна и провайдер для пачки адресов: `{ip: {'country', 'isp'}}`.
+
+    Args:
+        ips: адреса (без портов). Повторы и мусор отсеиваются сами.
+        timeout: предел ожидания на пачку.
+
+    Returns:
+        dict: адрес → `{'country': 'UA', 'isp': 'Kyivstar'}`. Не узнанные
+        адреса в ответе просто отсутствуют — пустая строка значила бы «страна
+        неизвестна», а это другое утверждение, чем «не спрашивали».
+
+    ⚠⚠ ЗАЧЕМ. Проверка анонимности отвечает «каким адресом нас видят», но не
+    «откуда этот адрес». Между тем для работы это разные вопросы: украинскому
+    магазину заказ из Эквадора виден сразу, и никакой отпечаток браузера этого
+    не прикроет. Живой случай: в реестре две тысячи адресов стояли с меткой
+    `UA`, а на поверку оказались мексиканскими, парагвайскими и индонезийскими
+    — метку ставили при заведении, по стране фильтра, а не по самому адресу.
+
+    ⚠ Спрашиваем ПАЧКОЙ: сто адресов за один поход. По одному это сто походов,
+    и бесплатная служба отвечает на них отказом раньше, чем мы закончим.
+
+    ⚠ **Ничего не бросает.** Зовут по всему реестру, и отказ службы — не повод
+    ронять проверку прокси: тот же договор, что у `http_proxy_check`.
+    """
+    rows = []
+    for one in (ips or []):
+        host = str(one or '').split(':')[0].strip()
+        if host and host not in rows:
+            rows.append(host)
+    if not rows:
+        return {}
+
+    found = {}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for at in range(0, len(rows), HTTP_PROXY_COUNTRY_BATCH):
+            part = rows[at:at + HTTP_PROXY_COUNTRY_BATCH]
+            try:
+                response = await client.post(
+                    HTTP_PROXY_COUNTRY_URL,
+                    json=[{'query': host} for host in part])
+                response.raise_for_status()
+                body = response.json()
+            except Exception as error:  # noqa: BLE001 — см. докстринг
+                logger_info(f'страна адресов: не ответили — {_why(error)}')
+                continue
+
+            for row in body or []:
+                if str(row.get('status') or '') != 'success':
+                    continue
+                found[row['query']] = {
+                    'country': str(row.get('countryCode') or '').upper()[:2],
+                    'isp': str(row.get('isp') or '')[:190],
+                }
+
+            # ⚠ Пауза между пачками: бесплатный предел — 15 запросов в минуту,
+            # и без неё остаток списка приходит отказом.
+            if at + HTTP_PROXY_COUNTRY_BATCH < len(rows):
+                await asyncio.sleep(HTTP_PROXY_COUNTRY_NAP)
+
+    return found
 
 
 # Отказы, которые случаются чаще прочих, — словами. Остальные показываются
