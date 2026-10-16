@@ -91,6 +91,45 @@ IMAGE_FILM_HEIGHT = 0
 # а фотографии товара начинают полосить.
 IMAGE_FILM_COLORS = 128
 
+# Заставка первым кадром: по ней видно, где плёнка начинается.
+#
+# ⚠⚠ Без неё зациклённый GIF читается неверно. Кадры идут по кругу, и человек
+# почти всегда попадает в середину: он видит заполненную форму и считает её
+# началом работы, а первые шаги принимает за продолжение. Тёмный кадр с одним
+# словом разрывает круг — место старта видно, не вглядываясь.
+IMAGE_FILM_TITLE = 'Старт…'
+
+# Заставка латиницей — для систем, где кириллического шрифта нет вовсе
+# (`font_pick` вернёт встроенный, а он знает только латиницу). ⚠ Лучше, чем
+# ряд пустых прямоугольников: те выглядят поломкой, а не подписью.
+IMAGE_FILM_TITLE_LATIN = 'Start...'
+
+# Сколько держать заставку. ⚠ Дольше обычного кадра: её читают, а не
+# просматривают, и мелькнувшая за 900 мс надпись роли не играет.
+IMAGE_FILM_TITLE_MS = 1500
+
+# Ниже этой отметки надпись заставки не опускается, даже если кадр длиннее.
+#
+# ⚠⚠ Кадр полной страницы бывает в две-три тысячи точек, и «по центру» на нём
+# — это тысяча двести сверху. В списке плёнки показывают превью, обрезанное
+# по верху: надпись в геометрическом центре в него не попадает вовсе, и
+# заставка выглядит пустой тёмной плиткой. Короткий кадр по-прежнему получает
+# честную середину — потолок срабатывает только на длинных.
+IMAGE_FILM_TITLE_Y_MAX = 360
+
+# Цвета заставки и полосы с номером шага: тёмный фон, белый текст.
+IMAGE_FILM_DARK = (30, 41, 59)
+IMAGE_FILM_LIGHT = (255, 255, 255)
+
+# Высота полосы с номером шага, в долях ширины кадра. ⚠ В долях, а не в
+# точках: плёнку собирают и в 600, и в 1280 — полоса в 24 точки на широком
+# кадре выглядит ниткой.
+IMAGE_FILM_BADGE_PART = 0.04
+
+# Насколько кегль подписи меньше полосы. ⚠ Не впритык: у букв есть выносные
+# элементы («Ц», «р»), и текст в полную высоту полосы обрезается ими.
+IMAGE_FILM_BADGE_FIT = 0.72
+
 
 def image_film_same(before: bytes, after: bytes,
                     tolerance: int = IMAGE_FILM_TOLERANCE) -> bool:
@@ -123,7 +162,9 @@ def image_film_same(before: bytes, after: bytes,
 
 def image_film_gif(frames: list, out: str, ms: int = IMAGE_FILM_FRAME_MS,
                    width: int = IMAGE_FILM_WIDTH,
-                   height: int = IMAGE_FILM_HEIGHT) -> dict:
+                   height: int = IMAGE_FILM_HEIGHT,
+                   labels: list | None = None,
+                   title: str = IMAGE_FILM_TITLE) -> dict:
     """Собрать GIF из кадров по порядку; вернуть, что получилось.
 
     Args:
@@ -132,6 +173,9 @@ def image_film_gif(frames: list, out: str, ms: int = IMAGE_FILM_FRAME_MS,
         ms: сколько держать кадр.
         width: до какой ширины ужимать.
         height: потолок высоты; `0` — не резать (умолчание, см. шапку).
+        labels: подпись каждого кадра — обычно номер шага. Короче списка
+            кадров или пусто — недостающие подписываются «кадр N».
+        title: заставка первым кадром; пустая строка — без неё.
 
     Returns:
         `{'frames', 'bytes', 'path', 'error'}`. Кадров меньше двух — файл не
@@ -144,6 +188,10 @@ def image_film_gif(frames: list, out: str, ms: int = IMAGE_FILM_FRAME_MS,
     ⚠ Последний кадр держится дольше (`IMAGE_FILM_LAST_MS`): на нём итог, и
     без паузы плёнка возвращается к началу ровно тогда, когда на него
     посмотрели.
+
+    ⚠⚠ Заставка в счёт кадров НЕ идёт: `frames` в ответе — сколько снято, а
+    не сколько картинок в файле. Иначе число кадров у плёнки и у прогона
+    расходились бы на единицу, и сверить их стало бы нечем.
     """
     if len(frames or []) < 2:
         return {'frames': len(frames or []), 'bytes': 0, 'path': '',
@@ -164,16 +212,30 @@ def image_film_gif(frames: list, out: str, ms: int = IMAGE_FILM_FRAME_MS,
     # ⚠⚠ Все кадры одной высоты: GIF кладёт разные ДРУГ НА ДРУГА, и короткий
     # показывается с хвостом предыдущего. Как именно приводим — в `_film_align`.
     shots = _film_align(shots)
+    taken = len(shots)
 
-    # ⚠ Длительность списком, а не числом: у последнего кадра она своя.
-    hold = [ms] * (len(shots) - 1) + [IMAGE_FILM_LAST_MS]
+    # ⚠ Подпись рисуется ПОСЛЕ выравнивания и ДО палитры: после — чтобы
+    # полоса легла по общей ширине, до — чтобы её цвета попали в палитру
+    # кадра, а не подменились ближайшими.
+    for at, shot in enumerate(shots):
+        _film_badge(shot, _film_label(labels, at))
+
+    if title:
+        shots.insert(0, _film_title(shots[0].size, title))
+
+    shots = _film_palette(shots)
+
+    # ⚠ Длительность списком, а не числом: заставка и последний кадр держатся
+    # дольше прочих — первую читают, на втором итог.
+    hold = ([IMAGE_FILM_TITLE_MS] if title else []) \
+        + [ms] * (taken - 1) + [IMAGE_FILM_LAST_MS]
 
     path = pathlib.Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
     shots[0].save(path, save_all=True, append_images=shots[1:],
                   duration=hold, loop=0, optimize=True)
 
-    return {'frames': len(shots), 'bytes': path.stat().st_size,
+    return {'frames': taken, 'bytes': path.stat().st_size,
             'path': str(path), 'error': ''}
 
 
@@ -218,7 +280,7 @@ def _hamming(one: int, two: int) -> int:
 
 
 def _film_align(shots: list) -> list:
-    """Привести кадры к общей высоте; перевести в палитру.
+    """Привести кадры к общей высоте; цвет остаётся полным (RGB).
 
     ⚠⚠ Без общей высоты GIF показывает хвосты: кадры разного размера он кладёт
     ДРУГ НА ДРУГА, и после высокого у низкого снизу остаётся чужая картинка.
@@ -233,8 +295,9 @@ def _film_align(shots: list) -> list:
     Кадр ниже дотягивается белым полем снизу: там подвал страницы, и поле
     читается как её продолжение.
 
-    ⚠ Палитра считается ПОСЛЕ выравнивания: иначе у кадров разный набор
-    цветов, и Pillow применяет к плёнке палитру первого — остальные плывут.
+    ⚠ В палитру здесь НЕ переводим: поверх кадра ещё рисуется полоса с
+    номером шага, и её цвета обязаны попасть в палитру вместе со всем
+    остальным (`_film_palette`).
     """
     image = _pillow()
     heights = sorted(one.height for one in shots)
@@ -252,10 +315,101 @@ def _film_align(shots: list) -> list:
             field.paste(one, ((wide - one.width) // 2, 0))
             one = field
 
-        out.append(one.convert('P', palette=image.ADAPTIVE,
-                               colors=IMAGE_FILM_COLORS))
+        out.append(one if one.mode == 'RGB' else one.convert('RGB'))
 
     return out
+
+
+def _film_palette(shots: list) -> list:
+    """Кадры в палитру GIF — последним действием, когда всё нарисовано.
+
+    ⚠⚠ Считается ПОСЛЕ выравнивания и подписей: иначе у кадров разный набор
+    цветов, Pillow применяет к плёнке палитру первого, и остальные плывут.
+    """
+    image = _pillow()
+
+    return [one.convert('P', palette=image.ADAPTIVE,
+                        colors=IMAGE_FILM_COLORS) for one in shots]
+
+
+def _film_label(labels, at: int) -> str:
+    """Подпись кадра: что передали или «кадр N» по порядку.
+
+    ⚠ Своя нумерация — запасная, а не основная. Кадр снимается только тогда,
+    когда шаг что-то изменил, и «кадр 3» это обычно седьмой шаг сценария:
+    номер шага знает тот, кто снимал, и передаёт его списком.
+    """
+    given = labels[at] if labels and at < len(labels) else ''
+
+    return str(given).strip() or f'кадр {at + 1}'
+
+
+def _film_badge(shot, text: str) -> None:
+    """Нарисовать поверх кадра тонкую тёмную полосу с подписью; правит на месте.
+
+    ⚠⚠ Полоса НАКЛАДЫВАЕТСЯ на кадр, а не добавляется сверху. Добавленная
+    меняла бы высоту, а она у всех кадров общая и уже посчитана по медиане —
+    пришлось бы считать заново, и титр с кадрами разошёлся бы на её толщину.
+    Жертвуем верхними двумя десятками точек: там шапка сайта, и она
+    повторяется на каждом кадре.
+
+    ⚠ Отказ молчит: подпись — удобство, а кадр без неё остаётся кадром.
+    Ронять сборку плёнки из-за отсутствующего шрифта нельзя.
+    """
+    try:
+        from PIL import ImageDraw
+
+        from font_.font_pick import font_covers, font_pick
+    except ImportError:
+        return
+
+    high = max(14, round(shot.width * IMAGE_FILM_BADGE_PART))
+    font = font_pick(max(9, round(high * IMAGE_FILM_BADGE_FIT)), text)
+    if not font_covers(font, text):
+        return
+
+    draw = ImageDraw.Draw(shot)
+    draw.rectangle((0, 0, shot.width, high), fill=IMAGE_FILM_DARK)
+    draw.text((shot.width // 2, high // 2), text, font=font,
+              fill=IMAGE_FILM_LIGHT, anchor='mm')
+
+
+def _film_title(size: tuple, text: str):
+    """Заставка: тёмный кадр того же размера с текстом посередине.
+
+    ⚠⚠ Размер БЕРЁТСЯ У КАДРОВ, а не задаётся. Кадр другого размера GIF кладёт
+    поверх предыдущего, не стирая его: заставка в полэкрана оставила бы вокруг
+    себя куски первой страницы.
+
+    ⚠⚠ Надпись не опускается ниже `IMAGE_FILM_TITLE_Y_MAX`: на кадре в две
+    тысячи точек геометрический центр не попадает в превью списка, и заставка
+    выглядит пустой тёмной плиткой. На коротком кадре центр честный.
+
+    ⚠ Нет кириллического шрифта — пишем латиницей (`IMAGE_FILM_TITLE_LATIN`):
+    ряд пустых прямоугольников выглядит поломкой, а не подписью.
+    """
+    image = _pillow()
+    wide, tall = size
+    field = image.new('RGB', (wide, tall), IMAGE_FILM_DARK)
+
+    try:
+        from PIL import ImageDraw
+
+        from font_.font_pick import font_covers, font_pick
+    except ImportError:
+        return field
+
+    say = str(text)
+    font = font_pick(max(16, wide // 10), say)
+    if not font_covers(font, say):
+        say = IMAGE_FILM_TITLE_LATIN
+        font = font_pick(max(16, wide // 10), say)
+
+    ImageDraw.Draw(field).text(
+        (wide // 2, min(tall // 2, IMAGE_FILM_TITLE_Y_MAX)), say, font=font,
+        fill=IMAGE_FILM_LIGHT, anchor='mm')
+
+    return field
 
 
 def _film_fit(shot, width: int, height: int):

@@ -237,6 +237,11 @@ BROWSER_SCENARIO_FILM_DIR = 'data/browser/film'
 # форма здесь стоила бы чужого файла.
 BROWSER_SCENARIO_FILM_OK = re.compile(r'^\d+\.gif$')
 
+# Как подписан кадр плёнки. ⚠ Шаблоном, а не склейкой по месту: подпись
+# попадает в картинку, и менять её формулировку приходится в одном месте, а
+# не искать по коду, где собралась строка.
+BROWSER_SCENARIO_FILM_LABEL = 'Шаг {no}'
+
 
 async def browser_scenario_film_path(run_id: int) -> str:
     """Файл плёнки прогона; её нет — пустая строка.
@@ -258,13 +263,16 @@ async def browser_scenario_film_path(run_id: int) -> str:
     return str(whole) if whole.is_file() else ''
 
 
-async def browser_scenario_film_save(run_id: int, frames: list) -> dict:
+async def browser_scenario_film_save(run_id: int, frames: list,
+                                     steps: list | None = None) -> dict:
     """Склеить кадры в плёнку прогона и записать её к нему.
 
     Args:
         run_id: прогон, которому плёнка принадлежит. Он же имя файла: номер
             уникален по построению, и двух плёнок с одним именем не бывает.
         frames: кадры строками `data:`, как их отдаёт контейнер.
+        steps: номер шага на каждый кадр, тем же порядком (`frame_steps` из
+            ответа прогона). Пусто — кадры подпишутся своим порядком.
 
     Returns:
         `{'film', 'frames'}`; плёнки не вышло — нули.
@@ -278,7 +286,7 @@ async def browser_scenario_film_save(run_id: int, frames: list) -> dict:
     ⚠ Отказ не роняет работу и не правит статус прогона: плёнка —
     свидетельство о нём, а не он сам.
     """
-    return await _film_save(int(run_id), frames or [])
+    return await _film_save(int(run_id), frames or [], steps or [])
 
 
 async def browser_scenario_total(run_id: int, total_ms: int) -> None:
@@ -385,7 +393,8 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
     # записанного прогона класть её некуда. Отказ здесь молчит: плёнка —
     # свидетельство о работе, а не сама работа.
     if film and result.get('frames'):
-        await _film_save(int(result['run_id']), result['frames'])
+        await _film_save(int(result['run_id']), result['frames'],
+                         result.get('frame_steps') or [])
 
     return result
 
@@ -464,7 +473,7 @@ def _json_load(value, default):
     return value if value is not None else default
 
 
-async def _film_save(run_id: int, frames: list) -> dict:
+async def _film_save(run_id: int, frames: list, steps: list | None = None) -> dict:
     """Склеить кадры прогона в GIF и записать его имя к прогону.
 
     Args:
@@ -482,15 +491,21 @@ async def _film_save(run_id: int, frames: list) -> dict:
     работе, а не сама работа. Сценарий, прошедший успешно, не должен
     становиться неудачным из-за несобравшегося GIF.
     """
-    shots = [_film_bytes(one) for one in (frames or [])]
-    shots = [one for one in shots if one]
-    if len(shots) < 2:
+    # ⚠ Битый кадр выбрасывается ВМЕСТЕ со своей подписью: иначе подписи
+    # съезжают, и кадр седьмого шага подписан четвёртым — хуже, чем без
+    # подписи вовсе.
+    pairs = [(_film_bytes(one), _film_label(steps, at))
+             for at, one in enumerate(frames or [])]
+    pairs = [one for one in pairs if one[0]]
+    if len(pairs) < 2:
         return {'film': '', 'frames': 0}
 
+    shots = [one for one, _ in pairs]
     name = f'{int(run_id)}.gif'
     whole = pathlib.Path(project_root()) / BROWSER_SCENARIO_FILM_DIR / name
     try:
-        got = image_film_gif(shots, str(whole))
+        got = image_film_gif(shots, str(whole),
+                             labels=[label for _, label in pairs])
     except Exception as fault:  # noqa: BLE001 — плёнка не стоит прогона
         logger_info(f'[browser] плёнка прогона {run_id} не собралась: {fault}')
 
@@ -505,6 +520,18 @@ async def _film_save(run_id: int, frames: list) -> dict:
             '  WHERE `id` = %s', (name, int(got['frames']), int(run_id)))
 
     return {'film': name, 'frames': int(got['frames'])}
+
+
+def _film_label(steps, at: int) -> str:
+    """Подпись кадра: «шаг N», если номер шага известен, иначе пусто.
+
+    ⚠ Пусто — не беда: плёнка подпишет кадр его порядком («кадр 3»). Номер
+    шага знает только тот, кто снимал, и приходит он отдельным списком —
+    кадры снимаются не на каждом шаге, и порядок кадра шагу не равен.
+    """
+    no = steps[at] if steps and at < len(steps) else 0
+
+    return BROWSER_SCENARIO_FILM_LABEL.format(no=int(no)) if no else ''
 
 
 def _film_bytes(uri: str) -> bytes:

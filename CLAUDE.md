@@ -61,7 +61,8 @@ namespace-папок, которые проекты импортируют на�
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
 | `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
 | `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
-| `font_/` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
+| `font_/font_.py` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
+| `font_/font_pick.py` | `docs/font_pick.md` — шрифт, которым можно написать вот этот текст; ⚠⚠ в slim-образе шрифтов нет, кириллица выходит прямоугольниками |
 | `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона, проверка шва (поиск спокойной полосы, стороны прямоугольника), сравнение пары кадров, ведомость цветов разметки |
 | `image_/image_scan.py` | `docs/image_scan.md` — полосы тона по разрезу, строки и шаг, габарит глифов |
 | `image_/image_fix.py` | `docs/image_fix.md` — заплатки линейной интерполяцией с кромок, двумерная зачистка со стеклом и зерном (inpaint), штрих альфой из яркости |

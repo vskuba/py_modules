@@ -153,6 +153,9 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     failed_no = 0
     final_url = ''
     reel: list = []
+    # ⚠ Номера шагов, которым отвечают кадры: кадр снимается не на каждом
+    # шаге, и порядок кадров шагам не равен (см. `_film_take`).
+    marks: list = []
 
     try:
         for index, step in enumerate(scenario.steps, start=1):
@@ -162,7 +165,7 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
             # ⚠ Кадр снимается и у упавшего шага: именно он показывает, на чём
             # сценарий сломался, — а это и есть главный вопрос к плёнке.
             if film:
-                await _film_take(page, reel)
+                await _film_take(page, reel, marks, index)
 
             if record['name'] and record['ok']:
                 # `data` есть только у сбора записей — там записи, а в `value`
@@ -193,6 +196,10 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
         # ⚠ Кадры строками `data:`, как и прочие картинки слоя: ответ едет по
         # HTTP, и байты в JSON не положишь (`browser_capture.py`).
         'frames': [_film_uri(shot) for shot in reel],
+        # ⚠ Номер шага на каждый кадр, тем же порядком: по ним плёнку
+        # подписывают. Пустой список у прогона без кадров — не отсутствие
+        # данных, а отсутствие кадров.
+        'frame_steps': list(marks),
         'status': status,
         'session_id': entry['session_id'],
         'session_kept': not own_session or keep_session,
@@ -217,7 +224,8 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
 BROWSER_SCENARIO_FILM_MAX = 24
 
 
-async def _film_take(page, film: list, quality: int = 55) -> None:
+async def _film_take(page, film: list, marks: list, step_no: int,
+                     quality: int = 55) -> None:
     """Снять кадр шага в плёнку, если он что-то изменил на странице.
 
     ⚠⚠ Страница ЦЕЛИКОМ (`full_page`). Вьюпорт показывает только верх: форма
@@ -231,6 +239,11 @@ async def _film_take(page, film: list, quality: int = 55) -> None:
     ⚠⚠ Отказ снимка не роняет прогон и даже не попадает в трассу: плёнка —
     свидетельство о работе, а не сама работа. Страница могла уйти на другой
     адрес, закрыться, зависнуть — прогон разберётся с этим сам, своими шагами.
+
+    ⚠ Рядом с кадром кладётся НОМЕР ШАГА, после которого он снят. Кадр
+    снимается только тогда, когда шаг что-то изменил, и порядковый номер
+    кадра шагу не равен: третий кадр — обычно седьмой шаг. Без этой пары
+    подписать плёнку нечем, а подпись и есть то, ради чего её смотрят.
     """
     if len(film) >= BROWSER_SCENARIO_FILM_MAX:
         return
@@ -243,6 +256,7 @@ async def _film_take(page, film: list, quality: int = 55) -> None:
 
     if shot and not image_film_same(film[-1] if film else b'', shot):
         film.append(shot)
+        marks.append(int(step_no))
 
 
 def _film_uri(shot: bytes) -> str:
