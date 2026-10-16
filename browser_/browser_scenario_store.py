@@ -10,7 +10,6 @@
 переданные значения не стирают сохранённых.
 """
 
-import base64
 import json
 import pathlib
 import re
@@ -24,6 +23,7 @@ from browser_.browser_upstream import (browser_upstream_request,
                                        BROWSER_UPSTREAM_SCENARIO_TIMEOUT)
 from browser_.browser_site_variable import browser_site_variable_values
 from image_.image_film import image_film_gif
+from image_.image_uri import image_uri_bytes
 from logging_.logging_ import logger_info
 from mysql_.mysql_ import mysql_get_db_async
 from project_.project_ import project_root
@@ -584,7 +584,7 @@ async def _film_save(run_id: int, frames: list, steps: list | None = None) -> di
     # ⚠ Битый кадр выбрасывается ВМЕСТЕ со своей подписью: иначе подписи
     # съезжают, и кадр седьмого шага подписан четвёртым — хуже, чем без
     # подписи вовсе.
-    pairs = [(_film_bytes(one), _film_label(steps, at))
+    pairs = [(image_uri_bytes(one), _film_label(steps, at))
              for at, one in enumerate(frames or [])]
     pairs = [one for one in pairs if one[0]]
     if len(pairs) < 2:
@@ -622,22 +622,6 @@ def _film_label(steps, at: int) -> str:
     no = steps[at] if steps and at < len(steps) else 0
 
     return BROWSER_SCENARIO_FILM_LABEL.format(no=int(no)) if no else ''
-
-
-def _film_bytes(uri: str) -> bytes:
-    """Кадр из строки `data:` байтами; не разобралось — пусто.
-
-    ⚠ Строка приходит и как `data:image/jpeg;base64,…`, и голым base64 —
-    зависит от версии контейнера. Берём хвост после запятой в обоих случаях.
-    """
-    text = str(uri or '')
-    if not text:
-        return b''
-
-    try:
-        return base64.b64decode(text.split(',', 1)[-1])
-    except Exception:  # noqa: BLE001 — кадр не стоит прогона
-        return b''
 
 
 async def _run_save(scenario_id: int, result: dict) -> int:

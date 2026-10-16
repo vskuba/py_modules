@@ -18,8 +18,8 @@
 экономии трети объёма дороже, чем эту треть заплатить.
 """
 
-import base64
 
+from image_.image_uri import image_uri_bytes
 from browser_.browser_upstream import browser_upstream_request
 
 # Сколько ждём кадр. Снимок большой страницы занимает секунды, а не миллисекунды:
@@ -59,7 +59,7 @@ async def browser_session_shot(session_id: str, selector: str = '',
         # Строка приходит и как `data:image/png;base64,…`, и голым base64 —
         # зависит от версии контейнера. Берём хвост после запятой в обоих
         # случаях: у голой строки запятой нет, и `split` вернёт её целиком.
-        return base64.b64decode(image.split(',')[-1])
+        return image_uri_bytes(image)
     except (ValueError, TypeError):
         return b''
 

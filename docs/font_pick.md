@@ -6,14 +6,14 @@
 логе и не в тесте, а на готовом кадре, когда он уже уехал человеку.
 
 ```python
-from font_.font_pick import font_pick, font_covers
+from font_.font_pick import font_pick, font_pick_covers
 
 font = font_pick(28, 'Шаг 7')
-text = 'Шаг 7' if font_covers(font, 'Шаг 7') else 'Step 7'
+text = 'Шаг 7' if font_pick_covers(font, 'Шаг 7') else 'Step 7'
 draw.text((x, y), text, font=font, fill='white', anchor='mm')
 ```
 
-Два вопроса — две функции: `font_pick` отвечает «чем рисовать», `font_covers` —
+Два вопроса — две функции: `font_pick` отвечает «чем рисовать», `font_pick_covers` —
 «выйдет ли читаемо». Второй нужен потому, что первый **всегда** возвращает
 шрифт: отказ рисовать кадр хуже подписи латиницей.
 
@@ -60,12 +60,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ```
 
 Полтора мегабайта. Без неё `font_pick` честно вернёт встроенный шрифт, а
-`font_covers` — `False`, и зовущий сам решит: писать латиницей или не писать
+`font_pick_covers` — `False`, и зовущий сам решит: писать латиницей или не писать
 вовсе.
 
 ## Грабли
 
-1. **Рисовать, не спросив `font_covers`** — пустые прямоугольники вместо
+1. **Рисовать, не спросив `font_pick_covers`** — пустые прямоугольники вместо
    подписи, видно только на готовой картинке
 2. **`.tobytes()` у маски** — `AttributeError` внутри `try`, и подпись молча
    пропадает везде

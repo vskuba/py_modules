@@ -6,10 +6,10 @@
 готовом кадре, когда он уже уехал человеку.
 
 ```python
-from font_.font_pick import font_pick, font_covers
+from font_.font_pick import font_pick, font_pick_covers
 
 font = font_pick(28, 'Шаг 7')
-draw.text((x, y), 'Шаг 7' if font_covers(font, 'Шаг 7') else 'Step 7', font=font)
+draw.text((x, y), 'Шаг 7' if font_pick_covers(font, 'Шаг 7') else 'Step 7', font=font)
 ```
 
 ## ⚠⚠ Покрытие проверяется РАСТРОМ, а не таблицей cmap
@@ -76,7 +76,7 @@ def font_pick(size: int, text: str = ''):
         Объект шрифта Pillow. **Всегда** — не нашлось подходящего, вернётся
         встроенный: подпись латиницей лучше отказа рисовать кадр.
 
-    ⚠⚠ Проверяйте результат `font_covers`, если текст не латинский. Встроенный
+    ⚠⚠ Проверяйте результат `font_pick_covers`, если текст не латинский. Встроенный
     шрифт кириллицу не знает и нарисует пустые прямоугольники — молча, и
     увидите вы это на готовой картинке.
 
@@ -87,12 +87,12 @@ def font_pick(size: int, text: str = ''):
 
     for path in FONT_PICK_PATHS:
         font = _font_load(path, size)
-        if font and (not text or font_covers(font, text)):
+        if font and (not text or font_pick_covers(font, text)):
             return font
 
     for path in _font_scan():
         font = _font_load(path, size)
-        if font and (not text or font_covers(font, text)):
+        if font and (not text or font_pick_covers(font, text)):
             return font
 
     # ⚠ `size` у встроенного поддерживается с Pillow 10.1; на старой версии
@@ -103,7 +103,7 @@ def font_pick(size: int, text: str = ''):
         return font_mod.load_default()
 
 
-def font_covers(font, text: str) -> bool:
+def font_pick_covers(font, text: str) -> bool:
     """Умеет ли шрифт написать этот текст; `False` — будут прямоугольники.
 
     ⚠ Сравнение растров, а не таблицы символов: см. шапку модуля. Пробелы и

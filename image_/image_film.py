@@ -369,13 +369,13 @@ def _film_badge(shot, text: str) -> None:
     try:
         from PIL import ImageDraw
 
-        from font_.font_pick import font_covers, font_pick
+        from font_.font_pick import font_pick_covers, font_pick
     except ImportError:
         return
 
     high = max(14, round(shot.width * IMAGE_FILM_BADGE_PART))
     font = font_pick(max(9, round(high * IMAGE_FILM_BADGE_FIT)), text)
-    if not font_covers(font, text):
+    if not font_pick_covers(font, text):
         return
 
     draw = ImageDraw.Draw(shot)
@@ -405,13 +405,13 @@ def _film_title(size: tuple, text: str):
     try:
         from PIL import ImageDraw
 
-        from font_.font_pick import font_covers, font_pick
+        from font_.font_pick import font_pick_covers, font_pick
     except ImportError:
         return field
 
     say = str(text)
     font = font_pick(max(16, wide // 10), say)
-    if not font_covers(font, say):
+    if not font_pick_covers(font, say):
         say = IMAGE_FILM_TITLE_LATIN
         font = font_pick(max(16, wide // 10), say)
 

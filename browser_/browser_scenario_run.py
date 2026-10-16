@@ -10,13 +10,13 @@
 самопочинки и напишет задачу на переписывание сценария.
 """
 
-import base64
 import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from image_.image_film import image_film_same
+from image_.image_uri import image_uri_make
 from logging_.logging_ import logger_info
 
 from browser_.browser_api import browser_api_auth
@@ -195,7 +195,7 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     return {
         # ⚠ Кадры строками `data:`, как и прочие картинки слоя: ответ едет по
         # HTTP, и байты в JSON не положишь (`browser_capture.py`).
-        'frames': [_film_uri(shot) for shot in reel],
+        'frames': [image_uri_make(shot) for shot in reel],
         # ⚠ Номер шага на каждый кадр, тем же порядком: по ним плёнку
         # подписывают. Пустой список у прогона без кадров — не отсутствие
         # данных, а отсутствие кадров.
@@ -257,11 +257,6 @@ async def _film_take(page, film: list, marks: list, step_no: int,
     if shot and not image_film_same(film[-1] if film else b'', shot):
         film.append(shot)
         marks.append(int(step_no))
-
-
-def _film_uri(shot: bytes) -> str:
-    """Кадр плёнки строкой `data:` — в том же виде, что и прочие картинки слоя."""
-    return 'data:image/jpeg;base64,' + base64.b64encode(shot).decode()
 
 
 async def _session_take(session_id: str, name: str, proxy: str = '',
