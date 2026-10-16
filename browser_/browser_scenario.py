@@ -227,6 +227,17 @@ class BrowserScenarioStep(BaseModel):
     # сценария не знает.
     shot: str = Field('', max_length=120,
                       description='Снять кадр после шага; текст — подпись')
+    # ⚠⚠ ЧТО снимать, а не только как подписать. Кадр страницы целиком
+    # отвечает на вопрос «что происходит», но плохо отвечает на «что
+    # заполнилось»: длинная форма в превью ужимается так, что четыре кадра
+    # разных шагов выглядят одинаково — белый верх, тёмный низ. Поймано
+    # глазами на живых кадрах чекаута.
+    #
+    # ⚠ Пусто — страница целиком, как и было: признак добавочный, и сценарии
+    # без него работают по-прежнему.
+    shot_selector: str = Field(
+        '', max_length=400,
+        description='Что снимать в кадре; пусто — страницу целиком')
     fields: list[BrowserScenarioField] = Field(
         default_factory=list, description='Только у extract_rows: что брать внутри строки')
 
@@ -351,7 +362,11 @@ def browser_scenario_pace(steps: list, low: int = BROWSER_SCENARIO_PACE_MIN_MS,
 
 
 def browser_scenario_stages(steps: list) -> list:
-    """Разрезать шаги на отрезки по признаку `shot`: `[(шаги, подпись), …]`.
+    """Разрезать шаги на отрезки по признаку `shot`.
+
+    Returns:
+        `[(шаги, подпись, селектор), …]`. Селектор — что снимать в кадре;
+        пусто означает «страницу целиком».
 
     Форма магазина редко заполняется в один приём: страница товара, страница
     доставки, страница оплаты. Один кадр в конце показывает последнюю, и
@@ -375,11 +390,15 @@ def browser_scenario_stages(steps: list) -> list:
         mark = (step.get('shot') if isinstance(step, dict)
                 else getattr(step, 'shot', ''))
         if mark:
-            stages.append((batch, str(mark)))
+            # ⚠ Селектор кадра едет вместе с подписью: вызывающий снимает по
+            # нему и не должен знать, из какого шага он взялся.
+            where = (step.get('shot_selector') if isinstance(step, dict)
+                     else getattr(step, 'shot_selector', ''))
+            stages.append((batch, str(mark), str(where or '')))
             batch = []
 
     if batch:
-        stages.append((batch, ''))
+        stages.append((batch, '', ''))
 
     return stages
 
