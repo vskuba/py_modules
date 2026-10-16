@@ -58,12 +58,32 @@ BROWSER_CAPTURE_FULL_MAX_HEIGHT = 8000
 # ⚠ Липкое становится обычным (`static`), плавающее — прячется. Разница не
 # прихоть: липкая шапка в потоке встаёт туда, где ей и место (вверх страницы),
 # а плавающая кнопка, попав в поток, раздвинет вёрстку и сдвинет всё под собой.
+#
+# ⚠⚠ КРУПНОЕ ПЛАВАЮЩЕЕ НЕ ТРОГАЕМ, и это главное здесь. Модалка — тоже
+# `fixed`, и пряталась вместе с шапками: кадр заказа «форма заполнена, кнопка
+# не нажата» показывал страницу товара БЕЗ ФОРМЫ — только две кнопки модалки,
+# повисшие поверх (у них своя `visibility`). Подпись обещала форму, кадр её не
+# содержал. Поймано глазами на готовом кадре, в коде этого не видно.
+#
+# Отличаем по размеру: украшение (шапка, плашка cookie, кнопка «наверх») либо
+# тонкое, либо мелкое; модалка крупна по обоим измерениям. Плюс явные признаки
+# диалога — `role=dialog` и `aria-modal`: там, где разметка говорит прямо,
+# гадать по пикселям незачем.
 BROWSER_CAPTURE_FLAT_JS = """
 () => {
+    const win = {w: window.innerWidth || 1, h: window.innerHeight || 1};
+
+    // Содержимое, которое кадр обязан показать: большой блок или явный диалог.
+    const worthy = (node, box) =>
+        node.closest('[role=dialog], [aria-modal=true]') !== null
+        || (box.height > win.h * 0.35 && box.width > win.w * 0.25);
+
     const touched = [];
     document.querySelectorAll('*').forEach(node => {
         const how = getComputedStyle(node).position;
         if (how !== 'sticky' && how !== 'fixed') return;
+
+        if (how === 'fixed' && worthy(node, node.getBoundingClientRect())) return;
 
         touched.push([node, node.style.cssText]);
         if (how === 'sticky') {
