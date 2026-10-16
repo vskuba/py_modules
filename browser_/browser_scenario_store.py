@@ -10,7 +10,10 @@
 переданные значения не стирают сохранённых.
 """
 
+import base64
 import json
+import pathlib
+import re
 import time
 
 from browser_.browser_scenario import (BROWSER_SCENARIO_PACE_MAX_MS,
@@ -20,7 +23,10 @@ from browser_.browser_scenario import (BROWSER_SCENARIO_PACE_MAX_MS,
 from browser_.browser_upstream import (browser_upstream_request,
                                        BROWSER_UPSTREAM_SCENARIO_TIMEOUT)
 from browser_.browser_site_variable import browser_site_variable_values
+from image_.image_film import image_film_gif
+from logging_.logging_ import logger_info
 from mysql_.mysql_ import mysql_get_db_async
+from project_.project_ import project_root
 
 # Сколько жить найденному сценариванию в памяти процесса: исполнитель зовёт его на
 # каждую карточку, а правка сценария — редкость. После сохранения кэш всё равно
@@ -177,17 +183,102 @@ async def browser_scenario_remove(scenario_id: int) -> None:
             browser_scenario_forget(row['name'])
 
 
-async def browser_scenario_runs(scenario_id: int, limit: int = 50, offset: int = 0) -> list:
-    """Журнал прогонов сценария, свежие сверху: статус, шаг, ошибка, трасса, данные."""
+async def browser_scenario_runs(scenario_id: int = 0, limit: int = 50,
+                                offset: int = 0, site_id: int = 0) -> list:
+    """Журнал прогонов, свежие сверху: статус, шаг, ошибка, трасса, плёнка.
+
+    Args:
+        scenario_id: чьи прогоны; ноль — всех сценариев.
+        limit, offset: окно выборки.
+        site_id: только сценарии этой площадки; ноль — любой.
+
+    ⚠⚠ Трасса и собранное приходят целиком, и на длинном сценарии это десятки
+    килобайт на строку. Списком их читают редко (историю смотрят плёнкой), но
+    отдельного «лёгкого» запроса здесь нет намеренно: две выборки за одним
+    столом расходятся составом полей, и потребитель однажды получит не то,
+    что ждал.
+
+    ⚠ Прогоны ВСЕХ сценариев (`scenario_id = 0`) нужны истории: человек
+    смотрит, что происходило на площадке, а не перебирает сценарии по одному.
+    """
+    where, args = [], []
+    if scenario_id:
+        where.append('r.scenario_id = %s')
+        args.append(int(scenario_id))
+    if site_id:
+        where.append('s.site_id = %s')
+        args.append(int(site_id))
+
+    clause = f' WHERE {" AND ".join(where)}' if where else ''
     async with mysql_get_db_async() as db:
         await db.execute(
-            'SELECT id, scenario_id, session_id, status, step_no, error, trace, extract,'
-            '       duration_ms, created_at '
-            '  FROM browser_scenario_run WHERE scenario_id = %s ORDER BY id DESC LIMIT %s, %s',
-            (int(scenario_id), int(offset), int(limit)))
+            'SELECT r.id, r.scenario_id, r.session_id, r.status, r.step_no,'
+            '       r.error, r.trace, r.extract, r.duration_ms, r.created_at,'
+            '       r.film, r.film_frames, s.name AS scenario_name'
+            '  FROM browser_scenario_run r'
+            '  JOIN browser_scenario s ON s.id = r.scenario_id'
+            f'{clause} ORDER BY r.id DESC LIMIT %s, %s',
+            (*args, int(offset), int(limit)))
         rows = await db.fetchall() or []
 
     return [dict(row) for row in rows]
+
+
+# Где лежат плёнки прогонов.
+#
+# ⚠⚠ В каталоге данных проекта, а не рядом с кодом: это данные, их не кладут в
+# репозиторий и чистят отдельно. Имя файла — номер прогона: он уникален по
+# построению, и двух плёнок с одним именем не бывает даже при одновременных
+# прогонах.
+BROWSER_SCENARIO_FILM_DIR = 'data/browser/film'
+
+# Какой формы бывает имя плёнки. ⚠ Имя задаём мы (номер прогона), и всё, что
+# на него не похоже, — отказ: по строке из базы потом отдают файл, и чужая
+# форма здесь стоила бы чужого файла.
+BROWSER_SCENARIO_FILM_OK = re.compile(r'^\d+\.gif$')
+
+
+async def browser_scenario_film_path(run_id: int) -> str:
+    """Файл плёнки прогона; её нет — пустая строка.
+
+    ⚠ Путь собирается ЗДЕСЬ, а не хранится в базе целиком: в базе лежит имя
+    (`<номер>.gif`), и перенос каталога не требует переписывать журнал.
+    """
+    async with mysql_get_db_async() as db:
+        await db.execute('SELECT `film` FROM `browser_scenario_run`'
+                         ' WHERE `id` = %s', (int(run_id),))
+        row = await db.fetchone()
+
+    name = str((row or {}).get('film') or '')
+    if not BROWSER_SCENARIO_FILM_OK.match(name):
+        return ''
+
+    whole = pathlib.Path(project_root()) / BROWSER_SCENARIO_FILM_DIR / name
+
+    return str(whole) if whole.is_file() else ''
+
+
+async def browser_scenario_film_save(run_id: int, frames: list) -> dict:
+    """Склеить кадры в плёнку прогона и записать её к нему.
+
+    Args:
+        run_id: прогон, которому плёнка принадлежит. Он же имя файла: номер
+            уникален по построению, и двух плёнок с одним именем не бывает.
+        frames: кадры строками `data:`, как их отдаёт контейнер.
+
+    Returns:
+        `{'film', 'frames'}`; плёнки не вышло — нули.
+
+    ⚠⚠ Зовёт её ТОТ, КТО ВЕДЁТ СЦЕНАРИЙ ЦЕЛИКОМ. Сам прогон этого сделать не
+    может: его гоняют и пошагово — отрезками по одному шагу, чтобы
+    рассказывать о каждом, — и для хранилища каждый такой вызов отдельный
+    прогон. Собранная там плёнка состояла бы из одного кадра, а их было бы
+    семьдесят одна на карточку. Поймано живьём.
+
+    ⚠ Отказ не роняет работу и не правит статус прогона: плёнка —
+    свидетельство о нём, а не он сам.
+    """
+    return await _film_save(int(run_id), frames or [])
 
 
 async def browser_scenario_execute(scenario: dict, session_id: str = '', variables: dict | None = None,
@@ -235,7 +326,11 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
             'extra_headers': extra_headers or None,
         }, timeout=BROWSER_UPSTREAM_SCENARIO_TIMEOUT)
 
-    await _run_save(int(row['id']), result)
+    # ⚠⚠ Номер прогона уходит в ответ, и это не формальность: по нему
+    # зовущий кладёт плёнку (`browser_scenario_film_save`). Сам прогон её не
+    # собирает — его гоняют и пошагово, отрезками по одному шагу, и плёнка
+    # вышла бы из одного кадра, а записей — семьдесят одна на карточку.
+    result['run_id'] = await _run_save(int(row['id']), result)
 
     # Сломанный сценарий помечается сразу: по метке видно, что чинить, без чтения журнала.
     status = 'broken' if result.get('status') == 'error' else 'active'
@@ -322,8 +417,74 @@ def _json_load(value, default):
     return value if value is not None else default
 
 
-async def _run_save(scenario_id: int, result: dict) -> None:
-    """Кладёт трассу в журнал одной строкой. Секретов в ней нет — контейнер маскирует их до ответа."""
+async def _film_save(run_id: int, frames: list) -> dict:
+    """Склеить кадры прогона в GIF и записать его имя к прогону.
+
+    Args:
+        run_id: номер прогона — он же имя файла.
+        frames: кадры строками `data:`, как их отдал контейнер.
+
+    Returns:
+        `{'film', 'frames'}`; плёнки не вышло — нули.
+
+    ⚠⚠ Склеивает ЭТА сторона, а не контейнер. У контейнера нет ни базы, ни
+    каталога данных проекта: он отдаёт кадры и забывает о них. Здесь же есть
+    и номер прогона, под которым плёнка ляжет.
+
+    ⚠ Отказ не роняет прогон и не правит его статус: плёнка — свидетельство о
+    работе, а не сама работа. Сценарий, прошедший успешно, не должен
+    становиться неудачным из-за несобравшегося GIF.
+    """
+    shots = [_film_bytes(one) for one in (frames or [])]
+    shots = [one for one in shots if one]
+    if len(shots) < 2:
+        return {'film': '', 'frames': 0}
+
+    name = f'{int(run_id)}.gif'
+    whole = pathlib.Path(project_root()) / BROWSER_SCENARIO_FILM_DIR / name
+    try:
+        got = image_film_gif(shots, str(whole))
+    except Exception as fault:  # noqa: BLE001 — плёнка не стоит прогона
+        logger_info(f'[browser] плёнка прогона {run_id} не собралась: {fault}')
+
+        return {'film': '', 'frames': 0}
+
+    if got.get('error'):
+        return {'film': '', 'frames': 0}
+
+    async with mysql_get_db_async() as db:
+        await db.execute(
+            'UPDATE `browser_scenario_run` SET `film` = %s, `film_frames` = %s'
+            '  WHERE `id` = %s', (name, int(got['frames']), int(run_id)))
+
+    return {'film': name, 'frames': int(got['frames'])}
+
+
+def _film_bytes(uri: str) -> bytes:
+    """Кадр из строки `data:` байтами; не разобралось — пусто.
+
+    ⚠ Строка приходит и как `data:image/jpeg;base64,…`, и голым base64 —
+    зависит от версии контейнера. Берём хвост после запятой в обоих случаях.
+    """
+    text = str(uri or '')
+    if not text:
+        return b''
+
+    try:
+        return base64.b64decode(text.split(',', 1)[-1])
+    except Exception:  # noqa: BLE001 — кадр не стоит прогона
+        return b''
+
+
+async def _run_save(scenario_id: int, result: dict) -> int:
+    """Кладёт трассу в журнал одной строкой; возвращает номер записи.
+
+    Секретов в ней нет — контейнер маскирует их до ответа.
+
+    ⚠ Номер нужен плёнке: она ложится файлом с этим именем (`_film_save`), и
+    придумывать ей второй ключ значило бы заводить способ разойтись с
+    журналом.
+    """
     async with mysql_get_db_async() as db:
         await db.execute(
             'INSERT INTO browser_scenario_run '
@@ -340,3 +501,6 @@ async def _run_save(scenario_id: int, result: dict) -> None:
                 int(result.get('duration_ms', 0) or 0),
             )
         )
+        await db.execute('SELECT LAST_INSERT_ID() AS id')
+
+        return int((await db.fetchone())['id'])
