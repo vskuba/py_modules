@@ -213,8 +213,8 @@ async def browser_scenario_runs(scenario_id: int = 0, limit: int = 50,
     async with mysql_get_db_async() as db:
         await db.execute(
             'SELECT r.id, r.scenario_id, r.session_id, r.status, r.step_no,'
-            '       r.error, r.trace, r.extract, r.duration_ms, r.created_at,'
-            '       r.film, r.film_frames, s.name AS scenario_name'
+            '       r.error, r.trace, r.extract, r.duration_ms, r.total_ms,'
+            '       r.created_at, r.film, r.film_frames, s.name AS scenario_name'
             '  FROM browser_scenario_run r'
             '  JOIN browser_scenario s ON s.id = r.scenario_id'
             f'{clause} ORDER BY r.id DESC LIMIT %s, %s',
@@ -279,6 +279,35 @@ async def browser_scenario_film_save(run_id: int, frames: list) -> dict:
     свидетельство о нём, а не он сам.
     """
     return await _film_save(int(run_id), frames or [])
+
+
+async def browser_scenario_total(run_id: int, total_ms: int) -> None:
+    """Отметить, сколько шла РАБОТА ЦЕЛИКОМ, частью которой был этот прогон.
+
+    Args:
+        run_id: прогон, на котором работа кончилась, — к нему же вешают плёнку.
+        total_ms: длительность всей работы в миллисекундах.
+
+    ⚠⚠ Зовёт тот, кто ведёт сценарий ОТРЕЗКАМИ. Длинный сценарий гоняют по
+    шагу за поход, чтобы рассказывать о каждом, и для хранилища каждый поход —
+    отдельный прогон. Своё `duration_ms` у них честное, но крошечное: замер на
+    живой карточке дал 357 мс при работе в минуту. Связи «эти семьдесят
+    записей — одна работа» в базе нет, она есть только у ведущего, — поэтому
+    итог приносит он.
+
+    ⚠ `duration_ms` при этом НЕ трогается: по нему ищут медленный шаг, и
+    переписанный суммой он показал бы виновником невиновного.
+
+    ⚠ Прогону, пущенному целиком, звать это незачем: работа и есть он сам.
+    Показ берёт `total_ms`, а при нуле — `duration_ms`.
+    """
+    if not run_id or int(total_ms) <= 0:
+        return
+
+    async with mysql_get_db_async() as db:
+        await db.execute(
+            'UPDATE `browser_scenario_run` SET `total_ms` = %s WHERE `id` = %s',
+            (int(total_ms), int(run_id)))
 
 
 async def browser_scenario_execute(scenario: dict, session_id: str = '', variables: dict | None = None,
