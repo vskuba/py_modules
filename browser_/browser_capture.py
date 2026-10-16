@@ -40,7 +40,58 @@ BROWSER_CAPTURE_TIMEOUT_MS = 15000
 # Предел на высоту снимка страницы целиком. Бесконечная лента с подгрузкой растёт,
 # пока её листают: без предела кадр вырос бы в десятки мегабайт, которые всё равно
 # никто не посмотрит.
+#
+# ⚠⚠ Константа ЗАЯВЛЯЛАСЬ, но не применялась — предела не было вовсе. Нашлось
+# ревизией: лента на три экрана проходит, а лента на сорок отдала бы кадр,
+# который не откроется ни в карусели, ни в письме.
 BROWSER_CAPTURE_FULL_MAX_HEIGHT = 8000
+
+
+# Что сделать с липкими и плавающими элементами перед полностраничным кадром.
+#
+# ⚠⚠ Без этого кадр врёт. Playwright снимает длинную страницу, прокручивая её
+# и склеивая куски, — и элемент с `position: sticky` попадает в КАЖДЫЙ кусок:
+# шапка магазина оказывается нарисованной посреди формы, закрывая собой поля.
+# Поймано живьём: на кадре чекаута шапка перекрыла «Телефон» и «Місто», а
+# плавающие кнопки — «Поштовий індекс».
+#
+# ⚠ Липкое становится обычным (`static`), плавающее — прячется. Разница не
+# прихоть: липкая шапка в потоке встаёт туда, где ей и место (вверх страницы),
+# а плавающая кнопка, попав в поток, раздвинет вёрстку и сдвинет всё под собой.
+BROWSER_CAPTURE_FLAT_JS = """
+() => {
+    const touched = [];
+    document.querySelectorAll('*').forEach(node => {
+        const how = getComputedStyle(node).position;
+        if (how !== 'sticky' && how !== 'fixed') return;
+
+        touched.push([node, node.style.cssText]);
+        if (how === 'sticky') {
+            node.style.setProperty('position', 'static', 'important');
+        } else {
+            node.style.setProperty('visibility', 'hidden', 'important');
+        }
+    });
+    window.__browserShotTouched = touched;
+
+    return touched.length;
+}
+"""
+
+# Вернуть странице её собственные стили.
+#
+# ⚠⚠ Обязательно и всегда: страница ЖИВАЯ, сценарий продолжает на ней работу.
+# Оставить шапку выключенной значит сломать следующий шаг, который по ней
+# кликает, — и сломать молча, через кадр, который этого шага не касался.
+BROWSER_CAPTURE_UNFLAT_JS = """
+() => {
+    const touched = window.__browserShotTouched || [];
+    touched.forEach(([node, css]) => { node.style.cssText = css; });
+    window.__browserShotTouched = null;
+
+    return touched.length;
+}
+"""
 
 
 async def browser_capture_shot(page, selector: str = '', full_page: bool = False,
@@ -65,18 +116,30 @@ async def browser_capture_shot(page, selector: str = '', full_page: bool = False
     шаг упал, страница зависла, элемент не нашёлся. Падать на такой странице значит
     терять единственный способ на неё посмотреть.
     """
+    flat = full_page and not selector
     try:
+        if flat:
+            await _capture_flat(page, True)
+
         if selector:
             locator = page.locator(selector).first
             await locator.wait_for(state='visible', timeout=timeout_ms)
             raw = await locator.screenshot(type='jpeg', quality=quality, timeout=timeout_ms)
+        elif full_page:
+            raw = await _capture_long(page, quality, timeout_ms)
         else:
-            raw = await page.screenshot(type='jpeg', quality=quality, full_page=full_page,
+            raw = await page.screenshot(type='jpeg', quality=quality,
                                         timeout=timeout_ms)
     except Exception as e:
         text = str(e).splitlines()[0][:200] if str(e) else type(e).__name__
         logger_info(f'[browser] снимок не снялся: {text}')
         return {'image': '', 'bytes': 0, 'error': text}
+    finally:
+        # ⚠⚠ Возврат стилей — в `finally`: снимок мог не выйти, а страница
+        # остаётся живой, и сценарий пойдёт по ней дальше. Выключенная шапка
+        # сломала бы следующий шаг, который по ней кликает.
+        if flat:
+            await _capture_flat(page, False)
 
     return {'image': 'data:image/jpeg;base64,' + base64.b64encode(raw).decode(),
             'bytes': len(raw), 'error': ''}
@@ -106,3 +169,59 @@ async def browser_capture_pdf(page, landscape: bool = False) -> dict:
 
     return {'pdf': 'data:application/pdf;base64,' + base64.b64encode(raw).decode(),
             'bytes': len(raw), 'error': ''}
+
+
+# ── детали реализации ──────────────────────────────────────────────────────
+
+async def _capture_long(page, quality: int, timeout_ms: int) -> bytes:
+    """Кадр длинной страницы, обрезанный по `BROWSER_CAPTURE_FULL_MAX_HEIGHT`.
+
+    ⚠⚠ Обрезается ВЕРХНЯЯ часть, а не нижняя: у ленты с подгрузкой смысл
+    вверху, а внизу — то, что дозагрузилось, пока снимали. Режет сам
+    Playwright через `clip`, одним снимком: собрать всё и отрезать значит
+    сперва заплатить за те самые десятки мегабайт, от которых уходим.
+
+    ⚠ Короткая страница снимается как есть — без `clip`, чтобы не зависеть от
+    измерения высоты, которое на ней и не нужно.
+    """
+    try:
+        tall = int(await page.evaluate(
+            '() => Math.max(document.body.scrollHeight,'
+            ' document.documentElement.scrollHeight)') or 0)
+        wide = int(await page.evaluate(
+            '() => Math.max(document.body.scrollWidth,'
+            ' document.documentElement.scrollWidth)') or 0)
+    except Exception:  # noqa: BLE001 — не измерили, снимем как есть
+        tall = wide = 0
+
+    if tall and wide and tall > BROWSER_CAPTURE_FULL_MAX_HEIGHT:
+        logger_info(f'[browser] страница {tall}px обрезана до '
+                    f'{BROWSER_CAPTURE_FULL_MAX_HEIGHT}px')
+
+        return await page.screenshot(
+            type='jpeg', quality=quality, timeout=timeout_ms,
+            clip={'x': 0, 'y': 0, 'width': wide,
+                  'height': BROWSER_CAPTURE_FULL_MAX_HEIGHT})
+
+    return await page.screenshot(type='jpeg', quality=quality, full_page=True,
+                                 timeout=timeout_ms)
+
+
+async def _capture_flat(page, on: bool) -> None:
+    """Усмирить липкие и плавающие элементы перед кадром — и вернуть обратно.
+
+    Args:
+        page: страница Playwright.
+        on: `True` — усмирить, `False` — вернуть как было.
+
+    ⚠⚠ Отказ проглатывается молча, и это осознанно: страница могла уйти на
+    другой адрес между снимком и возвратом, а снимок — не та работа, ради
+    которой стоит ронять прогон. Худшее, что даёт проглоченный отказ, —
+    кадр с дублем шапки; худшее, что дало бы исключение, — сорванный заказ.
+    """
+    try:
+        await page.evaluate(BROWSER_CAPTURE_FLAT_JS if on
+                            else BROWSER_CAPTURE_UNFLAT_JS)
+    except Exception as e:  # noqa: BLE001 — снимок не стоит прогона
+        logger_info(f'[browser] липкие элементы не {"убрать" if on else "вернуть"}: '
+                    f'{str(e).splitlines()[0][:120]}')
