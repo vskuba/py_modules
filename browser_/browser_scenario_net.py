@@ -11,18 +11,33 @@
 (`keep_session`, живое окно человека), и слушатель, оставленный на странице, дожил
 бы до следующего прогона: тот получил бы чужие записи, а список рос бы бесконечно.
 Поэтому состояние заводит прогон и снимает слушателя в своём `finally`.
+
+## ⚠⚠ Пишутся и запросы, и ОТВЕТЫ
+
+Сперва слушались только запросы, и на главный вопрос разбора — «а что сервер
+на это сказал» — ответа не было: в записи стоял `status: None`. Поймано живым
+случаем: кнопка «Оформить заказ» нажималась, запрос уходил, форма через десять
+секунд возвращалась к исходному виду, а по записям нельзя было отличить отказ
+валидации от отказа защиты.
+
+Ответ дописывается **в ту же запись**, а не ложится второй: разбирают их парой
+(«этот запрос — этот ответ»), и сшивать их потом по адресу значило бы ошибаться
+на повторах.
 """
+
+import asyncio
 
 from logging_.logging_ import logger_info
 
 from browser_.browser_scenario import (BROWSER_SCENARIO_NET_BODY_LIMIT,
+                                       BROWSER_SCENARIO_NET_BODY_TYPES,
                                        BROWSER_SCENARIO_NET_HEADERS,
                                        BROWSER_SCENARIO_NET_LIMIT)
 
 
 def browser_scenario_net_new() -> dict:
     """Пустое состояние перехвата — его держит у себя прогон."""
-    return {'rows': [], 'filter': '', 'handler': None}
+    return {'rows': [], 'filter': '', 'handler': None, 'answer': None}
 
 
 def browser_scenario_net_start(page, net: dict, url_filter: str = '') -> str:
@@ -51,8 +66,31 @@ def browser_scenario_net_start(page, net: dict, url_filter: str = '') -> str:
         except Exception as e:
             logger_info(f'[browser] запрос не записался: {e}')
 
+    def answer(response):
+        """Код и тело ответа — в запись его запроса.
+
+        ⚠ Ищем запись С КОНЦА: один адрес дёргают по многу раз (опросы
+        статуса, повторы), и поиск с начала приписал бы ответ первому из них.
+
+        ⚠⚠ Тело читается ОТДЕЛЬНОЙ ЗАДАЧЕЙ: `response.text()` — корутина, а
+        слушатель синхронный. Без тела `200` отвечает лишь «сервер нас
+        услышал»; отказ приложения живёт внутри (`{"error": …}`), и живой
+        случай был ровно такой — кнопка нажата, ответ 200, заказа нет.
+        """
+        try:
+            url = str(response.url or '')
+            for row in reversed(net['rows']):
+                if row.get('url') == url[:1000] and row.get('status') is None:
+                    row['status'] = int(response.status or 0)
+                    _answer_body(response, row)
+                    return
+        except Exception as e:
+            logger_info(f'[browser] ответ не записался: {e}')
+
     net['handler'] = catch
+    net['answer'] = answer
     page.on('request', catch)
+    page.on('response', answer)
 
     return f'слежу за «{url_filter}»' if url_filter else 'слежу за всем'
 
@@ -65,10 +103,13 @@ def browser_scenario_net_stop(page, net: dict | None) -> None:
 
     try:
         page.remove_listener('request', net['handler'])
+        if net.get('answer'):
+            page.remove_listener('response', net['answer'])
     except Exception as e:
         logger_info(f'[browser] слушатель запросов не снялся: {e}')
 
     net['handler'] = None
+    net['answer'] = None
 
 
 def browser_scenario_net_dump(net: dict | None, url_filter: str = '') -> list:
@@ -85,6 +126,38 @@ def browser_scenario_net_dump(net: dict | None, url_filter: str = '') -> list:
     needle = str(url_filter).lower()
 
     return [row for row in rows if needle in str(row.get('url', '')).lower()]
+
+
+def _answer_body(response, row: dict) -> None:
+    """Дочитать тело ответа в запись — задачей, не дожидаясь здесь.
+
+    ⚠⚠ Только для тех типов, у которых тело разбирают: JSON и текст. Качать
+    картинки и скрипты значило бы держать в памяти мегабайты ради записи в
+    журнале, которую никто не прочтёт.
+
+    ⚠ Задача живёт сама: слушатель синхронный и ждать её не может. К моменту
+    `net_dump` она обычно уже отработала — между ответом и снятием стоит шаг
+    ожидания. Не успела — в записи останется пустое тело, и это честнее, чем
+    задержка всего прогона ради журнала.
+    """
+    try:
+        kind = str(response.headers.get('content-type') or '').lower()
+    except Exception:
+        return
+
+    if not any(one in kind for one in BROWSER_SCENARIO_NET_BODY_TYPES):
+        return
+
+    async def read():
+        try:
+            row['answer'] = (await response.text())[:BROWSER_SCENARIO_NET_BODY_LIMIT]
+        except Exception as e:  # noqa: BLE001 — тело не стоит прогона
+            logger_info(f'[browser] тело ответа не прочиталось: {e}')
+
+    try:
+        asyncio.get_running_loop().create_task(read())
+    except RuntimeError:
+        pass
 
 
 def _row(request) -> dict:
@@ -121,5 +194,9 @@ def _row(request) -> dict:
     except Exception:
         kind = ''
 
+    # ⚠ `status: None` — «ответа ещё не было», а не «ответ пустой». Его
+    # дописывает слушатель ответов; `None` в готовой записи значит, что запрос
+    # остался без ответа — оборван, отменён или ушёл за границу наблюдения.
     return {'method': str(request.method or ''), 'url': str(request.url or '')[:1000],
-            'kind': kind, 'headers': headers, 'body': body}
+            'kind': kind, 'headers': headers, 'body': body, 'status': None,
+            'answer': ''}
