@@ -97,15 +97,22 @@ def web_menu_links(html: str, base_url: str = '', text_max: int = 60) -> list:
 
 
 async def web_menu_fetch(url: str, text_max: int = 60, timeout: float = 15,
-                         headers: dict | None = None) -> list:
+                         headers: dict | None = None,
+                         proxy: str = '') -> list:
     """То же, но страницу качает сам — одной строкой на весь вопрос.
+
+    Args:
+        proxy: через какой выход идти; пусто — с адреса машины. ⚠ Запрос к
+            чужому сайту оставляет там наш адрес: тот, кто потом придёт на
+            эту же площадку через выход, окажется связан с ним сам.
 
     Raises:
         RuntimeError: сайт ответил не страницей (код не 2xx или пустое тело).
     """
     from web_.web_peek import web_peek
 
-    answer = await web_peek(url, timeout=timeout, headers=headers)
+    answer = await web_peek(url, timeout=timeout, headers=headers,
+                            proxy=proxy)
     code = int(answer.get('status') or 0)
     body = answer.get('text') or ''
     if not 200 <= code < 300 or not body:

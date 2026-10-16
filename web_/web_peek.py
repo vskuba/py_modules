@@ -27,7 +27,7 @@ import httpx
 
 async def web_peek(url: str, method: str = 'GET', content: str = '',
                    headers: dict | None = None, timeout: float = 15,
-                   follow_redirects: bool = False) -> dict:
+                   follow_redirects: bool = False, proxy: str = '') -> dict:
     """Один запрос без браузера — весь ответ как есть.
 
     Args:
@@ -44,14 +44,30 @@ async def web_peek(url: str, method: str = 'GET', content: str = '',
             сплошь и рядом отвечают `301` на вложенный путь, и без перехода
             приходит пустое тело при живом разделе.
 
+        proxy: через какой выход идти — `http://user:pass@host:port` или
+            `host:port`. Пусто — с адреса машины.
+
+            ⚠⚠ Не удобство: запрос к чужому сайту оставляет там наш адрес.
+            Панель, которая ходит за каталогом напрямую, а заказы шлёт через
+            выход, **связывает их для площадки сама** — замер показал два
+            разных адреса у одной работы.
+
     Returns:
         {'status': код, 'headers': заголовки словарём, 'length': байт,
          'text': тело текстом, 'json': объект, если это JSON, иначе None,
          'url': конечный адрес — он отличается от запрошенного, если шли по
          редиректам}
     """
-    async with httpx.AsyncClient(transport=_transport(), timeout=timeout,
-                                 follow_redirects=follow_redirects) as c:
+    # ⚠ С выходом — свой клиент, без него общий транспорт пула. У пула один
+    # набор соединений на процесс, и подменить ему выход на один запрос
+    # нельзя: соседний запрос ушёл бы в чужой прокси.
+    make = (lambda: httpx.AsyncClient(proxy=_proxy_url(proxy), timeout=timeout,
+                                      follow_redirects=follow_redirects)
+            if proxy else
+            httpx.AsyncClient(transport=_transport(), timeout=timeout,
+                              follow_redirects=follow_redirects))
+
+    async with make() as c:
         r = await c.request(method, url, content=content or None,
                             headers=headers)
     try:
@@ -87,6 +103,18 @@ def _transport():
     здесь же клиент живёт ровно один запрос и закрыт вместе с ним."""
     from http_.http_pool import http_pool_transport
     return http_pool_transport()
+
+
+def _proxy_url(proxy: str) -> str:
+    """Адрес выхода в том виде, в каком его ждёт httpx.
+
+    ⚠ `ip:port` без схемы приходит сплошь и рядом (так его хранят реестры
+    прокси), а httpx на такой строке падает «Unsupported URL protocol».
+    Дописываем `http://`; строку со схемой и с логином не трогаем.
+    """
+    clean = str(proxy or '').strip()
+
+    return clean if '://' in clean else f'http://{clean}'
 
 
 if __name__ == '__main__':
