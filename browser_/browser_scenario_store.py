@@ -263,6 +263,41 @@ async def browser_scenario_film_path(run_id: int) -> str:
     return str(whole) if whole.is_file() else ''
 
 
+async def browser_scenario_history_clear(site_id: int = 0) -> dict:
+    """Убрать прогоны с плёнками: записи журнала и сами файлы GIF.
+
+    Args:
+        site_id: чьи прогоны чистим; `0` — все, какие есть.
+
+    Returns:
+        `{'runs': сколько записей убрано, 'films': сколько файлов удалено}`.
+
+    ⚠⚠ Чистятся ТОЛЬКО прогоны с плёнкой — ровно то, что показывает история.
+    Остальные записи журнала это отрезки: длинный сценарий гоняют по шагу за
+    поход, и на одну карточку их семьдесят одна. Замер на живой базе: 2926
+    записей, из них с плёнкой 11. Человек, нажавший «очистить историю»,
+    убирает то, что видит, а не шесть сотен строк, о которых не знает:
+    трасса шагов нужна разбору отказов и живёт своей жизнью.
+
+    ⚠⚠ Файл удаляется ПЕРЕД записью, а не после. Обратный порядок на отказе
+    базы оставил бы сироту: запись есть, файла нет, и история показывала бы
+    битую картинку. Сирота наоборот (файл без записи) безвреден — на него
+    никто не сошлётся.
+
+    ⚠ Имя файла проверяется тем же `BROWSER_SCENARIO_FILM_OK`, что и при
+    отдаче: в базе лежит строка, а мы по ней удаляем файл, и чужая форма
+    здесь стоила бы чужого файла.
+    """
+    rows = await _history_rows(site_id)
+    films = _history_films_drop(rows)
+    await _history_runs_drop([row['id'] for row in rows])
+
+    logger_info(f'[browser] история очищена: прогонов {len(rows)}, '
+                f'плёнок {films}')
+
+    return {'runs': len(rows), 'films': films}
+
+
 async def browser_scenario_film_save(run_id: int, frames: list,
                                      steps: list | None = None) -> dict:
     """Склеить кадры в плёнку прогона и записать её к нему.
@@ -397,6 +432,61 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
                          result.get('frame_steps') or [])
 
     return result
+
+
+async def _history_rows(site_id: int) -> list:
+    """Прогоны с плёнками — те самые, что показывает история.
+
+    ⚠ Площадка у СЦЕНАРИЯ, а не у прогона: прогон знает только свой сценарий,
+    и без присоединения чистка по площадке забрала бы чужое.
+    """
+    where = ["r.`film` <> ''"]
+    args: list = []
+    if site_id:
+        where.append('s.`site_id` = %s')
+        args.append(int(site_id))
+
+    async with mysql_get_db_async() as db:
+        await db.execute(
+            'SELECT r.`id`, r.`film` FROM `browser_scenario_run` r'
+            '  JOIN `browser_scenario` s ON s.`id` = r.`scenario_id`'
+            f'  WHERE {" AND ".join(where)}', args)
+
+        return [dict(row) for row in await db.fetchall() or []]
+
+
+def _history_films_drop(rows: list) -> int:
+    """Удалить файлы плёнок; вернуть, сколько удалось.
+
+    ⚠ Отказ одного файла не останавливает остальные: права могли съехать на
+    одном из сотни, и бросать из-за него значит не вычистить ничего.
+    """
+    root = pathlib.Path(project_root()) / BROWSER_SCENARIO_FILM_DIR
+    gone = 0
+    for row in rows:
+        name = str(row.get('film') or '')
+        if not BROWSER_SCENARIO_FILM_OK.match(name):
+            continue
+        try:
+            (root / name).unlink()
+            gone += 1
+        except FileNotFoundError:
+            pass
+        except OSError as fault:
+            logger_info(f'[browser] плёнка {name} не удалилась: {fault}')
+
+    return gone
+
+
+async def _history_runs_drop(ids: list) -> None:
+    """Убрать записи прогонов одним запросом; пустой список — ничего."""
+    if not ids:
+        return
+
+    async with mysql_get_db_async() as db:
+        await db.execute(
+            'DELETE FROM `browser_scenario_run` WHERE `id` IN (%s)'
+            % ','.join(['%s'] * len(ids)), ids)
 
 
 def _pace_values(low, high) -> tuple:
