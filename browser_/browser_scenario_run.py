@@ -10,11 +10,13 @@
 самопочинки и напишет задачу на переписывание сценария.
 """
 
+import base64
 import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from image_.image_film import image_film_same
 from logging_.logging_ import logger_info
 
 from browser_.browser_api import browser_api_auth
@@ -92,7 +94,8 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
                                variables: dict | None = None, secrets: dict | None = None,
                                keep_session: bool = False, proxy: str = '',
                                user_agent: str = '',
-                               extra_headers: dict | None = None) -> dict:
+                               extra_headers: dict | None = None,
+                               film: bool = True) -> dict:
     """Выполняет шаги по порядку и возвращает трассу прогона.
 
     `user_agent` и `extra_headers` — кем представляется временная вкладка.
@@ -112,6 +115,17 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     что предыдущий сработал, и продолжать значило бы получить лавину ошибок вместо
     одной настоящей. Исключение — шаги с `optional`: баннер согласия может и не
     появиться, и его отсутствие не сбой.
+
+    `film` — снимать плёнку прогона: кадр после каждого шага, что-то
+    изменившего на экране. Кадры приходят в `frames` строками `data:` и
+    складываются в GIF (`image_film_gif`) тем, кому он нужен.
+
+    ⚠⚠ Снимает САМ прогон, а не вызывающий: страница у него под рукой, и кадр
+    стоит один вызов. Снаружи тот же кадр стоил бы похода по HTTP на каждый
+    шаг — сорок походов на сценарий.
+
+    ⚠ Одинаковые подряд не копятся: половина шагов ничего на экране не меняет,
+    и плёнка без этой проверки стала бы лентой из сорока похожих кадров.
     """
     variables = variables or {}
     secrets = secrets or {}
@@ -138,11 +152,17 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     error = ''
     failed_no = 0
     final_url = ''
+    reel: list = []
 
     try:
         for index, step in enumerate(scenario.steps, start=1):
             record = await _step_run(page, step, index, values, secrets, state)
             steps.append(record)
+
+            # ⚠ Кадр снимается и у упавшего шага: именно он показывает, на чём
+            # сценарий сломался, — а это и есть главный вопрос к плёнке.
+            if film:
+                await _film_take(page, reel)
 
             if record['name'] and record['ok']:
                 # `data` есть только у сбора записей — там записи, а в `value`
@@ -170,6 +190,9 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     logger_info(f'[browser] сценарий «{scenario.name}»: {status}, шагов {len(steps)} из {len(scenario.steps)}')
 
     return {
+        # ⚠ Кадры строками `data:`, как и прочие картинки слоя: ответ едет по
+        # HTTP, и байты в JSON не положишь (`browser_capture.py`).
+        'frames': [_film_uri(shot) for shot in reel],
         'status': status,
         'session_id': entry['session_id'],
         'session_kept': not own_session or keep_session,
@@ -180,6 +203,46 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
         'extract': extract,
         'duration_ms': round((time.monotonic() - started) * 1000),
     }
+
+
+# Снимать ли плёнку прогона: кадр после каждого шага, что-то изменившего.
+#
+# ⚠⚠ Снимает САМ контейнер, а не вызывающий. Кадр здесь стоит один запрос к
+# странице, которая уже под рукой; у вызывающего он стоил бы похода по HTTP на
+# каждый шаг — сорок походов на сценарий.
+#
+# ⚠ Одинаковые подряд не копятся: половина шагов ничего на экране не меняет
+# (паузы, чтения, вычисления), и без проверки плёнка превращается в ленту из
+# сорока почти одинаковых кадров.
+BROWSER_SCENARIO_FILM_MAX = 24
+
+
+async def _film_take(page, film: list, quality: int = 55) -> None:
+    """Снять кадр шага в плёнку, если он что-то изменил на странице.
+
+    ⚠ Видимая часть, а не страница целиком: плёнку смотрят как кино, и кадр в
+    три экрана высотой в ней нечитаем. Вопрос у неё — «что изменилось на
+    экране», и отвечает на него то, что увидел бы человек.
+
+    ⚠⚠ Отказ снимка не роняет прогон и даже не попадает в трассу: плёнка —
+    свидетельство о работе, а не сама работа. Страница могла уйти на другой
+    адрес, закрыться, зависнуть — прогон разберётся с этим сам, своими шагами.
+    """
+    if len(film) >= BROWSER_SCENARIO_FILM_MAX:
+        return
+
+    try:
+        shot = await page.screenshot(type='jpeg', quality=quality, timeout=5000)
+    except Exception:  # noqa: BLE001 — кадр не стоит прогона
+        return
+
+    if shot and not image_film_same(film[-1] if film else b'', shot):
+        film.append(shot)
+
+
+def _film_uri(shot: bytes) -> str:
+    """Кадр плёнки строкой `data:` — в том же виде, что и прочие картинки слоя."""
+    return 'data:image/jpeg;base64,' + base64.b64encode(shot).decode()
 
 
 async def _session_take(session_id: str, name: str, proxy: str = '',
