@@ -182,15 +182,23 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     }
 
 
-async def _session_take(session_id: str, name: str, proxy: str = '') -> tuple[dict, bool]:
+async def _session_take(session_id: str, name: str, proxy: str = '',
+                        user_agent: str = '',
+                        extra_headers: dict | None = None) -> tuple[dict, bool]:
     """Сессия прогона и признак «завели её мы».
 
     Свою сессию гасим после прогона, чужую — никогда: сценарий часто крутят на
     странице, которую человек в этот момент смотрит в живом окне.
 
-    ⚠ `proxy` действует только на **свою** вкладку: у готовой сессии выход задан
-    при открытии, и менять его на ходу Playwright не умеет — прокси там свойство
-    контекста, а не запроса.
+    ⚠ `proxy`, `user_agent` и `extra_headers` действуют только на **свою**
+    вкладку: у готовой сессии выход и отпечаток заданы при открытии, и менять
+    их на ходу Playwright не умеет — это свойства контекста, а не запроса.
+
+    ⚠⚠ Параметры отпечатка тело функции использовало, а сигнатура не
+    объявляла: правка была дописана наполовину, и прогон падал
+    `TypeError: _session_take() takes from 2 to 3 positional arguments but 5
+    were given`. Наружу это выходило пустым ответом контейнера и строкой
+    «Expecting value: line 1 column 1» в карточке — по ней причину не узнать.
     """
     if session_id:
         entry = browser_pool_session_get(session_id)
