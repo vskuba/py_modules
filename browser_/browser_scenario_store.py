@@ -284,7 +284,8 @@ async def browser_scenario_film_save(run_id: int, frames: list) -> dict:
 async def browser_scenario_execute(scenario: dict, session_id: str = '', variables: dict | None = None,
                                    secrets: dict | None = None, keep_session: bool = False,
                                    proxy: str = '', user_agent: str = '',
-                                   extra_headers: dict | None = None) -> dict:
+                                   extra_headers: dict | None = None,
+                                   film: bool = False) -> dict:
     """Один прогон сохранённого сценария: отдать контейнеру, записать журнал, поправить метку.
 
     Возвращает ответ контейнера как есть: код запроса тут ни при чём, упавший на
@@ -301,6 +302,17 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
 
     ⚠ `scenario` — строка из `browser_scenario_get()` или `browser_scenario_find()`:
     с разобранными шагами и значениями, как их отдаёт хранилище.
+
+    ⚠⚠ `film` — сложить ли кадры прогона плёнкой к нему же. Умолчание
+    `False`, и это не осторожность ради осторожности: сценарий заказа гоняют
+    **отрезками** по одному этапу, и для хранилища каждый отрезок — отдельный
+    прогон. Плёнка вышла бы из одного кадра, а записей — семьдесят одна на
+    карточку. Тот, кто ведёт сценарий целиком, копит кадры сам и кладёт их
+    одной плёнкой (`browser_scenario_film_save`).
+
+    ⚠ Разовому прогону (страница «Сценарии», сбор данных) ставить `True`
+    стоит: история без плёнки отвечает «сценарий отработал», но не «что он при
+    этом видел», — а смотрят её ровно за вторым.
     """
     row = scenario
     scenario_model = BrowserScenario(name=row['name'], goal=row.get('goal', ''),
@@ -339,6 +351,12 @@ async def browser_scenario_execute(scenario: dict, session_id: str = '', variabl
             await db.execute('UPDATE browser_scenario SET status = %s WHERE id = %s',
                              (status, int(row['id'])))
         browser_scenario_forget(row['name'])
+
+    # ⚠ Плёнка кладётся ПОСЛЕ записи прогона: её имя — его номер, и без
+    # записанного прогона класть её некуда. Отказ здесь молчит: плёнка —
+    # свидетельство о работе, а не сама работа.
+    if film and result.get('frames'):
+        await _film_save(int(result['run_id']), result['frames'])
 
     return result
 
