@@ -75,6 +75,14 @@ GEO_OSM_ADDRESS_LIVING = (
 GEO_OSM_ADDRESS_TIMEOUT = 90
 GEO_OSM_ADDRESS_CONNECT = 7
 
+# Сколько метров в градусе широты. ⚠ Величина постоянна для всей Земли —
+# широтные круги равны; с долготой иначе (см. `geo_osm_address_box`).
+GEO_OSM_ADDRESS_LAT_DEGREE = 111320.0
+
+# Нижняя граница косинуса широты. ⚠ У полюса он стремится к нулю, и поправка
+# долготы улетела бы в бесконечность вместе с делением на него.
+GEO_OSM_ADDRESS_COS_MIN = 0.2
+
 # Как далеко от точки искать, когда радиус не задан.
 GEO_OSM_ADDRESS_RADIUS = 800
 
@@ -199,6 +207,41 @@ def geo_osm_address_street(name: str) -> str:
         return f'{short} {rest}'
 
     return whole
+
+
+def geo_osm_address_box(lat: float, lon: float, radius: int) -> tuple:
+    """Прямоугольник вокруг точки: `(lat_min, lat_max, lon_min, lon_max)`.
+
+    Args:
+        lat: широта центра.
+        lon: долгота центра.
+        radius: сколько метров в сторону.
+
+    ⚠⚠ Прямоугольник, а не круг, и это главное в нём. Круг требует расстояния
+    до каждой строки — то есть перебора всей таблицы; прямоугольник отбирается
+    индексом по `(lat, lon)`, а круг из отобранного вырезается уже в памяти
+    (`geo_osm_address_metre`).
+
+    ⚠ Градус долготы сужается к полюсу: на широте Киева он короче широтного
+    вчетверо. Без поправки прямоугольник на этой широте вытянулся бы по
+    долготе вдвое — и в «восемьсот метров» попала бы полоса в полтора
+    километра.
+
+    ⚠ У полюса косинус стремится к нулю, и поправка улетела бы в бесконечность;
+    `GEO_OSM_ADDRESS_COS_MIN` держит её конечной. Жилья там нет, но деление на
+    ноль случилось бы раньше, чем это выяснилось.
+
+    >>> box = geo_osm_address_box(50.45, 30.52, 800)
+    >>> round(box[1] - box[0], 4)
+    0.0144
+    >>> round(box[3] - box[2], 4) > round(box[1] - box[0], 4)
+    True
+    """
+    far_lat = radius / GEO_OSM_ADDRESS_LAT_DEGREE
+    far_lon = far_lat / max(GEO_OSM_ADDRESS_COS_MIN,
+                            abs(math.cos(math.radians(lat))))
+
+    return (lat - far_lat, lat + far_lat, lon - far_lon, lon + far_lon)
 
 
 def geo_osm_address_metre(lat1: float, lon1: float,
