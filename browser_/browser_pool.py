@@ -56,6 +56,25 @@ BROWSER_POOL_LAUNCH_ARGS = [
     '--disable-blink-features=AutomationControlled',
 ]
 
+# Заголовки отпечатка, которые НЕЛЬЗЯ вешать на контекст.
+#
+# ⚠⚠ Они осмысленны только для навигации, а `extra_http_headers` уходит с
+# КАЖДЫМ запросом — со стилями, скриптами, картинками, XHR. Запрос CSS,
+# который представляется переходом на страницу и просит `text/html`, сервер
+# не обслуживает: страница открывается без стилей и без своего JS, элементы
+# находятся, клики проходят — и не делают ничего. Разбор — `_pool_headers`.
+#
+# ⚠ Имена в нижнем регистре: заголовки регистронезависимы, а в снимке они
+# приходят то `Sec-Fetch-Dest`, то `sec-fetch-dest`.
+BROWSER_POOL_HEADERS_SKIP = frozenset({
+    'accept',
+    'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+    'upgrade-insecure-requests',
+    # ⚠ `User-Agent` тоже сюда: его задаёт свой довод контекста
+    # (`user_agent`), и вторая копия в заголовках спорила бы с ним.
+    'user-agent',
+})
+
 # Что страница видит о себе до единой своей строки.
 #
 # ⚠⚠ Ставится ТОЛЬКО вместе с `user_agent` — см. `_pool_mask`. Без него
@@ -170,12 +189,12 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
             options['proxy'] = _proxy_options(proxy)
         if user_agent:
             options['user_agent'] = user_agent
-        if extra_headers:
+        headers = _pool_headers(extra_headers)
+        if headers:
             # ⚠ Заголовки на контекст, а не на запрос: их должны нести и
             # переходы внутри сайта, и подзапросы страницы, иначе первый же
             # XHR уедет с умолчанием образа и выдаст подмену.
-            options['extra_http_headers'] = {str(k): str(v)
-                                             for k, v in extra_headers.items()}
+            options['extra_http_headers'] = headers
 
         context = await _browser.new_context(**options)
 
@@ -343,6 +362,36 @@ def _session_info(entry: dict) -> dict:
         'recording': entry.get('record') is not None,
         'watching': entry.get('watch') is not None,
     }
+
+
+def _pool_headers(extra_headers: dict | None) -> dict:
+    """Заголовки отпечатка, годные для ВСЕХ запросов; негодные отброшены.
+
+    ⚠⚠ Самая дорогая ошибка этого модуля, и стоила она дня. Отпечаток
+    снимается с НАВИГАЦИИ, и в нём лежат заголовки, осмысленные только для
+    неё: `Accept: text/html,…`, `Sec-Fetch-Dest: document`, `Sec-Fetch-Mode:
+    navigate`, `Upgrade-Insecure-Requests`. Playwright вешает
+    `extra_http_headers` на КАЖДЫЙ запрос контекста — значит и на стили, и на
+    скрипты, и на XHR. Сервер получает запрос CSS, который представляется
+    переходом на страницу и просит `text/html`, и не отдаёт ничего.
+
+    Как это выглядит: страница открывается, но без стилей и без своего JS.
+    Разметка на месте, элементы находятся, клики проходят — и не делают
+    ничего, потому что обработчики не привязаны. Замер на живом магазине:
+
+        с этими заголовками   4 запроса (одни картинки), корзина пуста
+        без них              18 запросов, POST checkout/cart/add 200
+
+    Ни ошибки, ни пустого ответа: сценарий честно падал на шаге формы, а
+    виноватой выглядела мобильная вёрстка.
+
+    ⚠ Отбрасываем, а не сохраняем «как просили»: `Sec-Fetch-Dest: document` на
+    запросе картинки не бывает ни у одного живого браузера, то есть это не
+    выбор зовущего, а протекшая подробность снимка. Зато `Accept-Language` и
+    `Sec-CH-UA*` осмысленны везде и остаются — в них весь смысл подмены.
+    """
+    return {str(k): str(v) for k, v in (extra_headers or {}).items()
+            if str(k).lower() not in BROWSER_POOL_HEADERS_SKIP}
 
 
 def _pool_mask(user_agent: str) -> str:
