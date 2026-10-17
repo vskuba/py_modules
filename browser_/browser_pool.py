@@ -16,6 +16,7 @@ DOM (`watch`), журнал консоли (`console`). Так это состо
 """
 
 import asyncio
+import json
 import time
 import uuid
 from urllib.parse import unquote
@@ -44,7 +45,37 @@ BROWSER_POOL_GOTO_TIMEOUT_MS = 30000
 BROWSER_POOL_LAUNCH_ARGS = [
     '--no-sandbox',  # контейнер изолирован сам, а user namespaces внутри него недоступны
     '--disable-gpu',
+    # ⚠⚠ Без этого Chromium САМ объявляет себя роботом: `navigator.webdriver`
+    # равен `true`, и проверять больше нечего — ни отпечаток, ни прокси уже не
+    # помогут. Цена известна и описана в `x11_fingerprint_eval`: «тупой отказ
+    # капчи без ошибки». Замер на живой установке: тридцать заказов прошли,
+    # тридцать первый получил капчу.
+    #
+    # ⚠ Это флаг ЗАПУСКА, не контекста: он действует на весь браузер, и чтобы
+    # применился — контейнер надо перезапустить, а не просто открыть сессию.
+    '--disable-blink-features=AutomationControlled',
 ]
+
+# Что страница видит о себе до единой своей строки.
+#
+# ⚠⚠ Ставится ТОЛЬКО вместе с `user_agent` — см. `_pool_mask`. Без него
+# подгонять не к чему, а выдуманный `platform` при честном UA создаёт то самое
+# противоречие, ради устранения которого всё и затевалось.
+#
+# ⚠ Три правки, а не двадцать. `window.chrome` и непустой `navigator.plugins`
+# есть у любого настоящего Chrome, а `platform` обязан отвечать своему UA —
+# «Macintosh» в строке при `Linux x86_64` в свойстве не бывает ни у кого.
+# Дальше начинается гонка (canvas, WebGL, шрифты), которую подменой свойств не
+# выигрывают: это уровень процесса, а процесс Chromium у всех сессий один.
+BROWSER_POOL_MASK_JS = """(() => {
+  const plat = %(platform)s;
+  if (plat) Object.defineProperty(navigator, 'platform', {get: () => plat});
+  if (!window.chrome) window.chrome = {runtime: {}};
+  if (!navigator.plugins || !navigator.plugins.length) {
+    const made = [1, 2, 3, 4, 5].map(n => ({name: 'Plugin ' + n}));
+    Object.defineProperty(navigator, 'plugins', {get: () => made});
+  }
+})()"""
 
 _playwright: Playwright | None = None
 _browser: Browser | None = None
@@ -147,6 +178,15 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
                                              for k, v in extra_headers.items()}
 
         context = await _browser.new_context(**options)
+
+        # ⚠⚠ Маскировка вешается на КОНТЕКСТ и до первой страницы: скрипт
+        # должен отработать раньше любого кода сайта, иначе тот успеет
+        # спросить `navigator.platform` до подмены. `add_init_script`
+        # выполняется при каждой навигации, включая переходы внутри сайта.
+        mask = _pool_mask(user_agent)
+        if mask:
+            await context.add_init_script(mask)
+
         page = await context.new_page()
 
         _sessions[session_id] = {
@@ -303,6 +343,45 @@ def _session_info(entry: dict) -> dict:
         'recording': entry.get('record') is not None,
         'watching': entry.get('watch') is not None,
     }
+
+
+def _pool_mask(user_agent: str) -> str:
+    """Скрипт, подгоняющий свойства браузера под заявленный UA; пусто — не надо.
+
+    Args:
+        user_agent: чем представилась сессия. Пусто — маскировки нет.
+
+    Returns:
+        Готовый JS для `add_init_script`; пустая строка — подгонять не к чему.
+
+    ⚠⚠ Пустой UA даёт пустой скрипт, и это главное правило здесь. Сессия без
+    подмены представляется честно: Chromium на Linux, `navigator.platform`
+    ему отвечает, и противоречия нет. Припиши ей «Win32» — противоречие
+    появится там, где его не было, и маскировка сработает против себя.
+
+    ⚠ `platform` выводится из UA, а не задаётся отдельным доводом: два
+    независимых источника одного факта расходятся — это вопрос времени, а
+    цена расхождения здесь ровно та, от которой лечимся.
+    """
+    if not user_agent:
+        return ''
+
+    low = user_agent.lower()
+    if 'android' in low:
+        platform = 'Linux armv8l'
+    elif 'iphone' in low or 'ipad' in low:
+        platform = 'iPhone'
+    elif 'windows' in low:
+        platform = 'Win32'
+    elif 'macintosh' in low or 'mac os x' in low:
+        platform = 'MacIntel'
+    else:
+        # ⚠ Неузнанный UA — не повод выдумывать: `platform` остаётся своим,
+        # а `window.chrome` и плагины подправятся. Выдуманная платформа при
+        # незнакомой строке вероятнее создаст противоречие, чем уберёт.
+        platform = ''
+
+    return BROWSER_POOL_MASK_JS % {'platform': json.dumps(platform)}
 
 
 def _proxy_options(url: str) -> dict:
