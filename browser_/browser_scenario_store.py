@@ -184,13 +184,22 @@ async def browser_scenario_remove(scenario_id: int) -> None:
 
 
 async def browser_scenario_runs(scenario_id: int = 0, limit: int = 50,
-                                offset: int = 0, site_id: int = 0) -> list:
+                                offset: int = 0, site_id: int = 0,
+                                with_film: bool = False) -> list:
     """Журнал прогонов, свежие сверху: статус, шаг, ошибка, трасса, плёнка.
 
     Args:
         scenario_id: чьи прогоны; ноль — всех сценариев.
         limit, offset: окно выборки.
         site_id: только сценарии этой площадки; ноль — любой.
+        with_film: только прогоны с плёнкой — то есть работы целиком.
+
+    ⚠⚠ `with_film` отбирает В ЗАПРОСЕ, и это не оптимизация. Длинный сценарий
+    гоняют по шагу за поход, и в журнал ложится запись на КАЖДЫЙ шаг:
+    семьдесят одна на карточку заказа. Зовущий, который брал «limit × 8»
+    последних записей и фильтровал их у себя, видел работы только за
+    последние полчаса — всё остальное вытеснялось отрезками. Живой замер: 97
+    записей за двадцать минут, из них с плёнкой три.
 
     ⚠⚠ Трасса и собранное приходят целиком, и на длинном сценарии это десятки
     килобайт на строку. Списком их читают редко (историю смотрят плёнкой), но
@@ -208,6 +217,8 @@ async def browser_scenario_runs(scenario_id: int = 0, limit: int = 50,
     if site_id:
         where.append('s.site_id = %s')
         args.append(int(site_id))
+    if with_film:
+        where.append("r.film <> ''")
 
     clause = f' WHERE {" AND ".join(where)}' if where else ''
     async with mysql_get_db_async() as db:
