@@ -95,6 +95,7 @@ namespace-папок, которые проекты импортируют на�
 | `auth_/` | `docs/auth_rules.md` |
 | `uvicorn_/` | `docs/api_rules.md` — контракт ответов, формат ошибок валидации |
 | `uvicorn_/uvicorn_panel.py`, `uvicorn_dev.py` | `docs/uvicorn_panel.md`, `docs/uvicorn_dev.md` — вошедший клиент панели; цикл «рестарт → здоровье»; точка «что отвечает ручка» одним вызовом (`web_/web_state.py`) |
+| `uvicorn_/uvicorn_sweep.py` | `docs/uvicorn_sweep.md` — обход страниц панели: какие мертвы; ⚠⚠ упавший модуль виден только в `page-error`, `window.onerror` его не застаёт |
 | `uvicorn_/uvicorn_mirror.py` | `docs/uvicorn_mirror.md` — копия страницы панели как полноценный исток: тело по своему пути, прочее — прокси |
 | `tool_/` | `docs/tool_find.md` — поиск инструмента по намерению; качество поиска = качество первых строк докстрингов |
 | `claude_/hook/claude_hook.py` | `docs/claude/hook/claude_hook.md` — договор хуков Claude Code: разбор ввода, коды возврата, хвост транскрипта; ⚠ застава при своей поломке пропускает, а не держит |
