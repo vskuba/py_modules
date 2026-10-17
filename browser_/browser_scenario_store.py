@@ -42,7 +42,8 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
                                 start_url: str = '', variables: dict | None = None,
                                 status: str = 'draft', scenario_id: int = 0,
                                 pace_min_ms: int | None = None,
-                                pace_max_ms: int | None = None) -> int:
+                                pace_max_ms: int | None = None,
+                                device: str = 'any') -> int:
     """Завести или переписать сценарий; возвращает его номер.
 
     Шаги проходят проверку схемой контейнера здесь, при сохранении: ошибку лучше
@@ -54,6 +55,11 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
     этих пределах (`browser_scenario_pace`). `None` — оставить как есть у
     существующего и взять умолчание слоя у нового.
 
+    `device` — под какую вёрстку писаны шаги (`BROWSER_SCENARIO_DEVICES`).
+    ⚠ Прогоном оно не управляет: контейнер выполнит что дали, каким угодно
+    окном. Поле отвечает на вопрос «кому этот сценарий давать», и спрашивает
+    его тот, кто выбирает сценарий под работу.
+
     ⚠ Перевёрнутые пределы выпрямляются молча: это опечатка в форме, а не
     повод не дать человеку сохранить сценарий.
 
@@ -61,7 +67,7 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
         ValueError: шаги не прошли схему, имя занято другим сценарием или статусу
             такой не положен.
     """
-    scenario = _scenario_check(name, goal, steps)
+    scenario = _scenario_check(name, goal, steps, device)
     pace = _pace_values(pace_min_ms, pace_max_ms)
     async with mysql_get_db_async() as db:
         if scenario_id:
@@ -72,11 +78,12 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
                 'UPDATE browser_scenario'
                 '   SET site_id = %s, name = %s, goal = %s, start_url = %s,'
                 '       steps = %s, variables = %s, status = %s,'
-                '       pace_min_ms = %s, pace_max_ms = %s WHERE id = %s',
+                '       pace_min_ms = %s, pace_max_ms = %s, device = %s'
+                ' WHERE id = %s',
                 (site_id or None, name, goal, start_url,
                  json.dumps([s.model_dump() for s in scenario.steps], ensure_ascii=False),
                  json.dumps(variables or {}, ensure_ascii=False), status,
-                 pace[0], pace[1], int(scenario_id)))
+                 pace[0], pace[1], scenario.device, int(scenario_id)))
 
             browser_scenario_forget(name)
 
@@ -88,12 +95,12 @@ async def browser_scenario_save(name: str, steps: list, site_id: int = 0, goal: 
             raise ValueError(f'сценарий с именем «{name}» уже есть')
         await db.execute(
             'INSERT INTO browser_scenario (site_id, name, goal, start_url, steps,'
-            '  variables, status, pace_min_ms, pace_max_ms) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            '  variables, status, pace_min_ms, pace_max_ms, device) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
             (site_id or None, name, goal, start_url,
              json.dumps([s.model_dump() for s in scenario.steps], ensure_ascii=False),
              json.dumps(variables or {}, ensure_ascii=False), status,
-             pace[0], pace[1]))
+             pace[0], pace[1], scenario.device))
         browser_scenario_forget(name)
 
         return int(db.lastrowid)
@@ -110,7 +117,7 @@ async def browser_scenario_list(site_id: int = 0) -> list:
     async with mysql_get_db_async() as db:
         await db.execute(
             'SELECT id, site_id, name, goal, start_url, status, steps, variables,'
-            '       pace_min_ms, pace_max_ms, created_at, updated_at '
+            '       pace_min_ms, pace_max_ms, device, created_at, updated_at '
             f'FROM browser_scenario {where} ORDER BY id DESC', params)
         rows = await db.fetchall() or []
 
@@ -522,10 +529,12 @@ def _pace_values(low, high) -> tuple:
     return (high, low) if low > high else (low, high)
 
 
-def _scenario_check(name: str, goal: str, steps: list) -> BrowserScenario:
+def _scenario_check(name: str, goal: str, steps: list,
+                    device: str = 'any') -> BrowserScenario:
     """Проверяет шаги схемой контейнера: ошибку лучше увидеть при сохранении."""
     try:
-        return BrowserScenario(name=name, goal=goal, steps=steps)
+        return BrowserScenario(name=name, goal=goal, steps=steps,
+                               device=device or 'any')
     except Exception as e:
         raise ValueError(f'сценарий не проходит проверку: {e}')
 

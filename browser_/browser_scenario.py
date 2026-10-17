@@ -148,6 +148,22 @@ BROWSER_SCENARIO_PACE_SKIP = ('wait_ms', 'wait_for', 'wait_stable')
 BROWSER_SCENARIO_PACE_MIN_MS = 400
 BROWSER_SCENARIO_PACE_MAX_MS = 1800
 
+# Под какую вёрстку писан сценарий.
+#
+# ⚠⚠ Это свойство СЦЕНАРИЯ, а не прихоть запуска. Сайт отдаёт телефону другую
+# вёрстку: колонки в одну, кнопки шага рисуются дважды и лишняя прячется,
+# часть блоков сворачивается. Шаги, написанные по десктопной разметке, на узком
+# окне находят не то или не находят вовсе — и падают по таймауту, а выглядит
+# это как «сломался сайт».
+#
+# ⚠ `any` — умолчание и означает «вёрстка роли не играет»: так помечены
+# разведка, сбор категорий, проверки. Запрета оно не снимает, а говорит, что
+# выбирать не из чего.
+#
+# ⚠ Отпечаток и сценарий — пара. Кто выдаёт карточке отпечаток телефона,
+# обязан дать ей и мобильный сценарий; наоборот — так же.
+BROWSER_SCENARIO_DEVICES = ('any', 'desktop', 'mobile')
+
 # Имена переменных — только буквы, цифры и подчёркивание: подстановка идёт в
 # селекторы и URL, где фигурные скобки встречаются и сами по себе (CSS, JSON).
 BROWSER_SCENARIO_VAR_RE = re.compile(r'\{\{\s*([A-Za-z0-9_]+)\s*\}\}')
@@ -291,7 +307,22 @@ class BrowserScenario(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100)
     goal: str = Field('', max_length=255)
+    # Под какую вёрстку писаны шаги; `any` — вёрстка роли не играет.
+    #
+    # ⚠ Сам прогон этим полем не управляет: контейнер выполнит что дали, каким
+    # угодно окном. Поле отвечает на вопрос «кому этот сценарий давать», и
+    # спрашивает его тот, кто выбирает сценарий под карточку.
+    device: str = Field('any', max_length=10)
     steps: list[BrowserScenarioStep] = Field(..., min_length=1, max_length=BROWSER_SCENARIO_STEP_LIMIT)
+
+    @field_validator('device')
+    @classmethod
+    def _device_check(cls, value: str) -> str:
+        if value and value not in BROWSER_SCENARIO_DEVICES:
+            raise ValueError(
+                f'устройство не из списка: {", ".join(BROWSER_SCENARIO_DEVICES)}')
+
+        return value or 'any'
 
 
 def browser_scenario_split(steps: list) -> tuple:
