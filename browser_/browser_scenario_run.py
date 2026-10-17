@@ -138,13 +138,26 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     entry, own_session = await _session_take(session_id, scenario.name, proxy,
                                              user_agent, extra_headers)
     page = entry['page']
-    # Наблюдатели — состояние **на прогон**, а не на страницу.
+    # Наблюдатели — состояние **СЕССИИ**, а не одного похода.
     #
-    # ⚠ Сессию переиспользуют (`keep_session`, живое окно человека), и слушатель,
-    # оставленный на странице, дожил бы до следующего прогона: тот получил бы чужие
-    # записи, а список рос бы бесконечно. Поэтому состояние здесь, а снимаются
-    # слушатели в `finally` — вместе с прогоном, чем бы тот ни кончился.
-    state = {'net': browser_scenario_net_new(), 'console': None}
+    # ⚠⚠ Раньше оно заводилось здесь, на прогон, и это ломало длинный
+    # сценарий: его гоняют по шагу за поход, и `net_watch` с `net_dump`
+    # попадали в РАЗНЫЕ вызовы. Второй заводил пустое состояние, съём
+    # возвращал ноль записей — подтверждение заказа исчезало, а карточка
+    # уходила в `dry` при живом заказе. Поймано живьём.
+    #
+    # ⚠ Слушатель живёт на странице, а страница живёт в сессии — состояние
+    # обязано жить там же. Снимается оно вместе с сессией
+    # (`browser_pool_session_close`), а не в конце похода: иначе следующий
+    # поход той же работы остался бы без наблюдения.
+    #
+    # ⚠ Своя временная сессия (`own_session` без `keep_session`) гасится в
+    # `finally` целиком — с ней уходит и состояние.
+    #
+    # ⚠ Ключ `scenario_watch`, а не `watch`: под `watch` в сессии уже живёт
+    # наблюдение за DOM (`browser_watch.py`), и общий ключ затёр бы его.
+    state = entry.setdefault(
+        'scenario_watch', {'net': browser_scenario_net_new(), 'console': None})
     started = time.monotonic()
     steps: list[dict] = []
     extract: dict = {}   # строка у `extract`, список записей у построчного сбора
@@ -185,9 +198,13 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
         final_url = page.url
         entry['used_at'] = time.time()
     finally:
-        browser_scenario_net_stop(page, state['net'])
-        browser_console_stop(state['console'])
+        # ⚠⚠ Наблюдение СНИМАЕТСЯ ТОЛЬКО вместе с сессией. Длинный сценарий
+        # идёт несколькими походами по одной сессии, и снятие здесь обрывало
+        # бы его на первом же: `net_watch` ставят в одном походе, `net_dump`
+        # делают в другом.
         if own_session and not keep_session:
+            browser_scenario_net_stop(page, state['net'])
+            browser_console_stop(state['console'])
             await browser_pool_session_close(entry['session_id'])
 
     logger_info(f'[browser] сценарий «{scenario.name}»: {status}, шагов {len(steps)} из {len(scenario.steps)}')
