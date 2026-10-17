@@ -65,7 +65,8 @@ BROWSER_PROXY_PARALLEL = 4
 
 async def browser_proxy_reach(proxy: str, target: str,
                               timeout_ms: int = BROWSER_PROXY_TIMEOUT_MS,
-                              keep: bool = False) -> dict:
+                              keep: bool = False,
+                              agent: dict | None = None) -> dict:
     """Откроет ли БРАУЗЕР эту страницу через этот выход.
 
     Args:
@@ -78,6 +79,11 @@ async def browser_proxy_reach(proxy: str, target: str,
             работы это единственный верный путь: бесплатный выход умирает за
             минуты, и сессия, открытая проверкой, — доказательство, что он жив
             **сейчас**. Закрыв её, мы через полминуты снова ничего не знаем.
+        agent: отпечаток сессии — поля открытия как есть (`user_agent`,
+            `extra_headers`, `viewport`, `locale`, `timezone_id`). ⚠⚠ Задаётся
+            ТОЛЬКО здесь: это свойства контекста, и у открытой сессии
+            Playwright менять их не умеет (`browser_scenario_run._session_take`).
+            Кто открыл сессию, тот и назвал отпечаток — другого места нет.
 
     Returns:
         dict: `ok` — открылась ли, `ms` — сколько занял поход, `error` —
@@ -100,8 +106,16 @@ async def browser_proxy_reach(proxy: str, target: str,
     session_id, held = '', False
 
     try:
+        # ⚠ Пустой выход уходит пустой СТРОКОЙ, а не `None`: схема контейнера
+        # ждёт строку, и `None` она отвергает 422 «Input should be a valid
+        # string» — то есть обещанная выше проверка без прокси не работала.
+        #
+        # ⚠⚠ Отпечаток раскладывается ЗДЕСЬ, при открытии. Было место, где
+        # сессию открывали одним выходом, а отпечаток передавали следующим
+        # походом, шагам сценария, — и он молча не применялся: площадка видела
+        # `HeadlessChrome/151` вместо собранного «Safari 18.6 · iPhone».
         made = await browser_upstream_request(
-            'POST', '/browser/session', {'proxy': proxy or None})
+            'POST', '/browser/session', {'proxy': proxy, **(agent or {})})
         session_id = str((made.get('session') or {}).get('session_id') or '')
         if not session_id:
             return _fail('контейнер не завёл сессию', started)
@@ -125,7 +139,8 @@ async def browser_proxy_reach(proxy: str, target: str,
 
 async def browser_proxy_pick(proxies: list, target: str,
                              limit: int = BROWSER_PROXY_PARALLEL,
-                             keep: bool = False) -> dict:
+                             keep: bool = False,
+                             agent: dict | None = None) -> dict:
     """Первый выход из списка, которым браузер **правда** открыл страницу.
 
     Args:
@@ -135,6 +150,9 @@ async def browser_proxy_pick(proxies: list, target: str,
         keep: оставить живой сессию победителя и вернуть её номер — чтобы
             работа пошла в ней же, без промежутка, в который выход успел бы
             умереть. ⚠ Взял номер — обязан закрыть.
+        agent: отпечаток сессий проверки (см. `browser_proxy_reach`). ⚠ Нужен
+            именно при `keep=True`: сессия победителя уезжает в работу, и
+            отпечаток ей после открытия уже не задать.
 
     Returns:
         dict: `proxy` — годный адрес (пусто, если ни один не подошёл), `ms` —
@@ -161,7 +179,8 @@ async def browser_proxy_pick(proxies: list, target: str,
     for at in range(0, len(rows), max(1, int(limit))):
         batch = rows[at:at + max(1, int(limit))]
         checks = await asyncio.gather(*(
-            browser_proxy_reach(one, target, keep=keep) for one in batch))
+            browser_proxy_reach(one, target, keep=keep, agent=agent)
+            for one in batch))
         tried += len(batch)
 
         winner = None
