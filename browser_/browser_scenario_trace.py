@@ -64,10 +64,10 @@ def browser_scenario_trace_text(got: dict) -> list:
              f'{run["status"]}  шаг {run["step_no"]}  {run["duration_ms"]} мс  '
              f'{run.get("created_at", "")}']
     if run.get('error'):
-        lines.append(f'ОШИБКА: {run["error"]}')
+        lines.append(f'ОШИБКА: {_oneline(run["error"])}')
     for record in got['trace']:
         mark = 'ok ' if record.get('ok') else '!! '
-        tail = f' — {record["error"]}' if record.get('error') else ''
+        tail = f' — {_oneline(record["error"])}' if record.get('error') else ''
         shown = record.get('value')
         shown = f'  → {shown}' if shown not in (None, '') else ''
         lines.append(f'{mark}{record.get("index", "?"):>3}  {record.get("action", "")} '
@@ -101,6 +101,12 @@ def _body_fields(body):
             return {'<json>': text}
     pairs = urllib.parse.parse_qsl(text, keep_blank_values=True)
     return dict(pairs) if pairs else {'<body>': text}
+
+
+def _oneline(text: str) -> str:
+    """Многострочный текст ошибки — первой строкой: «Call log» шага не украшает."""
+    first = str(text).strip().splitlines()[0] if str(text).strip() else ''
+    return _short(first, 200)
 
 
 def _short(text: str, cap: int) -> str:
@@ -142,4 +148,14 @@ if __name__ == '__main__':
                 print(line)
         return 0
 
-    raise SystemExit(asyncio.run(_main()))
+    async def _cli():
+        try:
+            return await _main()
+        finally:
+            # пул живёт дольше этого запуска: не закрыть — соединения доедут до
+            # сборщика мусора после конца цикла и заорут «Event loop is closed»
+            from mysql_.mysql_ import mysql_pool_close
+            await mysql_pool_close()
+
+
+    raise SystemExit(asyncio.run(_cli()))

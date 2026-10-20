@@ -55,10 +55,12 @@ def docker_compose_restart_wait(service: str, ready: str = '', timeout: float = 
         return {'ok': False, 'state': 'no-container', 'log': [],
                 'error': f'контейнер сервиса «{service}» не найден — поднят ли стек?'}
     pattern = re.compile(ready) if ready else None
-    deadline = t0 + timeout
+    # ⚠ отсчёт — по monotonic: `t0` это epoch, сравнивать его с часами
+    # аптайма значит ждать вечно
+    deadline = time.monotonic() + timeout
     state, log = '', []
     while time.monotonic() < deadline:
-        log = _logs_since(cid, t0, tail=0)
+        log, _ = _logs_since(cid, t0, tail=0)
         if pattern:
             if any(pattern.search(line) for line in log):
                 return {'ok': True, 'state': 'ready', 'log': log[-15:], 'error': ''}
@@ -99,7 +101,9 @@ def docker_compose_logs_grep(service: str, pattern: str = '',
     if not cid:
         return {'lines': [], 'total': 0,
                 'error': f'контейнер сервиса «{service}» не найден'}
-    lines = _logs_since(cid, since, tail=0)
+    lines, err = _logs_since(cid, since, tail=0)
+    if err:
+        return {'lines': [], 'total': 0, 'error': err}
     if pattern:
         rx = re.compile(pattern)
         lines = [line for line in lines if rx.search(line)]
@@ -114,14 +118,25 @@ def _container_id(service: str, root: str) -> str:
     return (r.stdout or '').split('\n')[0].strip()
 
 
-def _logs_since(cid: str, since, tail: int) -> list:
-    """Журнал контейнера с момента: `since` — epoch-секунда или строка docker."""
+def _logs_since(cid: str, since, tail: int) -> tuple:
+    """Журнал контейнера с момента: `since` — epoch-секунда или строка docker.
+
+    Returns:
+        `(строки, ошибка)`. Штатный вывод `docker logs` — только stdout:
+        сообщения про неверный флаг в stderr — это не строки журнала, а отказ
+        читать; смешивать их нельзя, иначе «в журнале usage» выглядит как данные.
+
+    ⚠ Флага `--no-color` у `docker logs` нет — с ним весь вывод превращается
+    в usage-подсказку.
+    """
     stamp = (since if isinstance(since, str)
              else time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(since)) + 'Z')
-    r = subprocess.run(['docker', 'logs', '--since', stamp, '--no-color', cid],
+    r = subprocess.run(['docker', 'logs', '--since', stamp, cid],
                        capture_output=True, text=True, timeout=30)
-    lines = (r.stdout + r.stderr).splitlines()
-    return lines if not tail else lines[-tail:]
+    if r.returncode != 0:
+        return [], (r.stderr or r.stdout).strip()
+    lines = (r.stdout or '').splitlines()
+    return (lines if not tail else lines[-tail:]), ''
 
 
 if __name__ == '__main__':

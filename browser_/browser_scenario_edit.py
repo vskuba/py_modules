@@ -133,7 +133,7 @@ if __name__ == '__main__':
     ap.add_argument('scenario_id', type=int)
     ap.add_argument('--show', action='store_true',
                     help='только показать шаги таблицей')
-    ap.add_argument('--set', nargs='2', metavar=('N', 'JSON'), action='append',
+    ap.add_argument('--set', nargs=2, metavar=('N', 'JSON'), action='append',
                     help='править шаг N: JSON полей, напр. \'{"selector":"a.b"}\'')
     ap.add_argument('--insert', nargs=2, metavar=('N', 'JSON'), action='append',
                     help='вставить шаг перед N-м: JSON шага целиком')
@@ -171,4 +171,14 @@ if __name__ == '__main__':
             print(line)
         return 0
 
-    raise SystemExit(asyncio.run(_main()))
+    async def _cli():
+        try:
+            return await _main()
+        finally:
+            # пул живёт дольше этого запуска: не закрыть — соединения доедут до
+            # сборщика мусора после конца цикла и заорут «Event loop is closed»
+            from mysql_.mysql_ import mysql_pool_close
+            await mysql_pool_close()
+
+
+    raise SystemExit(asyncio.run(_cli()))

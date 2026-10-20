@@ -133,4 +133,14 @@ if __name__ == '__main__':
             print(json.dumps(one, ensure_ascii=False))
         return 0
 
-    raise SystemExit(asyncio.run(_main()))
+    async def _cli():
+        try:
+            return await _main()
+        finally:
+            # пул живёт дольше этого запуска: не закрыть — соединения доедут до
+            # сборщика мусора после конца цикла и заорут «Event loop is closed»
+            from mysql_.mysql_ import mysql_pool_close
+            await mysql_pool_close()
+
+
+    raise SystemExit(asyncio.run(_cli()))
