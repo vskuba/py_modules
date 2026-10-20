@@ -145,9 +145,10 @@ async def web_fill_note(name: str, items, whole: bool = True,
     ).encode('utf-8')).hexdigest()[:16]
 
     async with mysql_get_db_async() as db:
-        memory = {row['item_id']: row for row in await db.fetchall(
+        await db.execute(
             'SELECT `item_id`, `price`, `in_stock`, `first_seen` FROM `web_fill_item`'
-            ' WHERE `name` = %s', (str(name),)) or []}
+            ' WHERE `name` = %s', (str(name), ))
+        memory = {row['item_id']: row for row in await db.fetchall() or []}
 
         fresh = sum(1 for key in current if key not in memory)
         moved = sum(1 for key, (price, stock) in current.items()
@@ -197,17 +198,19 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         `first` — самый ранний срез; `last` — последний.
     """
     async with mysql_get_db_async() as db:
-        catalog = await db.fetchone(
+        await db.execute(
             'SELECT COUNT(*) n, MIN(first_seen) first_seen FROM `web_fill_item`'
             ' WHERE `name` = %s AND `last_seen` >= CURDATE() - INTERVAL %s DAY',
-            (str(name), int(days))) or {}
-        diary = await db.fetchone(
+            (str(name), int(days)))
+        catalog = await db.fetchone() or {}
+        await db.execute(
             'SELECT COUNT(*) n, MIN(taken_at) first_at, MAX(taken_at) last_at,'
             ' SUM(`n_new`) new, SUM(`n_changed`) changed, SUM(`n_gone`) gone,'
             ' MAX(CASE WHEN `n_new` + `n_changed` + (`whole` * `n_gone`) > 0'
             '     THEN `taken_at` END) moved_at'
             ' FROM `web_fill_log` WHERE `name` = %s AND `taken_at` >= NOW() - INTERVAL %s DAY',
-            (str(name), int(days))) or {}
+            (str(name), int(days)))
+        diary = await db.fetchone() or {}
 
     if not diary.get('n'):
         return {'status': 'empty', 'n_items': int(catalog.get('n') or 0)}
