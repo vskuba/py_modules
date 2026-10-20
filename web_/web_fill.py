@@ -216,7 +216,11 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         return {'status': 'empty', 'n_items': int(catalog.get('n') or 0)}
 
     moved_at = diary.get('moved_at')
-    since_move = (datetime.now() - moved_at).days if moved_at else None
+    # Целые сутки, а не `.days`: тот у отрицательного остатка (срез только что
+    # снят, часы разошлись на секунду) даёт −1, и «сдвиг был» читался бы как
+    # «завтра».
+    since_move = (max(0, int((datetime.now() - moved_at).total_seconds() // 86400))
+                  if moved_at else None)
     status = ('live' if since_move is not None and since_move < WEB_FILL_FROZEN_DAYS
               else 'frozen')
     return {
