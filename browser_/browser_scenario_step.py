@@ -9,7 +9,9 @@
 Отдельный `wait_for` перед кликом поэтому не нужен и только удлиняет сценарий.
 Строгость оставлена действиям над одним элементом: клик по двум кнопкам сразу и
 правда бессмыслен. Действиям над списком (`wait_for`, `extract`) она мешает, и там
-берётся `.first` или все совпадения разом.
+берётся `.first` или все совпадения разом. Одно исключение — клик в точку (`value`
+«x,y»): элемент находится тем же строгим локактором, а бьёт уже `page.mouse` по
+координатам — только так событие доходит до чужого кросс-доменного фрейма.
 
 Состояние прогона (`state`) — это то, что живёт дольше одного шага и должно быть
 снято вместе с прогоном: перехват сети и журнал консоли. Держит его прогон, здесь
@@ -59,8 +61,40 @@ async def browser_scenario_step_apply(page, step: BrowserScenarioStep, values: d
         return page.url
 
     if action == 'click':
-        await page.locator(selector).click(timeout=timeout)
-        return ''
+        point = _step_point(value)
+        if point is None:
+            await page.locator(selector).click(timeout=timeout)
+            return ''
+
+        # Клик в точку элемента, а не в его центр. Так добираются до того, у чего
+        # нет доступных селекторов: чужой кросс-доменный iframe (виджет капчи),
+        # canvas, слайдер. Событие идёт через `page.mouse` — такое же, как от мыши
+        # человека, — и по hit-тесту попадает внутрь чужого фрейма, куда локактор
+        # не дотягивается: за границу фрейма и в закрытую shadow-оболочку он не
+        # заходит. Строгость та же, что у обычного клика: два совпадения — ошибка,
+        # а не клик по первому попавшему.
+        locator = page.locator(selector)
+        viewport = page.viewport_size or {}
+        x = y = 0.0
+        for attempt in (0, 1):
+            box = await locator.bounding_box(timeout=timeout)
+            if box is not None:
+                x, y = box['x'] + point[0], box['y'] + point[1]
+                # Проверка по самой точке, не по верхнему краю элемента: поймано
+                # на живом виджете — элемент касался вьюпорта краем, центр
+                # проверки это пропускал, и событие уходило за нижний край окна
+                # в никуда, без единой ошибки.
+                if (x >= 0 and y >= 0 and x < viewport.get('width', 10 ** 9)
+                        and y < viewport.get('height', 10 ** 9)):
+                    await page.mouse.click(x, y)
+                    return f'{round(x)},{round(y)}'
+            # Точка за краем (элемент под сгибом или скрыт) — наводим в поле
+            # зрения и меряем заново. Второй заход: здесь уже без поблажек.
+            await locator.scroll_into_view_if_needed(timeout=timeout)
+        if box is None:
+            raise ValueError('click: у элемента нет координат — он скрыт?')
+        raise ValueError(f'click: точка {point[0]},{point[1]} не попадает в вьюпорт '
+                         'даже после прокрутки')
 
     if action == 'hover':
         # Наведение, а не клик: подменю и подсказки открываются по `mouseover`, и
@@ -202,3 +236,21 @@ async def browser_scenario_step_apply(page, step: BrowserScenarioStep, values: d
         return text
 
     raise ValueError(f'неизвестное действие: {action}')
+
+
+def _step_point(value: str):
+    """Точка «x,y» внутри элемента для клика; пусто — None, клик по центру.
+
+    Пиксели от левого верхнего угла элемента. Знак любой: у виджета капчи чекбокс
+    стоит левее центра, у слайдера ручка гуляет по ширине — запрещать отрицательные
+    означало бы запрещать их, а запрещать нужно только попадание мимо вьюпорта,
+    это проверяется уже по факту координат.
+    """
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        x, _, y = value.partition(',')
+        return int(x), int(y)
+    except ValueError:
+        raise ValueError(f'click: ждал точку «x,y» в пикселях, получил «{value}»') from None

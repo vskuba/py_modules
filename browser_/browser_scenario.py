@@ -26,6 +26,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # увидит отказ схемы, а не молча пропущенный шаг.
 BROWSER_SCENARIO_ACTIONS = {
     'goto':        ('url',),
+    # Клик по центру элемента; `value` «x,y» — в точку элемента (пиксели от его
+    # левого верхнего угла). Точкой кликают то, до чего селектор не доходит:
+    # кросс-доменный iframe виджета капчи бьётся через hit-тест мышью.
     'click':       ('selector',),
     # Наведение отдельным действием, а не «кликом без нажатия»: подменю и всплывающие
     # подсказки открываются именно по `mouseover`, и клик по пункту, которого ещё нет
@@ -229,7 +232,8 @@ class BrowserScenarioStep(BaseModel):
     selector: str = Field('', max_length=500, description='CSS или text=… — ровно один элемент')
     url: str = Field('', max_length=1000)
     value: str = Field('', max_length=2000,
-                       description='Текст, вариант списка, мс, пиксели; у extract «@src» — атрибут')
+                       description='Текст, вариант списка, мс, пиксели; у extract «@src» — '
+                                   'атрибут, у click «x,y» — точка внутри элемента')
     key: str = Field('', max_length=50, description='Enter, Control+a')
     name: str = Field('', max_length=50, description='Под каким именем сложить результат extract')
     timeout_ms: int = Field(BROWSER_SCENARIO_STEP_TIMEOUT_MS, ge=100, le=120000)
