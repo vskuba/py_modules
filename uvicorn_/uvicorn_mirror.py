@@ -144,7 +144,15 @@ def _mirror(page: str, base: str, user: str = '', password: str = ''):
     srv.allow_reuse_address = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        yield f'http://127.0.0.1:{srv.server_address[1]}{page.split("?")[0]}'
+        # ⚠⚠ Адрес отдаётся С query. Тело копии запрашивается у панели вместе с
+        # ним (`_body_and_origin`), а браузеру прежде доставался путь без него —
+        # и страница, читающая свой адрес (`?workflow_id=5`, `?tab=errors`),
+        # открывалась не той, что просили. Ошибки при этом нет ни одной: копия
+        # живая, просто показывает состояние по умолчанию.
+        #
+        # ⚠ Отдавать можно смело: путь копии сверяется обрезанным
+        # (`_handle` выше), так что query на выбор «тело или панель» не влияет.
+        yield f'http://127.0.0.1:{srv.server_address[1]}{page}'
     finally:
         srv.shutdown()
         srv.server_close()
