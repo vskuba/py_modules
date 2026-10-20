@@ -126,6 +126,14 @@ if __name__ == '__main__':
     ns = ap.parse_args()
 
     async def _main():
+        # CLI может идти с хоста: имя контейнера из `.env` отсюда не видно, а пул
+        # заводится один раз на процесс — заводим его рабочим адресом до первого
+        # запроса, дальше общий слой возьмёт именно его.
+        from mysql_.mysql_ import mysql_pool_get
+        from mysql_.mysql_host import mysql_host_address
+        await mysql_pool_get(*mysql_host_address())
+
+
         got = await browser_scenario_trace(ns.run_id, scenario_id=ns.scenario)
         if ns.json:
             print(json.dumps(got, ensure_ascii=False, default=str))

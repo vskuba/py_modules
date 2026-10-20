@@ -102,6 +102,14 @@ if __name__ == '__main__':
     ns = ap.parse_args()
 
     async def _main():
+        # CLI может идти с хоста: имя контейнера из `.env` отсюда не видно, а пул
+        # заводится один раз на процесс — заводим его рабочим адресом до первого
+        # запроса, дальше общий слой возьмёт именно его.
+        from mysql_.mysql_ import mysql_pool_get
+        from mysql_.mysql_host import mysql_host_address
+        await mysql_pool_get(*mysql_host_address())
+
+
         if ns.mode == 'tables':
             for one in await mysql_schema_tables(ns.mask):
                 print(f'{one["table"]:<40} {one["rows"]:>8}  {one["comment"]}')
