@@ -61,6 +61,7 @@ namespace-папок, которые проекты импортируют на�
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
 | `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
 | `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
+| `cloudflare_/cloudflare.py` | `docs/cloudflare.md` — виджет Turnstile: найти сквозь тень, нажать мышью, провал объяснить сетью; ⚠ токен появляется и до прохождения |
 | `font_/font_.py` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |
 | `font_/font_pick.py` | `docs/font_pick.md` — шрифт, которым можно написать вот этот текст; ⚠⚠ в slim-образе шрифтов нет, кириллица выходит прямоугольниками |
 | `image_/` | `docs/image_tooling.md` — замер яркости фона модой, подгонка пачки по эталону, аудит фона, проверка шва (поиск спокойной полосы, стороны прямоугольника), сравнение пары кадров, ведомость цветов разметки |
@@ -293,6 +294,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `uvicorn_.uvicorn_mirror` | `СТРАНИЦА [--probe 'JS с return'] [--base]` → копия страницы как исток для probe/shot/drive |
 | `comfyui_.comfyui_gen` | `free`, `run --workflow [--scenes --scene --persona --anchor --qa-det …]`, `train --workflow --files … --out` |
 | `browser_.browser_` | `read <url>`, `snapshot <url>`, `shot <url> <файл>`, `pdf <url> <файл>`, `run <сценарий.json> [--var имя=значение]` |
+| `cloudflare_.cloudflare` | `URL [--proxy --timeout]` → кликнуть виджет Turnstile, дождаться токен, вердикт по сети |
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
