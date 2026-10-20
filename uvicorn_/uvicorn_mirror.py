@@ -159,6 +159,20 @@ def _mirror(page: str, base: str, user: str = '', password: str = ''):
         api.close()
 
 
+def _script(body: str, settle: int) -> str:
+    """Тело JS к запуску: выдержка до него и sentinel-return после.
+
+    ⚠ Без `return` внутри обёртка `web_drive` ждёт своего потолка молча: код-то
+    выполнен, но промис не закрыт — лишний wait_ms на каждый прогон вслепую.
+    Тело, которое не обещает значение, дополняется `return 1`, и прогон
+    завершается сразу по выполнении.
+    """
+    head = (f'await new Promise(r => setTimeout(r, {int(settle)}));\n'
+            if settle > 0 else '')
+    tail = '' if ('return' in body or 'done(' in body) else '\nreturn 1;'
+    return head + (body or 'return 1;') + tail
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(
         description='Копия страницы панели с проксированным /api: URL для '
@@ -167,6 +181,12 @@ if __name__ == '__main__':
     ap.add_argument('--probe', default='', help='тело async-зонда с return; '
                     'пусто — напечатать URL копии и ждать Enter')
     ap.add_argument('--base', default='', help='адрес панели; пусто — сам')
+    # ⚠ Скрипт стартует на load-событии, а панельный JS дорисовывает содержимое
+    # после своих fetch: без выдержки `querySelectorAll` вернёт пустоту, клик по
+    # [2] кинет TypeError — и вместо действия получишь таймаут обёртки
+    # `web_drive`. `--settle` даёт странице долю секунды договорить.
+    ap.add_argument('--settle', type=int, default=1000,
+                    help='мс, которые страница договаривает перед скриптом; 0 — сразу')
     # ⚠⚠ Кадр страницы за входом иначе одной командой не снять: `web_shot`
     # по адресу панели получит login-стену, а скрипт на питоне прячет саму
     # работу — по его команде не видно, снимали кадр или нет. И человеку, и
@@ -184,7 +204,7 @@ if __name__ == '__main__':
             from web_.web_drive import web_drive_eval
 
             width, _, height = ns.size.partition('x')
-            got = web_drive_eval(url, ns.js or 'return 1;', shot=ns.shot,
+            got = web_drive_eval(url, _script(ns.js, ns.settle), shot=ns.shot,
                                  size=(int(width), int(height or 900)),
                                  wait_ms=15000)
             bad = [one for one in got.get('console') or []
@@ -201,7 +221,9 @@ if __name__ == '__main__':
                 print('консоль:', one['text'][:160])
         elif ns.probe:
             from web_.web_drive import web_drive_eval
-            print(web_drive_eval(url, ns.probe)['value'])
+            print(json.dumps(web_drive_eval(url, _script(ns.probe, ns.settle),
+                                            wait_ms=10000)['value'],
+                             ensure_ascii=False))
         else:
             print(url)
             input('Enter — закрыть ')
