@@ -114,14 +114,21 @@ async def uvicorn_panel_login(base: str, user: str, password: str) -> httpx.Cook
     **способ войти** один, и второй копии у него быть не должно.
 
     Raises:
-        RuntimeError: войти не вышло, с кодом и началом ответа.
+        RuntimeError: войти не вышло, с кодом, учёткой и началом ответа.
+
+    ⚠ Учётка в тексте отказа не для красоты. Когда переменные окружения с
+    учёткой автоматики пропадают (на выкладке `.env` пересобирается из секрета
+    целиком), вход молча уезжает на умолчание `ADMIN_USERNAME`/`admin`, и 401
+    без имени читается как «панель сломалась». На проде такой отказ стоял в
+    ночном E2E пять суток: имени в тексте не было, и по нему не видно было, что
+    вошли не тем. Пароля здесь нет и быть не может — только имя.
     """
     async with httpx.AsyncClient(transport=http_pool_transport(), timeout=15) as c:
         response = await c.post(f'{base}/auth/login',
                                 json={'username': user, 'password': password})
     if response.status_code not in (200, 201, 204):
-        raise RuntimeError(f'вход в {base} не удался: {response.status_code} '
-                           f'{response.text[:200]}')
+        raise RuntimeError(f'вход в {base} под «{user}» не удался: '
+                           f'{response.status_code} {response.text[:200]}')
     return response.cookies
 
 
