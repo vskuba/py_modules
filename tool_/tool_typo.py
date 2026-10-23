@@ -58,6 +58,13 @@ TOOL_TYPO_KEY_CALLS = ('get', 'pop', 'setdefault')
 # через полгода её не отличить от забытой.
 TOOL_TYPO_KEY_ALLOW = re.compile(r'#\s*cyrillic-key:\s*(?P<why>.*)$')
 TOOL_TYPO_LETTERS = re.compile(r'[^a-zA-Zа-яёА-ЯЁ]+')
+# Иероглифика и полноширинные знаки: в кириллической прозе им места нет —
+# это след вставки из чужого источника (машинный перевод, азиатская докс),
+# глазами на кириллическом фоне они слипаются в «ещё один квадратик».
+# Каны, хани, хангыль, CJK-пунктуация и полноширинная ASCII-форма.
+TOOL_TYPO_CJK = re.compile('[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf'
+                           '\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff'
+                           '\uff01-\uff5e]')
 # Повтор подряд — след правки. Промежуток между словами: пробелы и не более
 # одного перевода строки; **пустой строки между повторами быть не может** —
 # заголовок и первое слово абзаца под одним словом это норма документа
@@ -84,7 +91,7 @@ TOOL_TYPO_JARGON = re.compile(
 
 
 def tool_typo(root=None) -> list[dict]:
-    """Проверить текст на опечатки: склейки, подмены букв, повторы слов.
+    """Проверить текст на опечатки: склейки, подмены букв, повторы слов, иероглифы.
 
     Смотрит докстринги и комментарии `*.py`, комментарии `*.js`/`*.mjs`/`*.cjs`
     плюс `*.md`; код в обратных кавычках, блоки-заборы и адреса вырезаются —
@@ -94,8 +101,8 @@ def tool_typo(root=None) -> list[dict]:
         root: корень репозитория; пусто — тот, где лежит этот файл.
 
     Returns:
-        list[dict]: находки с полями `kind` (`mixed` или `doubled`), `word`,
-        `hint`, `where`, `line`.
+        list[dict]: находки с полями `kind` (`mixed`, `doubled` или `cjk`),
+        `word`, `hint`, `where`, `line`.
 
     ⚠ Орфографию **не проверяет** и проверить не может: словаря нет. Чистый вывод
     означает «механических следов правки нет», а не «текст без ошибок» — за
@@ -106,7 +113,7 @@ def tool_typo(root=None) -> list[dict]:
     """
     base = Path(root) if root else TOOL_TYPO_ROOT
     prose = _prose(base)
-    return _mixed(prose) + _doubled(prose)
+    return _mixed(prose) + _doubled(prose) + _cjk(prose)
 
 
 def tool_typo_prose(root=None) -> str:
@@ -242,7 +249,7 @@ def tool_typo_cyrillic(root=None) -> list[dict]:
 
 
 def main() -> int:
-    """CLI: `python -m tool_.tool_typo [--kind mixed|doubled] [--prose] [--cyrillic]`.
+    """CLI: `python -m tool_.tool_typo [--kind mixed|doubled|cjk] [--prose] [--cyrillic]`.
 
     Код возврата — число находок (0 — чисто, потолок 125): проверку вешают
     хуком перед коммитом, а хук читает код, а не глазами вывод. Потолок нужен
@@ -255,9 +262,10 @@ def main() -> int:
         description='Следы неудачной правки в прозе репозитория: докстринги и '
                     'комментарии `*.py`, комментарии `*.js`/`*.mjs`/`*.cjs` и '
                     '`*.md` — слипшиеся слова, подмена буквы из другого '
-                    'алфавита, повтор слова. Плюс — кириллица в именах '
-                    'функций и ключах (--cyrillic).')
-    ap.add_argument('--kind', default='', choices=['', 'mixed', 'doubled', 'cyrillic'])
+                    'алфавита, повтор слова, иероглифы из чужой вставки. Плюс — '
+                    'кириллица в именах функций и ключах (--cyrillic).')
+    ap.add_argument('--kind', default='',
+                    choices=['', 'mixed', 'doubled', 'cjk', 'cyrillic'])
     ap.add_argument('--prose', action='store_true',
                     help='не искать, а выдать всю прозу для вычитки моделью')
     ap.add_argument('--cyrillic', action='store_true',
@@ -283,7 +291,8 @@ def main() -> int:
         return 0
 
     titles = {'mixed': '🔤 БУКВЫ ИЗ РАЗНЫХ АЛФАВИТОВ ИЛИ СЛИПШИЕСЯ СЛОВА',
-              'doubled': '👯 СЛОВО ПОВТОРЕНО ДВАЖДЫ'}
+              'doubled': '👯 СЛОВО ПОВТОРЕНО ДВАЖДЫ',
+              'cjk': '🈴 ИЕРОГЛИФЫ — СЛЕД ВСТАВКИ ИЗ ДРУГОГО ИСТОЧНИКА'}
 
     for kind, title in titles.items():
         rows = [f for f in found if f['kind'] == kind]
@@ -418,6 +427,18 @@ def _mixed(prose: list[tuple]) -> list[dict]:
             if TOOL_TYPO_CYRILLIC.search(run) and TOOL_TYPO_LATIN.search(run):
                 out.append({'kind': 'mixed', 'word': run, 'where': where, 'line': line,
                             'hint': 'подмена буквы или слипшиеся слова'})
+    return out
+
+
+def _cjk(prose: list[tuple]) -> list[dict]:
+    """Иероглифы и полноширинные знаки в прозе — след вставки из чужого источника."""
+    out = []
+    for where, line, text in prose:
+        for found in TOOL_TYPO_CJK.finditer(text):
+            lo, hi = max(0, found.start() - 8), min(len(text), found.end() + 8)
+            out.append({'kind': 'cjk', 'word': text[lo:hi].strip(),
+                        'where': where, 'line': line,
+                        'hint': 'иероглиф или полноширинный знак — след вставки'})
     return out
 
 

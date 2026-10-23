@@ -138,7 +138,76 @@ def proc_ps_port_owners(port: int, root: str = '/proc') -> tuple:
     return owners, None
 
 
+def proc_ps_kill(pattern: str = '', port: int = 0, sig: int = 15,
+                 kill: bool = False, root: str = '/proc') -> dict:
+    """Убить найденное по подстроке или по держателю порта — не трогая себя.
+
+    Сухой прогон по умолчанию: без `kill=True` только список тех, кто был бы
+    убит. Из мишеней вычёркиваются свой pid и вся цепочка предков: `kill $(pgrep -f шаблон)`
+    из шелла снимает и сам шелл, и его обёртку — шаблон живёт в их собственной
+    cmdline (проверено: обёртка bash умирала по SIGTERM раньше сервера).
+
+    Args:
+        pattern: подстрока comm/cmdline, как в `proc_ps_find`.
+        port: кого убивать по держателю TCP-порта (`proc_ps_port_owners`).
+        sig: номер сигнала (15 — по-хорошему, 9 — сейчас).
+        kill: False — только мишени (сухо), True — послать сигнал.
+        root: корень proc-файловой системы.
+
+    Returns:
+        {'targets': [цели с pid/comm/cmdline], 'killed': [pid],
+         'failed': [{'pid', 'error'}], 'skipped': [{'pid', 'why'}]} —
+         skipped объясняет каждого снятого из мишеней (сам, предок);
+         хотя бы один селектор обязателен, иначе `targets` пуст и `error`.
+    """
+    out: dict = {'targets': [], 'killed': [], 'failed': [], 'skipped': []}
+    rows: list = []
+    if not pattern and not port:
+        out['error'] = 'нужен pattern или port'
+        return out
+    if port:
+        got, err = proc_ps_port_owners(port, root)
+        if err:
+            out['error'] = err
+            return out
+        rows += got or []
+    if pattern:
+        got, err = proc_ps_find(pattern, root)
+        if err:
+            out['error'] = err
+            return out
+        rows += got or []
+    kin = _proc_ps_me_and_ancestors()
+    mine = {row['pid'] for row in rows}
+    for pid in sorted(mine):
+        if pid <= 1:
+            out['skipped'].append({'pid': pid, 'why': 'ядро/инициализатор'})
+            continue
+        if pid in kin:
+            out['skipped'].append({'pid': pid, 'why': 'я сам или мой предок'})
+            continue
+        comm, cmdline = _proc_ps_read_cmdline(root, str(pid))
+        out['targets'].append({'pid': pid, 'comm': comm, 'cmdline': cmdline})
+        if kill:
+            try:
+                os.kill(pid, sig)
+                out['killed'].append(pid)
+            except OSError as err:
+                out['failed'].append({'pid': pid, 'error': str(err)})
+    return out
+
+
 # ── детали реализации ──
+
+
+def _proc_ps_me_and_ancestors(root: str = '/proc') -> set:
+    """Свой pid и вся цепочка предков — их убивать нельзя по определению."""
+    kin, pid = {os.getpid()}, os.getpid()
+    while True:
+        pid = _proc_ps_ppid(root, pid)
+        if pid <= 0 or pid in kin:
+            return kin
+        kin.add(pid)
 
 
 def _proc_ps_read_cmdline(root: str, pid: str) -> tuple:
@@ -186,14 +255,33 @@ if __name__ == '__main__':
     import sys
 
     _P = argparse.ArgumentParser(description=__doc__.split('\n')[1])
-    _P.add_argument('cmd', choices=('list', 'find', 'stat', 'tree', 'ports'),
+    _P.add_argument('cmd', choices=('list', 'find', 'stat', 'tree', 'ports', 'kill'),
                     help='что показать из /proc')
     _P.add_argument('--pattern', default='', help='подстрока comm/cmdline для find')
     _P.add_argument('--pid', type=int, default=None, help='pid для stat/tree')
     _P.add_argument('--port', type=int, default=None, help='порт для ports')
     _P.add_argument('--limit', type=int, default=30, help='сколько строк печатать')
     _P.add_argument('--root', default='/proc', help='корень proc-файловой системы')
+    _P.add_argument('--sig', type=int, default=15, help='сигнал для kill')
+    _P.add_argument('--now', action='store_true',
+                    help='для kill: не только список, а послать сигнал')
     _C = _P.parse_args()
+    if _C.cmd == 'kill':
+        _res = proc_ps_kill(_C.pattern, _C.port or 0, _C.sig, _C.now, _C.root)
+        if 'error' in _res:
+            print(f"ошибка: {_res['error']}", file=sys.stderr)
+            raise SystemExit(1)
+        for _t in _res['targets']:
+            print(f"  мишень pid={_t['pid']} {_t['comm'][:24]}: {_t['cmdline'][:64]}")
+        for _s in _res['skipped']:
+            print(f"  снят pid={_s['pid']}: {_s['why']}")
+        if not _res['targets'] and not _res['skipped']:
+            print('ни одной мишени')
+        for _f in _res['failed']:
+            print(f"  не удалось pid={_f['pid']}: {_f['error']}", file=sys.stderr)
+        print(('убиты: ' + ', '.join(map(str, _res['killed']))) if _C.now
+              else 'сухой прогон: добавь --now')
+        raise SystemExit(1 if _res['failed'] else 0)
     if _C.cmd == 'list':
         _rows, _err = proc_ps_list(_C.limit, _C.root)
     elif _C.cmd == 'find':
