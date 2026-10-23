@@ -105,6 +105,9 @@ namespace-папок, которые проекты импортируют на�
 | `file_/file_walk.py` | `docs/file_walk.md` — обход дерева без `.venv`/`.git`/`node_modules`: общий низ описи, вычитки и поиска по слоям; ⚠ фильтр после обхода не экономит ничего |
 | `tool_/tool_typo.py` | `docs/tool_typo.md` — проверка прозы перед коммитом (py, js-семейство, md); ⚠ орфографию без словаря не ловит |
 | `ssh_/ssh_fleet.py`, `ssh_/ssh_put.py` | `docs/ssh_fleet.md` — флот разом: параллельно всем целям, мёртвый узел — запись; файл на цель с правами в один поход |
+| `mysql_/mysql_remote.py` | `docs/mysql_remote.md` — разовый запрос и разведка схемы прода через ssh, учётки на той машине; ⚠ голое имя для `.` POSIX ищет по PATH |
+| `project_/project_probe_ssh.py` | `docs/project_probe_ssh.md` — домен-код внутри контейнера на том хосте; ⚠ третий способ исполнения, не путать с `project_probe` и `docker_compose_python` |
+| `tool_/tool_import.py` | `docs/tool_import.md` — импорты, которые никто в файле не читает; ⚠ `skip` в `file_walk` заменяет штатный список, а не дополняет |
 | `systemd_/` | `docs/systemd_status.md` — состояние юнита словарем, журнал хвостом с фильтром; ⚠ замороженный юнит выглядит живым |
 | `gpu_/gpu_vram.py` | `docs/gpu_vram.md` — видеопамять числами, держатели процессами; ⚠ GB10 по платам отдаёт нули |
 | `proc_/` | `docs/proc_mem.md` — память машины из /proc без колонок `free`, топ держателей по RSS |
