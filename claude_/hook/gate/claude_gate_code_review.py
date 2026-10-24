@@ -76,7 +76,8 @@ from pathlib import Path
 # ⚠ Загрузка через `spec_from_file_location` (так делает сюита) не кладёт корень
 # слоя в путь поиска сама, а запуск файла по пути — кладёт через sys.path[0].
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from claude_.hook.claude_hook import (claude_hook_run, claude_hook_tool_calls,           # noqa: E402
+from claude_.hook.claude_hook import (claude_hook_is_tool, claude_hook_journal_path,      # noqa: E402
+                                      claude_hook_run, claude_hook_tool_calls,
                                       claude_hook_transcript_rows)
 from claude_.hook.gate.claude_gate import (claude_gate_asked,                            # noqa: E402
                                           claude_gate_forget, claude_gate_note,
@@ -188,7 +189,7 @@ def claude_gate_code_review_edits(transcript_path, rows=None) -> list:
     out = []
 
     for call in claude_hook_tool_calls(rows):
-        if call['name'] not in CLAUDE_GATE_CODE_REVIEW_TOOLS:
+        if not claude_hook_is_tool(call['name'], CLAUDE_GATE_CODE_REVIEW_TOOLS):
             continue
 
         tool_input = call['input'] or {}
@@ -302,7 +303,7 @@ def main() -> int:
 
 def _look(data) -> str:
     """Замечание на эту правку либо пусто. Вид проверки для `claude_hook_run`."""
-    transcript = str(data.get('transcript_path') or '')
+    transcript = claude_hook_journal_path(data)         # путь DSH: в его вводе его нет
     session = str(data.get('session_id') or '')
     tool_input = data.get('tool_input') or {}
     where = str(tool_input.get('file_path') or tool_input.get('notebook_path') or '')
