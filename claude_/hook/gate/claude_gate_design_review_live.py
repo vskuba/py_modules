@@ -49,7 +49,7 @@ from pathlib import Path
 # слоя в путь поиска сама, а запуск файла по пути — кладёт через sys.path[0].
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from claude_.hook.claude_hook import (claude_hook_stop_run,                   # noqa: E402
-                                 claude_hook_transcript_rows)
+                                      claude_hook_tool_calls, claude_hook_transcript_rows)
 from claude_.hook.gate.claude_gate import (claude_gate_asked,                 # noqa: E402
                                       claude_gate_forget, claude_gate_note,
                                       claude_gate_noted, claude_gate_off,
@@ -147,7 +147,7 @@ def claude_gate_design_review_live_edits(transcript_path, rows=None, root=None) 
     rows = claude_hook_transcript_rows(transcript_path, CLAUDE_GATE_DESIGN_REVIEW_LIVE_ROWS) if rows is None else rows
     edits = []
 
-    for call in _calls(rows):
+    for call in claude_hook_tool_calls(rows):
         if _is_shot(call):
             del edits[:]                                  # кадр снимает подозрение со всего, что было до него
             continue
@@ -181,6 +181,14 @@ def claude_gate_design_review_live_format(verdict) -> str:
 
 
 def main() -> int:
+    """Хук `Stop`: код 2 возвращает ход назад, 0 — отпускает его.
+
+    ⚠ Разбор ввода, коды возврата и «при своей поломке пропускать» — в `claude_hook`;
+    здесь только вопрос: правили ли вёрстку после последнего снятого кадра.
+
+    ⚠ Клапан проверяется **здесь**, до чтения транскрипта: снятая застава не обязана
+    ради молчания поднимать хвост `.jsonl`.
+    """
     if claude_gate_off(CLAUDE_GATE_DESIGN_REVIEW_LIVE_PASS):
         return 0
 
@@ -202,16 +210,6 @@ def _look(data) -> str:
     verdict = claude_gate_design_review_live(transcript, session, root=root)
 
     return claude_gate_design_review_live_format(verdict) if verdict['block'] else ''
-
-
-def _calls(rows):
-    """Вызовы инструментов из записей транскрипта, в порядке хода."""
-    for row in rows:
-        message = row.get('message') or {}
-
-        for part in message.get('content') or []:
-            if isinstance(part, dict) and part.get('type') == 'tool_use':
-                yield part
 
 
 def _edited_path(call) -> str:
