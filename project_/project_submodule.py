@@ -259,7 +259,7 @@ def _run_ok(cwd: Path, *args: str) -> bool:
 
 
 def _run(cwd: Path, *args: str) -> None:
-    """Команда git, обязанная удасться: чужой текст наружу как есть."""
+    """Команда git, обязанная удаться: чужой текст наружу как есть."""
     subprocess.run(['git', *args], cwd=str(cwd), check=True, capture_output=True,
                    text=True, timeout=20)
 

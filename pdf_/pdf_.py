@@ -70,7 +70,7 @@ def pdf_fonts_extract(path: str, out_dir: str | None = None) -> list[dict]:
     """
     Извлечь вложенные шрифты: `{"basefont","format","subset","bytes","file"}`.
 
-    Байты доездают живыми до `font_.font_` (он принимает и путь, и байты) —
+    Байты доезжают живыми до `font_.font_` (он принимает и путь, и байты) —
     так подмножество из PDF сверяют с мастер-файлом, не создавая временных.
     С `out_dir` каждый шрифт пишется файлом (`.ttf`/`.otf`/`.cff`/`.pfb`),
     в `file` — путь; без него `file` None. Форматы: TrueType (FontFile2),

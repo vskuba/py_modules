@@ -172,7 +172,7 @@ def web_shot_serve(directory, port=0):
         port: фиксированный порт или 0 — свободный.
 
     Yields:
-        str: «http://127.0.0.1:порт» без слевого слэша.
+        str: «http://127.0.0.1:порт» без левого слэша.
     """
     class _Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):

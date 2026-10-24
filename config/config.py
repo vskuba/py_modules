@@ -34,7 +34,7 @@ if os.path.isfile(ENV_LOCAL_PATH):
 
 def config_get(key: str, default: str = '') -> Any:
     """
-    Возращает конфиги по ключу из .env (значение из .env.local, если оно там есть)
+    Возвращает конфиги по ключу из .env (значение из .env.local, если оно там есть)
     """
     return os.getenv(key.upper(), default)
 

@@ -36,7 +36,7 @@ async def telegram_session_start(phone: str, api_id: int, api_hash: str,
         session: путь к файлу сессии без расширения — `.session` допишется сам.
         code: код из приложения; если задан, файл не ждём.
         code_file: путь к файлу, в который придёт код.
-        password: пороль 2FA, если на аккаунте включена.
+        password: пароль 2FA, если на аккаунте включена.
         code_timeout: сколько секунд ждать `code_file`.
 
     Returns:
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     p.add_argument('--session', required=True, help='путь к файлу сессии без .session')
     p.add_argument('--code', default='', help='код из приложения прямо сейчас')
     p.add_argument('--code-file', default='', help='файл, в который положат код позже')
-    p.add_argument('--password', default='', help='пороль 2FA, если включена')
+    p.add_argument('--password', default='', help='пароль 2FA, если включена')
     ns = p.parse_args()
     cli = asyncio.run(telegram_session_start(
         ns.phone, ns.api_id, ns.api_hash, ns.session,

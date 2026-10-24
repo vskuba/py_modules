@@ -821,7 +821,7 @@ def _cli_out(value, as_json: bool) -> str:
     """
     Формат вывода значения: без флага — как print, с `--json` — JSON.
 
-    Головой print даёт Python-repr: `True`, `None`, одночные кавычки у
+    Головой print даёт Python-repr: `True`, `None`, одиночные кавычки у
     строк — `jq` и shell-скрипты это не едят, и каждый дописывал свой
     постпроцессинг. `--json` отдаёт `true`/`false`/`null` и двойные кавычки;
     `ensure_ascii=False` — чтобы кириллица оставалась читаемой.

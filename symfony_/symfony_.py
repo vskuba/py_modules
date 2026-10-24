@@ -119,7 +119,7 @@ def symfony_console_php84_run(args: str, cwd: str = None, timeout: int = 300,
 
 
 def symfony_compose_run(argv: str, cwd: str = None, timeout: int = 180, env: dict = None) -> tuple:
-    """Выполнить произволную команду внутри сервиса php-fpm (`compose run`/`exec`).
+    """Выполнить произвольную команду внутри сервиса php-fpm (`compose run`/`exec`).
 
     Args:
         argv: строка аргументов после `exec -T php-fpm`.

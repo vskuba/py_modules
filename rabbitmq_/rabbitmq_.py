@@ -37,7 +37,7 @@ def rabbitmq_mgmt_request(method: str, host: str = 'rabbitmq', path: str = 'over
 
     «Vhost payment_gateway/payment_gateway_test, yml rabbitmq/payment_gateway_vhost.yml,
     `vhost:mapping:create -Hrabbitmq -uguest -pguest`» — креды дефолтными гостями,
-    vhost в URL кодуруется (`/` → `%2F`).
+    vhost в URL кодируется (`/` → `%2F`).
 
     Args:
         method: 'GET' | 'PUT' | 'DELETE' | 'POST'.

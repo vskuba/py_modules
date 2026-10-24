@@ -162,7 +162,7 @@ def sqllite3_scan_blob(db_path: str, pattern: bytes, column: str = 'value',
     Args:
         db_path: путь к БД (копии).
         pattern: байты для поиска (b'xoxc-', b'd='...).
-        column: имя BLOB-колонки; пусто — искать по всем колокам BLOB.
+        column: имя BLOB-колонки; пусто — искать по всем колонкам BLOB.
         table: имя таблицы; пусто — искать по всем таблицам с BLOB-колонкой.
         limit: сколько находок вернуть.
         tmp_dir: каталог для read-only копий.
