@@ -43,6 +43,12 @@
 `alive` может быть списком: у одного сайта разные кабинеты отвечают разными
 модулями и в разных форматах. Подошла любая проверка — вход жив.
 
+У сайтов, где «я здесь» читается из адреса, а не из cookie (`/connection?user=...`),
+шаг несёт `{метки}` и может звать свой хост ключом `base` — разбор меток и цена
+непогашенной описаны в `http_heartbeat_step.py`. Значения меток приходят параметром
+`values` (одной сессии) или `values_map` (`{ключ сессии: значения}`) — модуль их не
+толкует, он только подставляет.
+
 ## Чего модуль не делает
 
 Не входит и не выходит: вход — дело браузера и сценариев, они у каждого проекта
@@ -110,12 +116,15 @@ def http_heartbeat_client(proxy: str = '') -> httpx.AsyncClient:
 
 
 async def http_heartbeat_send(client: httpx.AsyncClient, cookies: dict,
-                         config: dict) -> bool:
+                         config: dict, values: dict = None) -> bool:
     """Один удар — «я на сайте». Ничего не проверяет и не читает.
 
     Отдельно от `http_heartbeat_check`, потому что цена разная: здесь один запрос на
     сессию, там до трёх. Тысяча сессий раз в полминуты — 33 запроса в секунду
     против сотни.
+
+    Args:
+        values: чем вызывающий различает сессии в адресе (`{метки}` шага).
 
     Returns:
         bool: ушёл ли запрос. `False` — либо нечем (нет настройки или cookie),
@@ -127,7 +136,7 @@ async def http_heartbeat_send(client: httpx.AsyncClient, cookies: dict,
         return False
 
     try:
-        await http_heartbeat_step_call(client, config, step, cookies)
+        await http_heartbeat_step_call(client, config, step, cookies, values)
     except Exception as e:
         logger_info(f'[http_heartbeat] удар не прошёл: {e}')
 
@@ -137,7 +146,7 @@ async def http_heartbeat_send(client: httpx.AsyncClient, cookies: dict,
 
 
 async def http_heartbeat_send_many(client: httpx.AsyncClient, sessions: dict,
-                                   config: dict) -> dict:
+                                   config: dict, values_map: dict = None) -> dict:
     """Удар по многим сессиям разом: `{ключ: cookie}` → `{ключ: дошло ли}`.
 
     ⚠ **Одним клиентом и с оглядкой на сайт.** Ради этого модуль и написан:
@@ -151,13 +160,18 @@ async def http_heartbeat_send_many(client: httpx.AsyncClient, sessions: dict,
 
     Ключ — что угодно, чем вызывающий различает свои сессии: модуль его не
     толкует и возвращает как есть.
+
+    Args:
+        values_map: `{тот же ключ: значения меток адреса}`; ключей нет — метки
+            нечем гасить, и шаг откажет словами, а не битым адресом.
     """
     limit = asyncio.Semaphore(HTTP_HEARTBEAT_PARALLEL)
 
     async def one(key, cookies):
         async with limit:
             try:
-                return key, await http_heartbeat_send(client, cookies, config)
+                return key, await http_heartbeat_send(
+                    client, cookies, config, (values_map or {}).get(key))
             except Exception as e:
                 logger_info(f'[http_heartbeat] сессия {key}: {e}')
 
@@ -170,8 +184,11 @@ async def http_heartbeat_send_many(client: httpx.AsyncClient, sessions: dict,
 
 
 async def http_heartbeat_check(client: httpx.AsyncClient, cookies: dict,
-                          config: dict) -> dict:
+                          config: dict, values: dict = None) -> dict:
     """Полная проверка: отметиться, убедиться, что вход жив, снять счётчик.
+
+    Args:
+        values: чем вызывающий различает сессии в адресе (`{метки}` шагов).
 
     Returns:
         dict: `status` — `online` | `offline` | `error`; `unread` — непрочитанных
@@ -190,13 +207,14 @@ async def http_heartbeat_check(client: httpx.AsyncClient, cookies: dict,
         # Удар первым: он и есть «я на сайте». Ответ у него обычно пустой, поэтому
         # смотрим только на то, что запрос состоялся.
         if (config or {}).get('beat'):
-            await http_heartbeat_step_call(client, config, config['beat'], cookies)
+            await http_heartbeat_step_call(client, config, config['beat'], cookies,
+                                           values)
 
-        if not await _alive(client, config, cookies):
+        if not await _alive(client, config, cookies, values):
             return _result('offline', ms=_ms(started),
                            error='сайт не признал вход: нужен повторный логин')
 
-        unread = await _unread(client, config, cookies)
+        unread = await _unread(client, config, cookies, values)
     except Exception as e:
         return _result('error', ms=_ms(started), error=f'{type(e).__name__}: {e}')
 
@@ -230,7 +248,8 @@ def http_heartbeat_cookies(storage_state, base: str) -> dict:
 
 # ── Приватное ────────────────────────────────────────────────────────────────
 
-async def _alive(client: httpx.AsyncClient, config: dict, cookies: dict) -> bool:
+async def _alive(client: httpx.AsyncClient, config: dict, cookies: dict,
+                 values: dict = None) -> bool:
     """Жив ли вход. Проверки нет — верим удару и считаем, что жив.
 
     Проверок может быть несколько: у одного сайта разные кабинеты отвечают
@@ -242,20 +261,21 @@ async def _alive(client: httpx.AsyncClient, config: dict, cookies: dict) -> bool
         return True
 
     for step in steps if isinstance(steps, list) else [steps]:
-        if http_heartbeat_step_ok(step, await http_heartbeat_step_call(client, config, step,
-                                                             cookies)):
+        if http_heartbeat_step_ok(step, await http_heartbeat_step_call(client, config,
+                                                             step, cookies, values)):
             return True
 
     return False
 
 
-async def _unread(client: httpx.AsyncClient, config: dict, cookies: dict) -> int:
+async def _unread(client: httpx.AsyncClient, config: dict, cookies: dict,
+                  values: dict = None) -> int:
     """Счётчик непрочитанных. Не настроен — `-1`: «не спрашивали» ≠ «ноль»."""
     step = (config or {}).get('unread')
     if not step:
         return -1
 
-    response = await http_heartbeat_step_call(client, config, step, cookies)
+    response = await http_heartbeat_step_call(client, config, step, cookies, values)
     value = http_heartbeat_step_json(response).get(str(step.get('field') or 'unread'))
 
     return int(value) if str(value).isdigit() else -1
