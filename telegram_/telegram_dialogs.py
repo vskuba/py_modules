@@ -27,7 +27,7 @@ async def telegram_dialogs_list(client, kind: str = '') -> list:
 
     ⚠ Пусто при живом аккаунте — не поломка: чужие каналы молчат, пока аккаунт
     в них не админ (`ChatAdminRequiredError` у `iter_participants`), — список
-    это то, что аккаунту **видено**, а не то, что он читает до конца.
+    это то, что аккаунту **видно**, а не то, что он читает до конца.
     """
     want = {k.strip() for k in kind.split(',') if k.strip()}
     rows = []

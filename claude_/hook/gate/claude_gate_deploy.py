@@ -1,7 +1,8 @@
 """
 Застава перед выкладкой: узнать команду выкладки и не пустить её с непройденными проверками.
 
-Работает хуком Claude Code, общим для всех проектов, и той же командой — руками:
+Работает хуком Claude Code, общим для всех проектов (в DSH — тем же хуком через мост
+`@deepseek-ai/dsh-hooks-claude-code`), и той же командой — руками:
 
     echo '{"tool_name":"Bash","tool_input":{"command":"./deploy.sh"},"cwd":"."}' \\
       | python3 claude_/hook/gate/claude_gate_deploy.py

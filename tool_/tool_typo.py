@@ -389,7 +389,7 @@ def _js_prose(where: str, source: str) -> list[tuple]:
     out = []
     for match in TOOL_TYPO_JS_BLOCK.finditer(source):
         start = source.count('\n', 0, match.start()) + 1
-        # JSDoc-строки живут со «звёздочной» канаветой — снимаем её построчно,
+        # JSDoc-строки живут со «звёздочной» канавкой — снимаем её построчно,
         # и номер ставим настоящий, а не начало всего блока.
         for offset, row in enumerate(match.group()[2:-2].splitlines()):
             row = row.strip().lstrip('*').strip()

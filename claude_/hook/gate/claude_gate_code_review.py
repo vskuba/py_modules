@@ -76,11 +76,13 @@ from pathlib import Path
 # ⚠ Загрузка через `spec_from_file_location` (так делает сюита) не кладёт корень
 # слоя в путь поиска сама, а запуск файла по пути — кладёт через sys.path[0].
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from claude_.hook.claude_hook import (claude_hook_run, claude_hook_tool_calls,           # noqa: E402
+from claude_.hook.claude_hook import (claude_hook_is_tool, claude_hook_journal_path,      # noqa: E402
+                                      claude_hook_run, claude_hook_tool_calls,
                                       claude_hook_transcript_rows)
 from claude_.hook.gate.claude_gate import (claude_gate_asked,                            # noqa: E402
                                           claude_gate_forget, claude_gate_note,
-                                          claude_gate_noted, claude_gate_off)
+                                          claude_gate_noted, claude_gate_off,
+                                          claude_gate_spot)
 from function_.function_order import function_order, function_order_format               # noqa: E402
 from tool_.tool_typo import tool_typo_cyrillic                                            # noqa: E402
 
@@ -129,7 +131,7 @@ def claude_gate_code_review(path, transcript_path, session_id, seen_path=None,
     каждый следующий вызов задал бы тот же вопрос заново — а это крик на каждую
     правку до конца суток.
     """
-    seen = Path(seen_path or CLAUDE_GATE_CODE_REVIEW_SEEN)
+    seen = claude_gate_spot(seen_path or CLAUDE_GATE_CODE_REVIEW_SEEN)
 
     if claude_gate_off(CLAUDE_GATE_CODE_REVIEW_PASS):
         return {'block': False, 'found': [], 'lint': {},
@@ -165,6 +167,13 @@ def claude_gate_code_review(path, transcript_path, session_id, seen_path=None,
     claude_gate_note(session_id, seen,
                      {'asks': asked + 1, 'seen': sorted(covered | set(pending))}, now=now)
 
+    if claude_gate_asked(session_id, seen, now=now) <= asked:
+        # ⚠ Память не записалась — каталог оказался закрыт на запись, и `spot` ему не
+        # помог. Без счётчика этот вопрос повторялся бы на каждую правку до конца
+        # суток; молчание здесь честнее крика, а заметить его можно по `why`.
+        return {'block': False, 'found': pending, 'lint': {},
+                'why': 'память не записалась — застава себя снимает'}
+
     return {'block': True, 'found': pending, 'lint': claude_gate_code_review_lint(pending),
             'why': f'файлов кода в партии: {len(pending)}'}
 
@@ -188,7 +197,7 @@ def claude_gate_code_review_edits(transcript_path, rows=None) -> list:
     out = []
 
     for call in claude_hook_tool_calls(rows):
-        if call['name'] not in CLAUDE_GATE_CODE_REVIEW_TOOLS:
+        if not claude_hook_is_tool(call['name'], CLAUDE_GATE_CODE_REVIEW_TOOLS):
             continue
 
         tool_input = call['input'] or {}
@@ -302,7 +311,7 @@ def main() -> int:
 
 def _look(data) -> str:
     """Замечание на эту правку либо пусто. Вид проверки для `claude_hook_run`."""
-    transcript = str(data.get('transcript_path') or '')
+    transcript = claude_hook_journal_path(data)         # путь DSH: в его вводе его нет
     session = str(data.get('session_id') or '')
     tool_input = data.get('tool_input') or {}
     where = str(tool_input.get('file_path') or tool_input.get('notebook_path') or '')

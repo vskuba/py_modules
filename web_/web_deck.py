@@ -39,7 +39,7 @@ WEB_DECK_SETTLE = 80
 
 def web_deck_check(deck: str, size=WEB_DECK_SIZE, shots: bool = True,
                    out_dir: str = '', chrome: str = '') -> dict:
-    """Проверить дек: каждый слайд открыт, замерен и снят; вердикт по строчно.
+    """Проверить дек: каждый слайд открыт, замерен и снят; вердикт построчно.
 
     Args:
         deck: путь к HTML-файлу дека.

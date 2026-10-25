@@ -53,7 +53,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from claude_.hook.claude_hook import claude_hook_run                               # noqa: E402
 from claude_.hook.gate.claude_gate import (claude_gate_asked, claude_gate_forget,  # noqa: E402
-                                      claude_gate_off, claude_gate_remember)
+                                      claude_gate_off, claude_gate_remember,
+                                      claude_gate_spot)
 from tool_.tool_instead import tool_instead, tool_instead_format              # noqa: E402
 
 # Где помнится показанное. ⚠ Не в проекте: застава общая, а проектов много.
@@ -106,7 +107,7 @@ def claude_gate_tool_exists_check(path, code, seen_path=None, now=None) -> dict:
     память хозяина.
     """
     where = str(path or '')
-    seen = Path(seen_path or CLAUDE_GATE_TOOL_EXISTS_CHECK_SEEN)
+    seen = claude_gate_spot(seen_path or CLAUDE_GATE_TOOL_EXISTS_CHECK_SEEN)
 
     if claude_gate_off(CLAUDE_GATE_TOOL_EXISTS_CHECK_PASS):
         return {'block': False, 'found': [], 'why': f'снята через {CLAUDE_GATE_TOOL_EXISTS_CHECK_PASS}'}

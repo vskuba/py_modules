@@ -21,7 +21,7 @@
 **после** последнего кадра — не снята; кадр после последней правки — принята.
 
 Не видит (и честно отходит): правки, втиснутые в `Bash` (`sed -i`, `cat >`), — разбор
-команды под каждую оболочку не окупается ценой ложных держаний. Отсюда правило:
+команды под каждую оболочку не окупается ценой ложных удержаний. Отсюда правило:
 **застава держит только то, во что уверена**.
 
 ## ⚠⚠ Держит дважды и отпускает
@@ -35,7 +35,9 @@
 ⚠ Забыть записать придирку — значит держать вечно: проверка неидемпотентна по
 своей природе (между проверками агент правит снова), поэтому состояние пишется
 **внутри** проверки, а сбой записи глотается — лучше выпустить без счёта, чем
-держать без конца.
+держать без конца. Отсюда проверка после записи: счётчик не сдвинулся — ход
+отпущен. Полагаться на `stop_hook_active` нельзя: мост DSH приносит его всегда
+ложным, то есть харнес круг не разрывает.
 
 ## Как отойти
 
@@ -48,12 +50,13 @@ from pathlib import Path
 # ⚠ Загрузка через `spec_from_file_location` (так делает сюита) не кладёт корень
 # слоя в путь поиска сама, а запуск файла по пути — кладёт через sys.path[0].
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from claude_.hook.claude_hook import (claude_hook_stop_run,                   # noqa: E402
+from claude_.hook.claude_hook import (claude_hook_is_tool, claude_hook_journal_path,      # noqa: E402
+                                      claude_hook_stop_run,
                                       claude_hook_tool_calls, claude_hook_transcript_rows)
 from claude_.hook.gate.claude_gate import (claude_gate_asked,                 # noqa: E402
                                       claude_gate_forget, claude_gate_note,
                                       claude_gate_noted, claude_gate_off,
-                                      claude_gate_remember)
+                                      claude_gate_remember, claude_gate_spot)
 
 CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN = Path.home() / '.cache' / 'claude_gate_design_review_live_seen.json'
 # Вердикт «веб ли проект» живёт отдельно и сутки: обход дерева на каждом конце хода
@@ -114,7 +117,7 @@ def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, 
         dict: {'block': bool, 'found': [правки...], 'why': str}.
             Правки перечислены, когда они есть, — при `block` непустые всегда.
     """
-    seen_path = Path(seen_path or CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN)
+    seen_path = claude_gate_spot(seen_path or CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN)
     edits = claude_gate_design_review_live_edits(transcript_path, root=root)
 
     if not edits:
@@ -122,13 +125,22 @@ def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, 
 
         return {'block': False, 'found': [], 'why': 'правок вёрстки после кадра нет'}
 
-    if claude_gate_asked(session_id, seen_path, now=now) >= CLAUDE_GATE_DESIGN_REVIEW_LIVE_ASKS:
+    asked = claude_gate_asked(session_id, seen_path, now=now)
+
+    if asked >= CLAUDE_GATE_DESIGN_REVIEW_LIVE_ASKS:
         claude_gate_forget(session_id, seen_path)
 
         return {'block': False, 'found': edits,
                 'why': f'придирок {CLAUDE_GATE_DESIGN_REVIEW_LIVE_ASKS} из {CLAUDE_GATE_DESIGN_REVIEW_LIVE_ASKS} — держать нечем'}
 
     claude_gate_remember(session_id, seen_path, now=now)
+
+    if claude_gate_asked(session_id, seen_path, now=now) <= asked:
+        # ⚠ Счётчик не сдвинулся — память не пишется. Держать ход без счёта нельзя:
+        # `Stop` зовётся на каждый конец, возвращённый ход зовёт её снова, и там, где
+        # харнес не поднимает `stop_hook_active` (мост DSH не поднимает), это замкнутый
+        # круг. Без памяти застава отпускает и молчит — хуже лишнего вопроса.
+        return {'block': False, 'found': edits, 'why': 'память заставы не пишется — считать придирки нечем'}
 
     return {'block': True, 'found': edits, 'why': 'правка вёрстки без снятого кадра'}
 
@@ -196,7 +208,7 @@ def main() -> int:
 
 
 def _look(data) -> str:
-    transcript = str(data.get('transcript_path') or '')
+    transcript = claude_hook_journal_path(data)         # путь DSH: в его вводе его нет
     session = str(data.get('session_id') or '')
 
     if not transcript or not session:
@@ -213,7 +225,7 @@ def _look(data) -> str:
 
 
 def _edited_path(call) -> str:
-    if call.get('name') not in CLAUDE_GATE_DESIGN_REVIEW_LIVE_EDIT_TOOLS:
+    if not claude_hook_is_tool(call.get('name'), CLAUDE_GATE_DESIGN_REVIEW_LIVE_EDIT_TOOLS):
         return ''
 
     tool_input = call.get('input') or {}

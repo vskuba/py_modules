@@ -8,7 +8,7 @@ CSP, а из Python — 403 (cf-mit, Cloudflare)» — вход: сырой ск
 typeof(value) врет 'text'» — JSON-разбор такие Blob'ы не читает, потому что Blob
 не JSON; потому скан байтовый.
 
-«Из Python-скрипта fetch() в страснице не годен — CORS» и «нужен вызов чужого
+«Из Python-скрипта fetch() в странице не годен — CORS» и «нужен вызов чужого
 RPC от своего HTTP-клиента» — web_rpc_call: параметра чужих RPC уходят в
 query-строку («параметры в query string + токен в JSON-теле», иначе
 `missing required field: channel`), а токен — и в query, и в тело, и в

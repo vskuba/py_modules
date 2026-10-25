@@ -20,12 +20,14 @@ operator_code}` в базу номеров. Bot API списка подписч�
 | `telegram_session_start(phone, api_id, api_hash, session, code, code_file, password)` | войти под аккаунтом, вернуть авторизованный клиент; с живой сессией код не нужен |
 | `telegram_session_me(client)` | на кого оформлена сессия: id, имя, номер аккаунта |
 | `telegram_members_phones(client, channels, limit)` | `{rows, failed}`: строки подписчиков с видимым номером (+380…, оператор отдельно); сорванный канал — в `failed`, не отказ сбора |
+| `telegram_ask_start(client, bot)` / `telegram_ask_send(client, bot, text, …)` | диалог с чужим ботом из-под аккаунта: отметка «отсюда считаем» и `{ok, replies, error}` — все новые реплики бота на запрос; молчание — `ok: False`, не исключение |
 
 ## 3. CLI
 
 ```
 python -m telegram_.telegram_session  --phone … --api-id … --api-hash … --session путь [--code …|--code-file …]
 python -m telegram_.telegram_members  @канал… --phone … --api-id … --api-hash … --session путь [--limit N]
+python -m telegram_.telegram_ask --bot opendatauabot --query "…" [--file запросы.txt] [--out-dir папка]
 ```
 
 Код подтверждения приходит в приложение Telegram этого номера; `--code-file` —
@@ -40,3 +42,6 @@ python -m telegram_.telegram_members  @канал… --phone … --api-id … --
    не ловится никак: приватность Telegram не отличает «номер скрыт» от «нет».
 3. Telethon — тяжёлая зависимость, подключается лениво внутри функций: импорт
    модуля без установленного `telethon` пройдёт, а вызов упадёт.
+4. Реестровый бот молча троттлит: `ok: False` при живом аккаунте — почти всегда
+   rate-limit на стороне бота, а не транспорт; помогает выдержка `pause` между
+   запросами и повтор того же запроса в следующем заходе, а не слепая перезагрузка.

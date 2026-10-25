@@ -194,12 +194,20 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         dict: `status` — `live` (содержимое двигалось), `frozen` (тишина дольше
         `WEB_FILL_FROZEN_DAYS`) или `empty` (срезов не было); `n_items` — сколько
         позиции помнят вид за окно; `new` / `changed` / `gone` — суммы движений;
+        `new_day` — позиции, впервые увиденные за последние сутки;
         `since_move` — дней с последнего движения (None, если движения не было);
         `first` — самый ранний срез; `last` — последний.
+
+    ⚠ `new` — сумма событий первого появления за окно, а не «сколько нового
+    сейчас»: позиция рождается новой ровно однажды, и пока площадка моложе
+    окна, `new` тождественно равняется `n_items` — это свойство метрики, а не
+    витрины. На вопрос «что нового теперь?» отвечает `new_day`.
     """
     async with mysql_get_db_async() as db:
         await db.execute(
-            'SELECT COUNT(*) n, MIN(first_seen) first_seen FROM `web_fill_item`'
+            'SELECT COUNT(*) n, MIN(first_seen) first_seen,'
+            ' SUM(`first_seen` >= NOW() - INTERVAL 1 DAY) new_day'
+            ' FROM `web_fill_item`'
             ' WHERE `name` = %s AND `last_seen` >= CURDATE() - INTERVAL %s DAY',
             (str(name), int(days)))
         catalog = await db.fetchone() or {}
@@ -213,7 +221,8 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         diary = await db.fetchone() or {}
 
     if not diary.get('n'):
-        return {'status': 'empty', 'n_items': int(catalog.get('n') or 0)}
+        return {'status': 'empty', 'n_items': int(catalog.get('n') or 0),
+                'new_day': int(catalog.get('new_day') or 0)}
 
     moved_at = diary.get('moved_at')
     # Целые сутки, а не `.days`: тот у отрицательного остатка (срез только что
@@ -227,6 +236,7 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         'status': status,
         'n_items': int(catalog.get('n') or 0),
         'new': int(diary.get('new') or 0),
+        'new_day': int(catalog.get('new_day') or 0),
         'changed': int(diary.get('changed') or 0),
         'gone': int(diary.get('gone') or 0),
         'first': str(diary.get('first_at') or ''),
@@ -234,6 +244,41 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         'since_move': since_move,
         'notes': int(diary.get('n') or 0),
     }
+
+
+async def web_fill_days(name: str, days: int = 14) -> dict:
+    """Подневная активность витрины за окно — живучесть магазина сырьём.
+
+    Args:
+        name: тот же ключ, под которым клали срезы.
+        days: глубина окна в днях.
+
+    Returns:
+        dict: `rows` — дни от нового к старому, строка
+        `{'day', 'notes', 'views', 'new', 'changed', 'gone'}`: `notes` —
+        срезов снято, `views` — суммарно позиций в них (интенсивность
+        обхода, не уникальность), `new` / `changed` / `gone` — движения.
+        Дней без срезов в списке нет: тишина видна именно отсутствием
+        строки, достраивать нули здесь незачем — счётчик ведёт читающий.
+
+    ⚠ `gone` складывается только из полных срезов (`whole = 1`): при
+    частичном невиданное — не исчезнувшее, иначе каждая выборочная прогулка
+    докладывала бы фантомные «ушли» ровно про то, что в этот раз не смотрели.
+    """
+    async with mysql_get_db_async() as db:
+        await db.execute(
+            'SELECT DATE(`taken_at`) day, COUNT(*) notes, SUM(`n_items`) views,'
+            ' SUM(`n_new`) new, SUM(`n_changed`) changed,'
+            ' SUM(CASE WHEN `whole` = 1 THEN `n_gone` ELSE 0 END) gone'
+            ' FROM `web_fill_log` WHERE `name` = %s'
+            '   AND `taken_at` >= CURDATE() - INTERVAL %s DAY'
+            ' GROUP BY day ORDER BY day DESC', (str(name), int(days)))
+        rows = await db.fetchall() or []
+
+    return {'rows': [{'day': str(r['day']), 'notes': int(r['notes'] or 0),
+                      'views': int(r['views'] or 0), 'new': int(r['new'] or 0),
+                      'changed': int(r['changed'] or 0),
+                      'gone': int(r['gone'] or 0)} for r in rows]}
 
 
 def web_fill_item_id(url_or_id: str) -> str:
@@ -283,11 +328,17 @@ if __name__ == '__main__':
     p_report.add_argument('--name', required=True)
     p_report.add_argument('--days', type=int, default=30)
 
+    p_days = sub.add_parser('days', help='подневная активность за окно')
+    p_days.add_argument('--name', required=True)
+    p_days.add_argument('--days', type=int, default=14)
+
     args = parser.parse_args()
 
     if args.mode == 'note':
         raw = sys.stdin.read() if args.file == '-' else open(args.file, encoding='utf-8').read()
         result = asyncio.run(web_fill_note(args.name, json.loads(raw), whole=not args.part))
+    elif args.mode == 'days':
+        result = asyncio.run(web_fill_days(args.name, days=args.days))
     else:
         result = asyncio.run(web_fill_report(args.name, days=args.days))
     print(json.dumps(result, ensure_ascii=False, default=str, indent=1))
