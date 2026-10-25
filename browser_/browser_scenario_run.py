@@ -61,6 +61,9 @@ class BrowserScenarioRunRequest(BaseModel):
         None, description='Заголовки, согласованные с user_agent')
     proxy: str = Field('', max_length=500,
                        description='Выход временной вкладки: socks5://user:pass@host:1080')
+    # Чьей закладки прогон: временная вкладка получает метку сайта, и страница
+    # сайта показывает только свои страницы. Сценарий без сайта — 0.
+    site_id: int = Field(0, ge=0, description='Метка сайта-закладки прогона')
 
 
 @router.post('/browser/scenario/run', dependencies=browser_api_auth)
@@ -81,6 +84,7 @@ async def browser_scenario_run_post(data: BrowserScenarioRunRequest):
             proxy=data.proxy,
             user_agent=data.user_agent,
             extra_headers=data.extra_headers,
+            site_id=data.site_id,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail='сессия не найдена')
@@ -95,7 +99,7 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
                                keep_session: bool = False, proxy: str = '',
                                user_agent: str = '',
                                extra_headers: dict | None = None,
-                               film: bool = True) -> dict:
+                               film: bool = True, site_id: int = 0) -> dict:
     """Выполняет шаги по порядку и возвращает трассу прогона.
 
     `user_agent` и `extra_headers` — кем представляется временная вкладка.
@@ -110,6 +114,10 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
     `session_id` — обычное дело (отправка, звёздочка, карточка собеседника), и
     внутри он логинится под учёткой. Сайты, считающие вход по IP, складывали бы
     все такие входы на один адрес сервера.
+
+    `site_id` — метка сайта-закладки, чей это прогон: она ложится на временную
+    вкладку, и страница сайта показывает только свои страницы. Без метки вкладка
+    считается ничейной и попадает лишь в общий список пула.
 
     Первый упавший шаг останавливает прогон: следующие шаги рассчитывают на то,
     что предыдущий сработал, и продолжать значило бы получить лавину ошибок вместо
@@ -136,7 +144,7 @@ async def browser_scenario_run(scenario: BrowserScenario, session_id: str = '',
         raise ValueError(f'не переданы переменные: {", ".join(missing)}')
 
     entry, own_session = await _session_take(session_id, scenario.name, proxy,
-                                             user_agent, extra_headers)
+                                             user_agent, extra_headers, site_id)
     page = entry['page']
     # Наблюдатели — состояние **СЕССИИ**, а не одного похода.
     #
@@ -278,7 +286,8 @@ async def _film_take(page, film: list, marks: list, step_no: int,
 
 async def _session_take(session_id: str, name: str, proxy: str = '',
                         user_agent: str = '',
-                        extra_headers: dict | None = None) -> tuple[dict, bool]:
+                        extra_headers: dict | None = None,
+                        site_id: int = 0) -> tuple[dict, bool]:
     """Сессия прогона и признак «завели её мы».
 
     Свою сессию гасим после прогона, чужую — никогда: сценарий часто крутят на
@@ -304,7 +313,7 @@ async def _session_take(session_id: str, name: str, proxy: str = '',
 
     session = await browser_pool_session_open(
         name=f'сценарий: {name}'[:100], proxy=proxy,
-        user_agent=user_agent, extra_headers=extra_headers)
+        user_agent=user_agent, extra_headers=extra_headers, site_id=site_id)
     return browser_pool_session_get(session['session_id']), True
 
 
