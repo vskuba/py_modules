@@ -611,7 +611,7 @@ def adb_cdp_element_shot(selector: str, out: str, port: int = ADB_CDP_PORT,
 
 
 # docstring для eval: прямоугольник считается страницей — dpr и прокрутка
-# берются с неё же. Селектор подставляется через json.dumps: кавычки и
+# берутся с неё же. Селектор подставляется через json.dumps: кавычки и
 # скобки селектора не ломают выражение.
 _ELEMENT_RECT_JS = """
 ((sel) => {
