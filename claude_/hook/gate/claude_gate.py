@@ -82,6 +82,36 @@ def claude_gate_off(name) -> bool:
     return bool(os.environ.get(str(name)))
 
 
+# Свой каталог для памяти: место, где заставе можно писать, когда обычное закрыто.
+# Имя длинное и явное — как у клапанов, см. `claude_gate_off`.
+CLAUDE_GATE_SPOT_DIR = 'CLAUDE_GATE_SPOT_DIR'
+
+
+def claude_gate_spot(spot):
+    """Где память заставы лежит на самом деле — первое записываемое место из трёх.
+
+    Args:
+        spot: куда её положил автор заставы, обычно `~/.cache/claude_gate_*.json`.
+
+    Порядок: каталог из `CLAUDE_GATE_SPOT_DIR`, если назван; место автора; каталог
+    застав внутри git-репозитория. Различаются они молчанием — ⚠ под песочницей
+    харнеса запись в домашний каталог падает с `Errno 30`, `_dump` её глотает,
+    счётчик вопросов не растёт и застава спрашивает на каждый вызов. Проверяется
+    сам файл пробным открытием: `os.access` каталогу верит, а файлу в закрытой
+    песочнице — нет.
+    """
+    spot = Path(spot)
+    named = os.environ.get(CLAUDE_GATE_SPOT_DIR)
+    gitdir = _git_gate_dir()
+
+    for place in ((Path(named) / spot.name) if named else None, spot,
+                  (gitdir / spot.name) if gitdir else None):
+        if place is not None and _writable(place):
+            return place
+
+    return spot
+
+
 def claude_gate_noted(key, seen_path, now=None) -> dict:
     """Что застава запомнила про этот ключ за сутки.
 
@@ -201,7 +231,11 @@ def _load(seen_path, now=None) -> dict:
 
 
 def _dump(seen_path, seen) -> None:
-    """Записать память. ⚠ Ошибка проглатывается — см. ⚠⚠ в `claude_gate_remember`."""
+    """Записать память. ⚠ Ошибка проглатывается — см. ⚠⚠ в `claude_gate_remember`.
+
+    Место под неё выбирает `claude_gate_spot`, а не автор заставы: проглоченная
+    ошибка здесь потому и безопасна, что записываемое место заранее проверено.
+    """
     spot = Path(seen_path)
 
     try:
@@ -209,3 +243,42 @@ def _dump(seen_path, seen) -> None:
         spot.write_text(json.dumps(seen), encoding='utf-8')
     except OSError:
         pass
+
+
+def _writable(spot) -> bool:
+    """Можно ли писать в этот файл — пробным открытием, содержимое не трогает.
+
+    ⚠ `os.access` и проба новым файлом в каталоге не решают там, где закрыта сама
+    файловая система: новый файл песочница создаёт охотнее, чем дать переписать
+    существующий. Открытие в режиме добавления файл не меняет, а пустой память и
+    так читает как пустую.
+    """
+    try:
+        Path(spot).parent.mkdir(parents=True, exist_ok=True)
+        with open(spot, 'a'):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _git_gate_dir():
+    """Каталог застав внутри git-репозитория текущего каталога; не репозиторий — None.
+
+    `.git` переживает и перезагрузку, и частные `/tmp` песочницы (у каждого вызова
+    хука они свои), а в `git status` не попадает. Worktree указывает настоящий
+    каталог строкой `gitdir:` — она и читается.
+    """
+    here = Path(os.getcwd())
+    head = here / '.git'
+
+    if head.is_dir():
+        return head / 'claude_gate'
+    try:
+        raw = head.read_text(encoding='utf-8').strip()
+    except OSError:
+        return None
+    if not raw.startswith('gitdir:'):
+        return None
+
+    return (here / raw.split(':', 1)[1].strip()).resolve() / 'claude_gate'

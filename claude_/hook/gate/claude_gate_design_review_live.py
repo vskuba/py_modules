@@ -56,7 +56,7 @@ from claude_.hook.claude_hook import (claude_hook_is_tool, claude_hook_journal_p
 from claude_.hook.gate.claude_gate import (claude_gate_asked,                 # noqa: E402
                                       claude_gate_forget, claude_gate_note,
                                       claude_gate_noted, claude_gate_off,
-                                      claude_gate_remember)
+                                      claude_gate_remember, claude_gate_spot)
 
 CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN = Path.home() / '.cache' / 'claude_gate_design_review_live_seen.json'
 # Вердикт «веб ли проект» живёт отдельно и сутки: обход дерева на каждом конце хода
@@ -117,7 +117,7 @@ def claude_gate_design_review_live(transcript_path, session_id, seen_path=None, 
         dict: {'block': bool, 'found': [правки...], 'why': str}.
             Правки перечислены, когда они есть, — при `block` непустые всегда.
     """
-    seen_path = Path(seen_path or CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN)
+    seen_path = claude_gate_spot(seen_path or CLAUDE_GATE_DESIGN_REVIEW_LIVE_SEEN)
     edits = claude_gate_design_review_live_edits(transcript_path, root=root)
 
     if not edits:
