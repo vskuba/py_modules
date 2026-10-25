@@ -328,7 +328,7 @@ def _ffprobe_duration(mp4: str) -> float:
 
 
 def _rec_cell(path: str, width: int):
-    """Клетка сетки сравнения: кадр, ужатый до ширины width с сохранением пропорций."""
+    """Клетка сетки сравнения: кадр, сжатый до ширины width с сохранением пропорций."""
     from PIL import Image        # тяжёлый стек — лениво, он нужен только склейке
     im = Image.open(path).convert('RGB')
     h = max(1, round(im.height * width / im.width))
