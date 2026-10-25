@@ -194,12 +194,20 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         dict: `status` — `live` (содержимое двигалось), `frozen` (тишина дольше
         `WEB_FILL_FROZEN_DAYS`) или `empty` (срезов не было); `n_items` — сколько
         позиции помнят вид за окно; `new` / `changed` / `gone` — суммы движений;
+        `new_day` — позиции, впервые увиденные за последние сутки;
         `since_move` — дней с последнего движения (None, если движения не было);
         `first` — самый ранний срез; `last` — последний.
+
+    ⚠ `new` — сумма событий первого появления за окно, а не «сколько нового
+    сейчас»: позиция рождается новой ровно однажды, и пока площадка моложе
+    окна, `new` тождественно равняется `n_items` — это свойство метрики, а не
+    витрины. На вопрос «что нового теперь?» отвечает `new_day`.
     """
     async with mysql_get_db_async() as db:
         await db.execute(
-            'SELECT COUNT(*) n, MIN(first_seen) first_seen FROM `web_fill_item`'
+            'SELECT COUNT(*) n, MIN(first_seen) first_seen,'
+            ' SUM(`first_seen` >= NOW() - INTERVAL 1 DAY) new_day'
+            ' FROM `web_fill_item`'
             ' WHERE `name` = %s AND `last_seen` >= CURDATE() - INTERVAL %s DAY',
             (str(name), int(days)))
         catalog = await db.fetchone() or {}
@@ -213,7 +221,8 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         diary = await db.fetchone() or {}
 
     if not diary.get('n'):
-        return {'status': 'empty', 'n_items': int(catalog.get('n') or 0)}
+        return {'status': 'empty', 'n_items': int(catalog.get('n') or 0),
+                'new_day': int(catalog.get('new_day') or 0)}
 
     moved_at = diary.get('moved_at')
     # Целые сутки, а не `.days`: тот у отрицательного остатка (срез только что
@@ -227,6 +236,7 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
         'status': status,
         'n_items': int(catalog.get('n') or 0),
         'new': int(diary.get('new') or 0),
+        'new_day': int(catalog.get('new_day') or 0),
         'changed': int(diary.get('changed') or 0),
         'gone': int(diary.get('gone') or 0),
         'first': str(diary.get('first_at') or ''),
