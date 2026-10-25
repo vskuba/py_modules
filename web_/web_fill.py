@@ -246,6 +246,41 @@ async def web_fill_report(name: str, days: int = 30) -> dict:
     }
 
 
+async def web_fill_days(name: str, days: int = 14) -> dict:
+    """Подневная активность витрины за окно — живучесть магазина сырьём.
+
+    Args:
+        name: тот же ключ, под которым клали срезы.
+        days: глубина окна в днях.
+
+    Returns:
+        dict: `rows` — дни от нового к старому, строка
+        `{'day', 'notes', 'views', 'new', 'changed', 'gone'}`: `notes` —
+        срезов снято, `views` — суммарно позиций в них (интенсивность
+        обхода, не уникальность), `new` / `changed` / `gone` — движения.
+        Дней без срезов в списке нет: тишина видна именно отсутствием
+        строки, достраивать нули здесь незачем — счётчик ведёт читающий.
+
+    ⚠ `gone` складывается только из полных срезов (`whole = 1`): при
+    частичном невиданное — не исчезнувшее, иначе каждая выборочная прогулка
+    докладывала бы фантомные «ушли» ровно про то, что в этот раз не смотрели.
+    """
+    async with mysql_get_db_async() as db:
+        await db.execute(
+            'SELECT DATE(`taken_at`) day, COUNT(*) notes, SUM(`n_items`) views,'
+            ' SUM(`n_new`) new, SUM(`n_changed`) changed,'
+            ' SUM(CASE WHEN `whole` = 1 THEN `n_gone` ELSE 0 END) gone'
+            ' FROM `web_fill_log` WHERE `name` = %s'
+            '   AND `taken_at` >= CURDATE() - INTERVAL %s DAY'
+            ' GROUP BY day ORDER BY day DESC', (str(name), int(days)))
+        rows = await db.fetchall() or []
+
+    return {'rows': [{'day': str(r['day']), 'notes': int(r['notes'] or 0),
+                      'views': int(r['views'] or 0), 'new': int(r['new'] or 0),
+                      'changed': int(r['changed'] or 0),
+                      'gone': int(r['gone'] or 0)} for r in rows]}
+
+
 def web_fill_item_id(url_or_id: str) -> str:
     """Канонический идентификатор позиции из адреса.
 
@@ -293,11 +328,17 @@ if __name__ == '__main__':
     p_report.add_argument('--name', required=True)
     p_report.add_argument('--days', type=int, default=30)
 
+    p_days = sub.add_parser('days', help='подневная активность за окно')
+    p_days.add_argument('--name', required=True)
+    p_days.add_argument('--days', type=int, default=14)
+
     args = parser.parse_args()
 
     if args.mode == 'note':
         raw = sys.stdin.read() if args.file == '-' else open(args.file, encoding='utf-8').read()
         result = asyncio.run(web_fill_note(args.name, json.loads(raw), whole=not args.part))
+    elif args.mode == 'days':
+        result = asyncio.run(web_fill_days(args.name, days=args.days))
     else:
         result = asyncio.run(web_fill_report(args.name, days=args.days))
     print(json.dumps(result, ensure_ascii=False, default=str, indent=1))
