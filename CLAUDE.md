@@ -56,6 +56,11 @@ namespace-папок, которые проекты импортируют на�
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `web_/web_gallery.py` | `docs/web_gallery.md` — полноразмерные фото страницы-галереи: ленивая разметка, оригиналы без суффиксов |
 | `insta_/insta_.py` | `docs/insta.md` — профиль Instagram: карточка и счётчики без login, осмотр перед загрузкой; ⚠ списки подписок анониму за стеной |
+
+| `tiktok_/tiktok_.py` | `docs/tiktok.md` — TikTok без входа: oembed, карточка, поиск; грабли капчи и слитных счётчиков |
+| `sbi_/sbi_.py` | `docs/sbi.md` — реверс-поиск по фото: держатель, три движка, статусы `blocked` ≠ `nothing` |
+| `video_/video_.py` | `docs/video.md` — кадры и лица из видео: YuNet, оценка качества, лист |
+| `browser_/browser_http.py` | `docs/browser_control.md` — тот же контейнер из shell без asyncio/fastapi; адрес сессии помнит `base` |
 | `web_/web_grab.py` | `docs/web_grab.md` — пачка ссылок в честные файлы: тип по голове, UA, JSON-API в ссылки; ⚠ страница вместо файла — отказ, не `.jpg` с `<html>` |
 | `js_/js_check.py` | `docs/js_check.md` — цел ли JS как браузерный ESM-модуль: парсинг node, адрес поломки, граф импортов; ⚠ `node --check` по `.js` молчит там, где браузер умер бы |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
