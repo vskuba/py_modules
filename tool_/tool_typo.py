@@ -25,6 +25,7 @@ stdlib нет, поэтому комментарии вырезаются эвр
 функций и ключи словарей на кириллице, чего правило (`code_rules.md` §1.2) не терпит.
 """
 import ast
+import html
 import re
 import sys
 
@@ -77,6 +78,12 @@ TOOL_TYPO_URL = re.compile(r'https?://\S+')
 # JS-семейство: той же прозы в плагинах не меньше, чем в докстрингах.
 TOOL_TYPO_JS = ('.js', '.mjs', '.cjs')
 
+# HTML: видимый текст страницы — проза (карты, отчёты); скрипты и стили — код,
+# вырезаются до разбора, переводы строк на их месте сохраняют нумерацию строк.
+TOOL_TYPO_HTML = ('.html', '.htm')
+TOOL_TYPO_HTML_HIDE = re.compile(r'<(script|style)\b.*?</\1\s*>', re.I | re.S)
+TOOL_TYPO_HTML_TAG = re.compile(r'<[^>]*>')
+
 # Блок `/* ... */` целиком, лениво: жадный дочитал бы до конца файла.
 TOOL_TYPO_JS_BLOCK = re.compile(r'/\*.*?\*/', re.DOTALL)
 
@@ -93,9 +100,9 @@ TOOL_TYPO_JARGON = re.compile(
 def tool_typo(root=None) -> list[dict]:
     """Проверить текст на опечатки: склейки, подмены букв, повторы слов, иероглифы.
 
-    Смотрит докстринги и комментарии `*.py`, комментарии `*.js`/`*.mjs`/`*.cjs`
-    плюс `*.md`; код в обратных кавычках, блоки-заборы и адреса вырезаются —
-    там своя орфография.
+    Смотрит докстринги и комментарии `*.py`, комментарии `*.js`/`*.mjs`/`*.cjs`,
+    текст `*.md` и видимый текст `*.html`; код в обратных кавычках, блоки-заборы,
+    адреса, а в страницах — скрипты и стили вырезаются, там своя орфография.
 
     Args:
         root: корень репозитория; пусто — тот, где лежит этот файл.
@@ -260,10 +267,11 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(
         description='Следы неудачной правки в прозе репозитория: докстринги и '
-                    'комментарии `*.py`, комментарии `*.js`/`*.mjs`/`*.cjs` и '
-                    '`*.md` — слипшиеся слова, подмена буквы из другого '
-                    'алфавита, повтор слова, иероглифы из чужой вставки. Плюс — '
-                    'кириллица в именах функций и ключах (--cyrillic).')
+                    'комментарии `*.py`, комментарии `*.js`/`*.mjs`/`*.cjs`, '
+                    'текст `*.md` и видимый текст `*.html` — слипшиеся слова, '
+                    'подмена буквы из другого алфавита, повтор слова, иероглифы '
+                    'из чужой вставки. Плюс — кириллица в именах функций и '
+                    'ключах (--cyrillic).')
     ap.add_argument('--kind', default='',
                     choices=['', 'mixed', 'doubled', 'cjk', 'cyrillic'])
     ap.add_argument('--prose', action='store_true',
@@ -327,7 +335,7 @@ def _key_allowed(lines: list, line: int, owns: int):
 
 def _prose(base: Path) -> list[tuple]:
     """Проза репозитория: (файл, строка, текст) из докстрингов, комментариев
-    py и js-семейства плюс `*.md`."""
+    py и js-семейства, текста `*.md` и видимого текста `*.html`."""
     out = []
 
     for path in file_walk(base, ('.py',)):
@@ -364,6 +372,20 @@ def _prose(base: Path) -> list[tuple]:
         for number, line in enumerate(_clean(text).splitlines(), 1):
             if line.strip():
                 out.append((where, number, line))
+
+    for path in file_walk(base, TOOL_TYPO_HTML):
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (UnicodeDecodeError, OSError):
+            continue
+        where = path.relative_to(base).as_posix()
+        # на месте вырезанных скриптов — пустые строки: номера строк остаются
+        # настоящими, а текст js не притворяется прозой (его rules у js_check).
+        text = TOOL_TYPO_HTML_HIDE.sub(lambda m: '\n' * m.group().count('\n'), text)
+        for number, line in enumerate(text.splitlines(), 1):
+            line = html.unescape(TOOL_TYPO_HTML_TAG.sub(' ', line))
+            if line.strip():
+                out.append((where, number, _clean(line)))
 
     for path in file_walk(base, TOOL_TYPO_JS):
         try:

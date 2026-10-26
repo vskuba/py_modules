@@ -8,6 +8,7 @@
 ## Что здесь есть
 
 * `net_who_dns` — A/AAAA/NS/MX/TXT домена через DoH;
+* `net_who_aa` — что отдают сами авторитетные NS, рядом с рекурсивным ответом;
 * `net_who_ip` — ASN, владелец и страна по IP (rdap bootstrap → реестр);
 * `net_who_reg` — дата регистрации/истечения и регистратор (RDAP, с запасным
   whois-43);
@@ -21,7 +22,9 @@ import asyncio
 import httpx
 import json
 import re
+import shutil
 import socket
+import subprocess
 
 DOH = 'https://dns.google/resolve'
 RDAP = 'https://rdap.org'
@@ -48,6 +51,83 @@ async def net_who_dns(domain: str, types=('A', 'AAAA', 'NS', 'MX', 'TXT')) -> di
             except (httpx.HTTPError, ValueError, AttributeError):
                 out[t] = []
     return {'ok': any(out.values()), 'domain': domain, 'records': out}
+
+
+# Рекурсивный резолвер отвечает то, что видят все; NS зоны — то, что в зоне
+# лежит на самом деле. Ответы расходятся, когда имя посреди переезда
+# делегировано на новый бокс, когда зону отдаёт бренд-защита (CSC и подобные),
+# или когда зону «забыли» в старом кабинете. Без вопроса к самим NS этого не
+# увидеть: путь
+# через корневую иерархию один. Здесь системный dig: руками DNS-пакет писать —
+# ловить чужие баги, dig написан именно для этого.
+AA_DIG = ('dig', '+noall', '+comments', '+answer', '+time=4', '+tries=1')
+
+
+async def net_who_aa(domain: str, servers: list = (),
+                     types=('A', 'AAAA')) -> dict:
+    """Что отдают авторитетные NS зоны напрямую — и расходится ли это с общим DNS.
+
+    Аргументы:
+        domain: имя домена.
+        servers: NS-хосты для вопроса; пусто — те, что отдаёт `net_who_dns`.
+        types: какие записи снимать с каждого NS (A/AAAA/CNAME).
+
+    Возвращает:
+        {'ok': хоть кто-то ответил, 'domain': …, 'ns': […],
+         'recursive': {'A': […], …} — что видят все,
+         'servers': {'ns.name': {'aa': bool, 'A': […], 'soa': 'сериал'| '',
+                                 'error': словами}},
+         'diff': разошёлся ли A авторитетный с рекурсивным,
+         'error': причина (пусто при удаче)}
+
+    ⚠⚠ `diff` — поверхность, а не вывод: NS вправе отвечать по-разному
+    (split-horizon, геораздача, зеркала в процессе правки зоны). Польза для
+    разведки — сам факт, кому и куда указывает зона без посредников.
+    """
+    if not shutil.which('dig'):
+        return {'ok': False, 'domain': domain, 'ns': [], 'recursive': {},
+                'servers': {}, 'diff': False, 'error': 'в PATH нет dig'}
+    rec = await net_who_dns(domain, ('NS',) + tuple(types))
+    ns = list(servers) or rec['records'].get('NS', [])
+    servers_out = {}
+    for s in ns[:6]:
+        row = {'aa': True, 'soa': '', 'error': ''}
+        for t in types:
+            d = await asyncio.to_thread(_net_who_dig, s, domain, t)
+            row[t] = d['values']
+            row['aa'] = row['aa'] and d['aa']
+            if d['error'] and not row['error']:
+                row['error'] = d['error']
+        soa = await asyncio.to_thread(_net_who_dig, s, domain, 'SOA')
+        row['soa'] = soa['values'][0] if soa['values'] else ''
+        servers_out[s] = row
+    ra = {t: rec['records'].get(t, []) for t in types}
+    diff = any(row.get('A', []) != ra.get('A', [])
+               for row in servers_out.values() if 'A' in row)
+    return {'ok': bool(servers_out), 'domain': domain, 'ns': ns,
+            'recursive': ra, 'servers': servers_out, 'diff': diff,
+            'error': '' if servers_out else 'не от кого спрашивать — NS пусты'}
+
+
+def _net_who_dig(server: str, target: str, rtype: str) -> dict:
+    """Один вопрос прямо к NS зоны: авторитетно ли отвечает и что именно."""
+    try:
+        r = subprocess.run([*AA_DIG, f'@{server}', target, rtype],
+                           capture_output=True, text=True, timeout=20)
+    except OSError as e:
+        return {'aa': False, 'values': [], 'error': f'{type(e).__name__}'}
+    except subprocess.TimeoutExpired:
+        return {'aa': False, 'values': [], 'error': 'timeout'}
+    aa = any(re.search(r'flags:[^;]*\baa\b', ln) for ln in r.stdout.splitlines())
+    values = []
+    for ln in r.stdout.splitlines():
+        parts = ln.split()
+        if ln.startswith(';') or parts[2:4] != ['IN', rtype]:
+            continue
+        # у SOA значение — 7-е поле (после mname и rname идёт серийник),
+        # у остальных типов ответ — последнее поле строки.
+        values.append(parts[6] if rtype == 'SOA' else parts[-1].rstrip('.'))
+    return {'aa': aa, 'values': values, 'error': ''}
 
 
 async def net_who_ip(ip: str) -> dict:
@@ -206,11 +286,13 @@ if __name__ == '__main__':
     import argparse
 
     _P = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    _P.add_argument('cmd', choices=('dns', 'ip', 'reg', 'sweep'))
+    _P.add_argument('cmd', choices=('dns', 'aa', 'ip', 'reg', 'sweep'))
     _P.add_argument('targets', nargs='+', help='домены (или один IP для ip)')
     _C = _P.parse_args()
     if _C.cmd == 'dns':
         _res = asyncio.run(net_who_dns(_C.targets[0]))
+    elif _C.cmd == 'aa':
+        _res = asyncio.run(net_who_aa(_C.targets[0]))
     elif _C.cmd == 'ip':
         _res = asyncio.run(net_who_ip(_C.targets[0]))
     elif _C.cmd == 'reg':
