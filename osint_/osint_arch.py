@@ -63,7 +63,9 @@ def osint_arch_snapshots(url: str, *, from_: str = '', to: str = '',
         except (httpx.HTTPError, ValueError):
             js = None
         if isinstance(js, list):
-            rows = [x for x in js if isinstance(x, list)]
+            # первой строкой CDX всегда отдаёт заголовок «timestamp original…»
+            rows = [x for x in js if isinstance(x, list)
+                    and not (x and x[0] == 'timestamp')]
             err = ''
             break
         err = 'CDX: offline или мусор'
