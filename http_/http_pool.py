@@ -14,9 +14,18 @@
 общий — с ним остались бы без пула все остальные вызовы. Течь тут нечему: своих
 сокетов у клиента нет, они все у транспорта.
 
+⚠⚠ **И поэтому сборку клиента отдаёт наружу этот модуль, а не вызывающий.**
+`async with httpx.AsyncClient(transport=http_pool_transport())` выглядит верно —
+блок, из которого аккуратно выходят, — и ровно поэтому убивает пул на каждом
+вызове: `__aexit__` зовёт `aclose()`. Замер на живом хосте, 5 запросов к одному
+адресу через один и тот же транспорт: с `async with` — **5 новых TCP-рукопожатий**,
+без закрытия — **1**. То есть весь смысл развязки обнуляется молча, по форме
+скобками. Наружу отдаётся `http_pool_client(...)` — в ней выйти из блока и не
+закрыть пул это одно и то же, ошибки не остается места.
+
 ```python
-client = httpx.AsyncClient(timeout=10, cookies=свои, transport=http_pool_transport())
-response = await client.get(url)      # закрывать клиента не нужно
+async with http_pool_client(timeout=10, cookies=свои) as client:
+    response = await client.get(url)      # выхода из блока хватит, закрывать не нужно
 ```
 
 ⚠ **Выход наружу — часть ключа транспорта.** `http_pool_transport(proxy)` отдаёт
@@ -33,6 +42,8 @@ response = await client.get(url)      # закрывать клиента не �
 
 import asyncio
 import weakref
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -77,6 +88,30 @@ def http_pool_transport(proxy: str = '') -> httpx.AsyncHTTPTransport:
         weakref.finalize(loop, _transports_drop, id(loop))
 
     return transport
+
+
+@asynccontextmanager
+async def http_pool_client(*, timeout: float = 10, proxy: str = '',
+                           **kw: Any) -> AsyncIterator[httpx.AsyncClient]:
+    """Разовый клиент поверх общего пула — собранный здесь, а не у вызывающего.
+
+    Args:
+        timeout: сколько ждать ответа, как у `httpx.AsyncClient`.
+        proxy: адрес выхода (`http_proxy_url`) — тогда транспорт свой у этого
+            выхода; прямого выхода это не касается.
+        kw: остальное по вкусу `httpx.AsyncClient`: `headers`, `cookies`,
+            `follow_redirects`, `base_url`.
+
+    Returns:
+        httpx.AsyncClient: готовый к запросу; своих соединений у него нет.
+
+    Форма контекстного менеджера — не украшение: выход из блока тут намеренно
+    ничего не закрывает, так что написать `async with` неправильно не выходит.
+    Клиент, собранный руками (`httpx.AsyncClient(transport=http_pool_transport())`),
+    так или иначе доезжает до `aclose()` — в блоке ли, в конце ли функции, — и
+    уносит пул у всех, кто в этом цикле; цифры замера в шапке модуля.
+    """
+    yield httpx.AsyncClient(transport=http_pool_transport(proxy), timeout=timeout, **kw)
 
 
 def _transports_drop(loop_key: int) -> None:

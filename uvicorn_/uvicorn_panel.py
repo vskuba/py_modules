@@ -25,7 +25,7 @@ if __package__ in (None, ''):
 import httpx
 
 from config.config import config_get
-from http_.http_pool import http_pool_transport
+from http_.http_pool import http_pool_client, http_pool_transport
 
 
 class UvicornPanelClient(httpx.AsyncClient):
@@ -123,7 +123,7 @@ async def uvicorn_panel_login(base: str, user: str, password: str) -> httpx.Cook
     ночном E2E пять суток: имени в тексте не было, и по нему не видно было, что
     вошли не тем. Пароля здесь нет и быть не может — только имя.
     """
-    async with httpx.AsyncClient(transport=http_pool_transport(), timeout=15) as c:
+    async with http_pool_client(timeout=15) as c:
         response = await c.post(f'{base}/auth/login',
                                 json={'username': user, 'password': password})
     if response.status_code not in (200, 201, 204):

@@ -38,10 +38,8 @@ import json
 import time
 from pathlib import Path
 
-import httpx
-
 from config.config import config_get
-from http_.http_pool import http_pool_transport
+from http_.http_pool import http_pool_client
 
 GOOGLE_DRIVE_API = 'https://www.googleapis.com/drive/v3'
 GOOGLE_DRIVE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -119,10 +117,10 @@ async def google_drive_get(path: str, params: dict | None = None, key_path: str 
             по нему иначе гадают, глядя на `403`.
     """
     token = await google_drive_token(key_path)
-    client = httpx.AsyncClient(timeout=60, transport=http_pool_transport())
-    response = await client.get(f'{GOOGLE_DRIVE_API}/{path.lstrip("/")}',
-                                params=params or {},
-                                headers={'Authorization': f'Bearer {token}'})
+    async with http_pool_client(timeout=60) as client:
+        response = await client.get(f'{GOOGLE_DRIVE_API}/{path.lstrip("/")}',
+                                    params=params or {},
+                                    headers={'Authorization': f'Bearer {token}'})
     if response.status_code != 200:
         raise RuntimeError(_error_words(response.status_code, response.text))
     return response.json()
@@ -205,11 +203,11 @@ async def _token_fetch(key_path: str, scope: str) -> tuple[str, int]:
     private = serialization.load_pem_private_key(key['private_key'].encode(), password=None)
     signature = private.sign(head + b'.' + body, padding.PKCS1v15(), hashes.SHA256())
 
-    client = httpx.AsyncClient(timeout=30, transport=http_pool_transport())
-    response = await client.post(GOOGLE_DRIVE_TOKEN_URL, data={
-        'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        'assertion': (head + b'.' + body + b'.' + chunk(signature)).decode(),
-    })
+    async with http_pool_client(timeout=30) as client:
+        response = await client.post(GOOGLE_DRIVE_TOKEN_URL, data={
+            'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            'assertion': (head + b'.' + body + b'.' + chunk(signature)).decode(),
+        })
     if response.status_code != 200:
         raise RuntimeError(f'Google не выдал токен ({response.status_code}): {response.text[:300]}')
     answer = response.json()

@@ -29,9 +29,7 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import httpx
-
-from http_.http_pool import http_pool_transport
+from http_.http_pool import http_pool_client
 
 
 async def uvicorn_dev_health(base: str = '', timeout: float = 30) -> str:
@@ -49,8 +47,7 @@ async def uvicorn_dev_health(base: str = '', timeout: float = 30) -> str:
     last = ''
     while True:
         try:
-            async with httpx.AsyncClient(transport=http_pool_transport(),
-                                         timeout=3) as c:
+            async with http_pool_client(timeout=3) as c:
                 r = await c.get(f'{base}/health')
             if r.is_success:
                 return base

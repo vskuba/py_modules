@@ -24,10 +24,8 @@
 
 import asyncio
 
-import httpx
-
 from google_drive_.google_drive_ import (GOOGLE_DRIVE_API, google_drive_token)
-from http_.http_pool import http_pool_transport
+from http_.http_pool import http_pool_client
 
 # Размеры превью, которые имеет смысл просить. Диск нарежет любой, но разнобой
 # значений рвёт кэш браузера и кэш самого Диска: одна и та же плитка, запрошенная
@@ -79,16 +77,16 @@ async def google_drive_bytes(file: dict | str, width: int = 0,
         raise RuntimeError(f'ширина превью не из набора {GOOGLE_DRIVE_THUMB_SIZES}: {width}')
 
     token = await google_drive_token(key_path)
-    client = httpx.AsyncClient(timeout=120, transport=http_pool_transport(),
-                               follow_redirects=False)
     headers = {'Authorization': f'Bearer {token}'}
 
-    if width:
-        response = await client.get(_thumb_url(file, width), headers=headers)
-    else:
-        file_id = file['id'] if isinstance(file, dict) else str(file)
-        response = await client.get(f'{GOOGLE_DRIVE_API}/files/{file_id}', headers=headers,
-                                    params={'alt': 'media', 'supportsAllDrives': 'true'})
+    async with http_pool_client(timeout=120, follow_redirects=False) as client:
+        if width:
+            response = await client.get(_thumb_url(file, width), headers=headers)
+        else:
+            file_id = file['id'] if isinstance(file, dict) else str(file)
+            response = await client.get(f'{GOOGLE_DRIVE_API}/files/{file_id}',
+                                        headers=headers,
+                                        params={'alt': 'media', 'supportsAllDrives': 'true'})
 
     # Перенаправление на вход — это отказ, а не содержимое. Без явной проверки
     # вызывающий сохранил бы HTML формы входа под именем картинки и узнал бы об

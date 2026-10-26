@@ -24,6 +24,8 @@ if __package__ in (None, ''):
 
 import httpx
 
+from http_.http_pool import http_pool_client
+
 
 async def web_peek(url: str, method: str = 'GET', content: str = '',
                    headers: dict | None = None, timeout: float = 15,
@@ -58,16 +60,12 @@ async def web_peek(url: str, method: str = 'GET', content: str = '',
          'url': конечный адрес — он отличается от запрошенного, если шли по
          редиректам}
     """
-    # ⚠ С выходом — свой клиент, без него общий транспорт пула. У пула один
-    # набор соединений на процесс, и подменить ему выход на один запрос
-    # нельзя: соседний запрос ушёл бы в чужой прокси.
-    make = (lambda: httpx.AsyncClient(proxy=_proxy_url(proxy), timeout=timeout,
-                                      follow_redirects=follow_redirects)
-            if proxy else
-            httpx.AsyncClient(transport=_transport(), timeout=timeout,
-                              follow_redirects=follow_redirects))
-
-    async with make() as c:
+    # ⚠ Выход — частью ключа транспорта: у пула свой транспорт на каждый адрес,
+    # поэтому запрос через прокси не попадает в прямое соединение и наоборот
+    # (`http_pool.py`). Своего клиента под прокси здесь больше нет: он каждый раз
+    # закрывал бы себя, а с ним и соединения.
+    async with http_pool_client(timeout=timeout, follow_redirects=follow_redirects,
+                                proxy=_proxy_url(proxy) if proxy else '') as c:
         r = await c.request(method, url, content=content or None,
                             headers=headers)
     try:
@@ -97,13 +95,6 @@ async def web_peek_markers(url: str, markers: list, **kw) -> dict:
 
 
 # ── детали реализации ──
-
-def _transport():
-    """Общий пул соединений (http_pool); свой клиент с ним не закрывают —
-    здесь же клиент живёт ровно один запрос и закрыт вместе с ним."""
-    from http_.http_pool import http_pool_transport
-    return http_pool_transport()
-
 
 def _proxy_url(proxy: str) -> str:
     """Адрес выхода в том виде, в каком его ждёт httpx.

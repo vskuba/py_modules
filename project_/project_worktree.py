@@ -27,9 +27,7 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import httpx
-
-from http_.http_pool import http_pool_transport
+from http_.http_pool import http_pool_client
 from project_.project_ import project_git
 
 # Что обязано быть ссылкой в каталоге задачи: compose монтирует каталог задачи
@@ -174,8 +172,7 @@ async def _alive(base: str, timeout: float) -> str:
     last = ''
     while True:
         try:
-            async with httpx.AsyncClient(transport=http_pool_transport(),
-                                         timeout=3) as c:
+            async with http_pool_client(timeout=3) as c:
                 await c.get(f'{base}/health')
             return base                      # любой HTTP-ответ — панель жива
         except Exception as err:
