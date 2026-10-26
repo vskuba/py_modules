@@ -35,6 +35,29 @@ from logging_.logging_ import logger_info
 # Меняется переменной, замерять — через `GET /browser/session`, там память.
 BROWSER_POOL_SESSION_LIMIT = int(config_get('BROWSER_SESSION_LIMIT', '25'))
 
+# Сколько сессия может жить без прикосновений, после чего пул закрывает её сам.
+# 0 — не закрывать.
+#
+# ⚠⚠ Правило против вкладок, переживших прогоны. Сценарий с `keep_session`
+# оставляет вкладку открытой после себя — и пока она открыта, сайт считает
+# анкету «в сети». Живьём: вкладка одного прогона держала анкету в сети шесть
+# часов после работы, когда сам прогон был давным-давно успешен и ни при чём.
+#
+# ⚠ Нужной сессии правило не грозит: любое прикосновение — переход, шаг
+# прогона, живое окно, любой запрос к сессии через `browser_pool_session_get` —
+# обновляет `used_at`. Закрывается только то, к чему давно никто не обращался;
+# сессии с живым слушателем (запись, наблюдение) — вне удара, см. `_pool_busy`.
+BROWSER_POOL_IDLE_SEC = int(config_get('BROWSER_SESSION_IDLE_MIN', '60')) * 60
+
+# С какой частотой смотреть холостые. Минута — не часы и не секунды: просрочка
+# срока не должна расти до суток, но и крутиться чаще минуты ради числа,
+# округлённого до минут, нечем.
+BROWSER_POOL_SWEEP_SEC = 60
+
+# Порог жертвы при переполнении: сессию, тронутую меньше минуты назад, не
+# вытесняем — с ней работают прямо сейчас.
+BROWSER_POOL_EVICT_GRACE_SEC = 60
+
 BROWSER_POOL_VIEWPORT_WIDTH = 1280
 BROWSER_POOL_VIEWPORT_HEIGHT = 800
 BROWSER_POOL_GOTO_TIMEOUT_MS = 30000
@@ -106,23 +129,34 @@ _playwright: Playwright | None = None
 _browser: Browser | None = None
 _sessions: dict[str, dict] = {}
 _lock = asyncio.Lock()
+_sweeper: asyncio.Task | None = None
 
 
 async def browser_pool_start():
-    """Поднимает Chromium. Зовётся один раз из lifespan контейнера."""
-    global _playwright, _browser
+    """Поднимает Chromium и обход холостых. Зовётся один раз из lifespan контейнера."""
+    global _playwright, _browser, _sweeper
 
     if _browser is not None:
         return
 
     _playwright = await async_playwright().start()
     _browser = await _playwright.chromium.launch(headless=True, args=BROWSER_POOL_LAUNCH_ARGS)
-    logger_info(f'[browser] Chromium запущен: {_browser.version}, предел сессий {BROWSER_POOL_SESSION_LIMIT}')
+    idle = (f', холостой ход {BROWSER_POOL_IDLE_SEC // 60} мин' if BROWSER_POOL_IDLE_SEC
+            else ', закрытие холостых выключено')
+    logger_info(f'[browser] Chromium запущен: {_browser.version}, предел сессий '
+                f'{BROWSER_POOL_SESSION_LIMIT}{idle}')
+
+    if BROWSER_POOL_IDLE_SEC:
+        _sweeper = asyncio.create_task(_idle_sweep())
 
 
 async def browser_pool_stop():
-    """Гасит все сессии и сам браузер."""
-    global _playwright, _browser
+    """Гасит обход, все сессии и сам браузер."""
+    global _playwright, _browser, _sweeper
+
+    if _sweeper is not None:
+        _sweeper.cancel()
+        _sweeper = None
 
     for session_id in list(_sessions):
         await browser_pool_session_close(session_id)
@@ -180,9 +214,19 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
     if _browser is None:
         raise RuntimeError('браузер не запущен')
 
+    evicted: tuple[str, dict] | None = None
+
     async with _lock:
         if len(_sessions) >= BROWSER_POOL_SESSION_LIMIT:
-            raise RuntimeError(f'предел сессий исчерпан: {BROWSER_POOL_SESSION_LIMIT}')
+            # ⚠ Предел — это предел памяти, а не отказ работать. Прежде чем
+            # отказать, освобождаем самую долго висевшую без прикосновений
+            # сессию: пережившие прогоны вкладки накапливаются молча, и на
+            # отказ обречены сразу все занятия, а не одно. Отказ при этом
+            # остаётся честно: если вытеснять нечего — занято всё.
+            evicted = _pool_stale_session()
+            if evicted is None:
+                raise RuntimeError(f'предел сессий исчерпан: {BROWSER_POOL_SESSION_LIMIT}')
+            _sessions.pop(evicted[0], None)
 
         session_id = uuid.uuid4().hex[:12]
         options = {
@@ -237,6 +281,15 @@ async def browser_pool_session_open(name: str = '', url: str = '', storage_state
     logger_info(f'[browser] сессия открыта: {session_id} ({name or "без имени"})'
                 f'{through}, всего {len(_sessions)}')
 
+    if evicted is not None:
+        # ⚠ Гасим жертву уже после открытия: реестр мы освободили под замком,
+        # а закрытие контекста — долгое, и держать из-за него замок значило бы
+        # поставить всю очередь открытия на паузу из-за чужой вкладки.
+        victim_id, victim = evicted
+        logger_info(f'[browser] сессия {victim_id} вытеснена для места: "{victim["name"]}", '
+                    f'без прикосновений {(time.time() - victim["used_at"]) / 60:.0f} мин')
+        await _pool_close_context(victim, victim_id)
+
     if url:
         try:
             await browser_pool_session_goto(session_id, url)
@@ -266,18 +319,25 @@ async def browser_pool_session_close(session_id: str) -> bool:
 
     # Закрытие контекста закрывает и страницы в нём; падать на уже мёртвом
     # контексте (браузер уронил вкладку) незачем — запись из реестра уже снята.
-    try:
-        await entry['context'].close()
-    except Exception as e:
-        logger_info(f'[browser] сессия {session_id} закрыта с ошибкой: {e}')
+    await _pool_close_context(entry, session_id)
 
     logger_info(f'[browser] сессия закрыта: {session_id}, осталось {len(_sessions)}')
     return True
 
 
 def browser_pool_session_get(session_id: str) -> dict | None:
-    """Внутренняя запись сессии (со страницей и контекстом) или None."""
-    return _sessions.get(session_id)
+    """Внутренняя запись сессии (со страницей и контекстом) или None.
+
+    ⚠ Одно то, что запись спросили, уже считается прикосновением: обновляет
+    `used_at`. Клики и чтение в сессию не ходят через `goto`, и без отметки здесь
+    сессия, которой ровно сейчас работают через API, выглядела бы холостой —
+    обход по сроку срезал бы её на ходу.
+    """
+    entry = _sessions.get(session_id)
+    if entry is not None:
+        entry['used_at'] = time.time()
+
+    return entry
 
 
 def browser_pool_session_list() -> list[dict]:
@@ -375,6 +435,71 @@ def _session_info(entry: dict) -> dict:
         'recording': entry.get('record') is not None,
         'watching': entry.get('watch') is not None,
     }
+
+
+async def _idle_sweep():
+    """Закрывает сессии, к которым никто не обращался дольше срока.
+
+    Живёт рядом с пулом с самого `browser_pool_start` и ходит минутой за
+    минутой. Заводить для этого круг в каждом вызывающем проекте — завести
+    круг на каждый проект, а дыра переживших прогоны вкладок у всех одна.
+    """
+    while True:
+        await asyncio.sleep(BROWSER_POOL_SWEEP_SEC)
+
+        now = time.time()
+        stale = [(session_id, entry) for session_id, entry in _sessions.items()
+                 if now - entry['used_at'] > BROWSER_POOL_IDLE_SEC
+                 and not _pool_busy(entry)]
+
+        for session_id, entry in stale:
+            logger_info(f'[browser] сессия {session_id} закрыта по холостому ходу: '
+                        f'"{entry["name"]}", {round((now - entry["used_at"]) / 60)} мин '
+                        'никто не трогал')
+            await browser_pool_session_close(session_id)
+
+
+def _pool_busy(entry: dict) -> bool:
+    """Есть ли на сессии живое слушательское состояние — такое не закрывается.
+
+    Запись, наблюдение DOM, журнал консоли и перехват сети накапливаются
+    между походами (`net_watch` в одном, `net_dump` в другом) и живут в записи
+    сессии нарочно, даже когда к сессии никто не обращается. Снять их молча —
+    обрезать чужую работу; такие сессии доживают до закрытия руками.
+    """
+    net = (entry.get('scenario_watch') or {}).get('net') or {}
+
+    return (entry.get('record') is not None or entry.get('watch') is not None
+            or entry.get('console') is not None or net.get('handler') is not None)
+
+
+def _pool_stale_session() -> tuple[str, dict] | None:
+    """Самая долго висящая без прикосновений сессия — жертва при переполнении.
+
+    None — жертвы нет: всё занято работой или слушателями, и тогда переполнение
+    отвечает отказом честно.
+    """
+    now = time.time()
+    idle = [(session_id, entry) for session_id, entry in _sessions.items()
+            if not _pool_busy(entry)
+            and now - entry['used_at'] >= BROWSER_POOL_EVICT_GRACE_SEC]
+
+    if not idle:
+        return None
+
+    return min(idle, key=lambda pair: pair[1]['used_at'])
+
+
+async def _pool_close_context(entry: dict, session_id: str = '') -> None:
+    """Гасит контекст записи; закрытый контекст закрывает и свои страницы.
+
+    Исключение — строка в журнал, а не наружу: гасим то, чего реестр уже не
+    держит, и падать на этом нечем.
+    """
+    try:
+        await entry['context'].close()
+    except Exception as e:
+        logger_info(f'[browser] сессия {session_id} закрыта с ошибкой: {e}')
 
 
 def _pool_headers(extra_headers: dict | None) -> dict:
