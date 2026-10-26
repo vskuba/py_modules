@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from dotenv import find_dotenv, load_dotenv, set_key
+from dotenv import dotenv_values, find_dotenv, load_dotenv, set_key
 
 # Два слоя: `.env` — базовый (на деплое он пересобирается из секрета, поэтому
 # правки в нём недолговечны), `.env.local` — необязательная накладка машины
@@ -37,6 +37,39 @@ def config_get(key: str, default: str = '') -> Any:
     Возвращает конфиги по ключу из .env (значение из .env.local, если оно там есть)
     """
     return os.getenv(key.upper(), default)
+
+
+def config_env(root: str) -> dict:
+    """
+    Окружение **другой** выкладки: `.env` плюс `.env.local`, не трогая `os.environ`.
+
+    Нужно инструментам, нацеленным на соседний проект: адресам и учёткам там
+    свои, а процесс стоит в своём окружении.
+
+    ⚠ Никакого `load_dotenv()`: он подмешал бы чужие секреты в `os.environ`,
+    и `config_get` с этого момента отвечал соседними значениями вместо своих —
+    та же ловушка, что описана в шапке про посторонний `.env`.
+    """
+    values = {}
+    for name in ('.env', '.env.local'):
+        for key, value in dotenv_values(str(Path(root) / name)).items():
+            if value is not None:
+                values[key.upper()] = value
+    return values
+
+
+def config_setting(key: str, default: str = '', root: str = '') -> str:
+    """
+    Одна переменная окружения, при желании — из другой выкладки.
+
+    Без `root` — прежнее поведение `config_get`: окружение процесса, куда
+    переменная могла прийти и от compose. С `root` — только файлы `.env` и
+    `.env.local` той выкладки: окружение этого процесса ей чужое, и своя
+    переменная с тем же именем иначе перезаписала бы соседнюю.
+    """
+    if not root:
+        return str(config_get(key, default))
+    return str(config_env(root).get(key.upper(), default))
 
 
 def config_update_and_save(key: str, value: Any):

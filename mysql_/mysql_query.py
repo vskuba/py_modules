@@ -17,6 +17,10 @@
 
 Модуль синхронный и одноразовый: соединение открывается и закрывается на запрос.
 Приложению нужен не он, а пул — `mysql_.mysql_get_db_async`.
+
+`--root <checkout>` нацеливает запрос на **соседний** проект: адрес, порт и
+учётка берутся из его `.env`, контейнер ищется по его каталогу. Так «заглянуть в
+базу соседа» перестаёт быть `docker exec <сосед> mysql -p…` с паролем в `ps`.
 """
 import argparse
 import json
@@ -35,7 +39,7 @@ if __package__ in (None, ''):
 import pymysql
 import pymysql.cursors
 
-from config.config import config_get
+from config.config import config_setting
 from mysql_.mysql_host import mysql_host_address
 from sql_.sql_split import sql_split_statements
 
@@ -47,7 +51,7 @@ MYSQL_QUERY_READ_ONLY = ('select', 'show', 'describe', 'desc', 'explain', 'with'
 MYSQL_QUERY_CELL_WIDTH = 80
 
 
-def mysql_query_run(sql: str, params: tuple = (), limit: int = 0) -> dict:
+def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = '') -> dict:
     """
     Выполнить один запрос и вернуть результат.
 
@@ -55,6 +59,7 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0) -> dict:
         sql: текст запроса; подстановки — `%s`, значения в `params`.
         params: значения подстановок.
         limit: обрезать выдачу до N строк; 0 — вернуть всё.
+        root: checkout **соседнего** проекта, к чьей базе идём; пусто — этот.
 
     Returns:
         `{'columns': [имена], 'rows': [{колонка: значение}], 'affected': N}`.
@@ -63,13 +68,13 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0) -> dict:
     Raises:
         RuntimeError: база недоступна или отвергла запрос.
     """
-    host, port = mysql_host_address()
+    host, port = mysql_host_address(root=root)
     try:
         connection = pymysql.connect(
             host=host, port=port,
-            user=str(config_get('MYSQL_USER', 'developer')),
-            password=str(config_get('MYSQL_PASSWORD', '')),
-            database=str(config_get('MYSQL_DATABASE', '')),
+            user=config_setting('MYSQL_USER', 'developer', root),
+            password=config_setting('MYSQL_PASSWORD', '', root),
+            database=config_setting('MYSQL_DATABASE', '', root),
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=True, connect_timeout=10, read_timeout=120,
         )
@@ -181,13 +186,15 @@ if __name__ == '__main__':
                         help='разрешить запрос, меняющий данные или схему')
     parser.add_argument('--format', default='table', choices=['table', 'json', 'csv'])
     parser.add_argument('--limit', type=int, default=0, help='обрезать выдачу до N строк')
+    parser.add_argument('--root', default='',
+                        help='checkout соседнего проекта: адрес и учётка из его .env')
     args = parser.parse_args()
 
     try:
         if args.command == 'address':
-            host, port = mysql_host_address()
-            print(f"{host}:{port}  база={config_get('MYSQL_DATABASE', '')} "
-                  f"пользователь={config_get('MYSQL_USER', '')}")
+            host, port = mysql_host_address(root=args.root)
+            print(f"{host}:{port}  база={config_setting('MYSQL_DATABASE', '', args.root)} "
+                  f"пользователь={config_setting('MYSQL_USER', '', args.root)}")
             raise SystemExit(0)
 
         if args.command == 'tables':
@@ -203,6 +210,6 @@ if __name__ == '__main__':
             if not args.write and not mysql_query_read_only(query):
                 raise SystemExit('ошибка: запрос меняет данные — повтори с --write')
 
-        print(mysql_query_format(mysql_query_run(query, limit=args.limit), args.format))
+        print(mysql_query_format(mysql_query_run(query, limit=args.limit, root=args.root), args.format))
     except RuntimeError as err:
         raise SystemExit(f"ошибка: {err}")

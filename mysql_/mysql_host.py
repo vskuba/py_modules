@@ -18,12 +18,17 @@ compose, `MYSQL_PORT` — порт внутри сети. С машины раз
 основной выкладки (`project_main_root`): compose поднимали в ней, и метка хранит
 её путь, поэтому из `worktree` поиск тоже находит контейнер, а `docker compose`
 в том же каталоге — уже нет («service is not running»).
+
+Аргумент `root` тех же функций нацеливает на **соседний checkout**: адрес, порт
+и учётка берутся из его `.env`, контейнер ищется по его каталогу. Без него
+привычка «заглянуть в базу соседа» остаётся привычкой `docker exec <сосед>
+mysql -u… -p…` с тем же паролем в `ps`.
 """
 import re
 import socket
 import subprocess
 
-from config.config import config_get
+from config.config import config_setting
 from project_.project_ import project_main_root
 
 # Метка compose с каталогом, из которого проект подняли. По ней контейнер и ищется.
@@ -31,12 +36,14 @@ MYSQL_HOST_LABEL_DIR = 'com.docker.compose.project.working_dir'
 MYSQL_HOST_LABEL_SERVICE = 'com.docker.compose.service'
 
 
-def mysql_host_address(timeout: float = 2.0) -> tuple:
+def mysql_host_address(timeout: float = 2.0, root: str = '') -> tuple:
     """
     Рабочий адрес базы для процесса, который выполняется прямо сейчас.
 
     Args:
         timeout: секунды на проверку связи по адресу из `.env`.
+        root: путь к **соседнему** checkout: адрес и порт берутся из его `.env`,
+            контейнер ищется по его каталогу. Пусто — этот проект.
 
     Returns:
         Пара `(хост, порт)`: либо из `.env` как есть, либо петля и порт,
@@ -45,30 +52,34 @@ def mysql_host_address(timeout: float = 2.0) -> tuple:
     Raises:
         RuntimeError: адрес из `.env` не отвечает и контейнер не найден.
     """
-    host = str(config_get('MYSQL_HOST', 'mysql'))
-    port = int(config_get('MYSQL_PORT', '3306') or 3306)
+    host = str(config_setting('MYSQL_HOST', 'mysql', root))
+    port = int(config_setting('MYSQL_PORT', '3306', root) or 3306)
 
     if _reachable(host, port, timeout):
         return host, port
 
-    published = _published_port(host, port)
+    published = _published_port(host, port, root)
     if published:
         return '127.0.0.1', published
 
+    where = f"выкладки '{root}'" if root else f'проекта ({project_main_root()})'
     raise RuntimeError(
-        f"База недоступна: '{host}:{port}' из .env не отвечает, и контейнер проекта "
-        f"({project_main_root()}) не найден. Поднят ли compose?")
+        f"База недоступна: '{host}:{port}' из .env не отвечает, и контейнер {where} "
+        f"не найден. Поднят ли compose?")
 
 
-def mysql_host_container() -> str:
+def mysql_host_container(root: str = '') -> str:
     """
     Имя контейнера с базой — для того, что делается только внутри него (дамп, консоль).
+
+    Args:
+        root: путь к соседнему checkout; пусто — этот проект.
 
     Returns:
         Имя контейнера; пусто — контейнер не найден или docker недоступен.
     """
-    found = _container_find(str(config_get('MYSQL_HOST', 'mysql')),
-                            int(config_get('MYSQL_PORT', '3306') or 3306))
+    found = _container_find(str(config_setting('MYSQL_HOST', 'mysql', root)),
+                            int(config_setting('MYSQL_PORT', '3306', root) or 3306), root)
     return found[0] if found else ''
 
 
@@ -82,19 +93,19 @@ def _reachable(host: str, port: int, timeout: float) -> bool:
         return False
 
 
-def _published_port(service: str, container_port: int) -> int:
-    found = _container_find(service, container_port)
+def _published_port(service: str, container_port: int, root: str = '') -> int:
+    found = _container_find(service, container_port, root)
     return found[1] if found else 0
 
 
-def _container_find(service: str, container_port: int) -> tuple:
+def _container_find(service: str, container_port: int, root: str = '') -> tuple:
     """
     Контейнер проекта, публикующий нужный порт: `(имя, порт наружу)` или пусто.
 
     Сначала ищется сервис с тем же именем, что `MYSQL_HOST` (обычный случай), затем —
     любой контейнер проекта, публикующий этот порт: сервис бывает назван иначе.
     """
-    rows = _docker_ps()
+    rows = _docker_ps(root)
     named = [row for row in rows if row[1] == service]
 
     for row in (*named, *rows):
@@ -104,10 +115,11 @@ def _container_find(service: str, container_port: int) -> tuple:
     return ()
 
 
-def _docker_ps() -> list:
-    """Контейнеры этого проекта: список `(имя, сервис, порты)`; docker недоступен — пусто."""
+def _docker_ps(root: str = '') -> list:
+    """Контейнеры проекта: список `(имя, сервис, порты)`; docker недоступен — пусто."""
+    where = str(project_main_root(root))
     command = ['docker', 'ps',
-               '--filter', f'label={MYSQL_HOST_LABEL_DIR}={project_main_root()}',
+               '--filter', f'label={MYSQL_HOST_LABEL_DIR}={where}',
                '--format', '{{.Names}}\t{{.Label "' + MYSQL_HOST_LABEL_SERVICE + '"}}\t{{.Ports}}']
     try:
         done = subprocess.run(command, capture_output=True, text=True, timeout=15)

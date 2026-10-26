@@ -10,6 +10,11 @@
 
 Здесь это один вызов: `await uvicorn_panel_client()` — и в руках готовый к запросу
 клиент, который сам войдёт под учёткой из `.env` и сам перелогинится на 401.
+
+`root` (и `--root` в CLI) нацеливает на панель **соседнего** checkout: адрес
+ищется в его compose, учётка берётся из его `.env`. Окружение этого процесса при
+этом не спрашивается — в нём живёт адрес и учётка своей панели, и молча подмешать
+их к соседней значило бы бить не туда.
 """
 import argparse
 import asyncio
@@ -24,7 +29,7 @@ if __package__ in (None, ''):
 
 import httpx
 
-from config.config import config_get
+from config.config import config_setting
 from http_.http_pool import http_pool_client, http_pool_transport
 
 
@@ -42,25 +47,32 @@ class UvicornPanelClient(httpx.AsyncClient):
         return response
 
 
-async def uvicorn_panel_base(service: str = '', port: str = '') -> str:
+async def uvicorn_panel_base(service: str = '', port: str = '', root: str = '') -> str:
     """Адрес панели снаружи: `BASE_URL`, а иначе — опубликованный порт compose.
 
     Args:
         service: имя compose-сервиса; пусто — первый поднявшийся с портом.
         port: внешний порт выбирать по нему; пусто — первый опубликованный.
+        root: checkout соседнего проекта: compose спрашивается у него. Пусто —
+            этот проект.
 
     Returns:
         http://127.0.0.1:<порт> — всегда адрес, с которого куку видно запросу.
+
+    ⚠ С `root` своё `BASE_URL` не смотрят нарочно: в нём адрес своей панели
+    (или прод), а сосед зовёт по опубликованному порту своей выкладки — кука
+    живёт на том хосте, с которым просят, и лишний адрес здесь только путает.
     """
     from project_.project_ import project_main_root
     import subprocess
 
-    explicit = config_get('BASE_URL')
-    if explicit:
-        return explicit.rstrip('/')
+    if not root:
+        explicit = str(config_setting('BASE_URL'))
+        if explicit:
+            return explicit.rstrip('/')
 
     done = subprocess.run(['docker', 'compose', 'ps', '--format', 'json'],
-                          cwd=str(project_main_root()), capture_output=True,
+                          cwd=str(project_main_root(root)), capture_output=True,
                           text=True, timeout=20)
     rows = []
     for line in (done.stdout or '').splitlines():          # JSONL: строка — сервис
@@ -79,24 +91,26 @@ async def uvicorn_panel_base(service: str = '', port: str = '') -> str:
                 continue
             return f'http://127.0.0.1:{host_port}'
     raise ValueError(f'панель не видна в compose ps (сервис {service!r}, '
-                     f'порт {port!r}) — поднят ли контейнер?')
+                     f'порт {port!r}, выкладка {root or "эта"}'
+                     f') — поднят ли контейнер?')
 
 
 async def uvicorn_panel_client(base: str = '', user: str = '',
-                               password: str = '') -> UvicornPanelClient:
+                               password: str = '', root: str = '') -> UvicornPanelClient:
     """Вошедший клиент панели: куки правильные, 401 — сам перелогин.
 
     Args:
         base: адрес; пусто — `uvicorn_panel_base()`.
         user, password: учётка; пусто — ADMIN_USERNAME/ADMIN_PASSWORD из `.env`.
+        root: checkout соседнего проекта — адрес и учётка берутся оттуда.
 
     Returns:
         `UvicornPanelClient` (httpx.AsyncClient): .get/.post/.put/.delete —
         готовыми к запросу, с авторетраем после перезахода.
     """
-    base = (base or await uvicorn_panel_base()).rstrip('/')
-    user = user or config_get('ADMIN_USERNAME', 'admin')
-    password = password or config_get('ADMIN_PASSWORD', 'change-me')
+    base = (base or await uvicorn_panel_base(root=root)).rstrip('/')
+    user = user or config_setting('ADMIN_USERNAME', 'admin', root)
+    password = password or config_setting('ADMIN_PASSWORD', 'change-me', root)
     client = UvicornPanelClient(base_url=base, timeout=15,
                                 transport=http_pool_transport())
     client.cookies = await uvicorn_panel_login(base, user, password)
@@ -142,10 +156,12 @@ if __name__ == '__main__':
     ap.add_argument('path', default='/', help='путь от корня панели')
     ap.add_argument('--body', default='', help='JSON-тело запроса')
     ap.add_argument('--base', default='', help='адрес панели; пусто — сам')
+    ap.add_argument('--root', default='',
+                    help='checkout соседнего проекта: адрес из его compose, учётка из его .env')
     ns = ap.parse_args()
     try:
         async def _go():
-            client = await uvicorn_panel_client(base=ns.base)
+            client = await uvicorn_panel_client(base=ns.base, root=ns.root)
             r = await client.request(ns.method, ns.path,
                                      content=ns.body or None,
                                      headers={'Content-Type': 'application/json'}

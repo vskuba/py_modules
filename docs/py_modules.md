@@ -91,7 +91,7 @@ assert a is b, 'модуль загружен дважды — разное со
 
 | Модуль | Что даёт |
 |--------|----------|
-| `config` | `config_get` — чтение `.env` с умолчанием; `config_update_and_save` |
+| `config` | `config_get` — чтение `.env` с умолчанием; `config_env`/`config_setting` — то же про **соседний** checkout, не трогая своё окружение процесса; `config_update_and_save` |
 | `setting_` | настройки из таблицы: `setting_get`, `setting_set`, `setting_delete` |
 | `logging_` | `logger_info`, `logger_exception` (ошибка с трейсбеком, зовут из-под `except`), инициализация, тела запросов/ответов, сброс trace-id |
 | `event_` | подписка и рассылка: `event_subscribe`, `event_emit` |

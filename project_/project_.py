@@ -49,7 +49,7 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def project_main_root() -> Path:
+def project_main_root(root=None) -> Path:
     """
     Корень основной выкладки — один и тот же для проекта и всех его worktree.
 
@@ -58,20 +58,25 @@ def project_main_root() -> Path:
     поэтому из выкладки `docker compose port <сервис> <порт>` отвечает
     «service is not running», хотя контейнер работает.
 
+    Args:
+        root: чужой checkout, для которого ищут основную выкладку (инструментам,
+            нацеленным на соседний проект). Пусто — checkout самого py_modules.
+
     Returns:
-        Корень основной выкладки; вне git — то же, что `project_root()`.
+        Корень основной выкладки; вне git — тот же `root` (без аргумента —
+        `project_root()`).
     """
-    root = project_root()
+    base = Path(root) if root else project_root()
     # `--git-common-dir` в обычной копии отдаёт относительный `.git`, в выкладке —
     # абсолютный путь к `.git` основной. И то и другое сводится к «родитель `.git`».
-    common = project_git(root, 'rev-parse', '--git-common-dir')
+    common = project_git(base, 'rev-parse', '--git-common-dir')
     if not common:
-        return root
+        return base
 
     path = Path(common)
     if not path.is_absolute():
-        path = (root / path).resolve()
-    return path.parent if path.name == '.git' else root
+        path = (base / path).resolve()
+    return path.parent if path.name == '.git' else base
 
 
 def project_python() -> Path:
