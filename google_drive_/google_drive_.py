@@ -45,13 +45,20 @@ GOOGLE_DRIVE_API = 'https://www.googleapis.com/drive/v3'
 GOOGLE_DRIVE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 
-# Поля ответа `files.list`. Просить «всё» (`files(*)`) дороже и шумнее, а этот
-# набор отвечает на вопросы, ради которых к Диску и ходят: что это, какого размера,
-# менялось ли (`md5Checksum`), есть ли готовое превью.
-GOOGLE_DRIVE_FIELDS = (
-    'nextPageToken,files(id,name,mimeType,size,md5Checksum,createdTime,'
-    'modifiedTime,thumbnailLink,imageMediaMetadata,videoMediaMetadata)'
-)
+# Поля одной записи. Просить «всё» (`*`) дороже и шумнее, а этот набор отвечает
+# на вопросы, ради которых к Диску и ходят: что это, какого размера, менялось ли
+# (`md5Checksum`), есть ли готовое превью.
+GOOGLE_DRIVE_FIELDS_ONE = ('id,name,mimeType,size,md5Checksum,createdTime,'
+                           'modifiedTime,thumbnailLink,imageMediaMetadata,'
+                           'videoMediaMetadata')
+
+# Поля ответа `files.list` — те же, но завёрнутые в список со страницей.
+GOOGLE_DRIVE_FIELDS = f'nextPageToken,files({GOOGLE_DRIVE_FIELDS_ONE})'
+
+# ⚠ У записи, взятой **по номеру**, спрашивается лишний `parents`: по номеру идут
+# тогда, когда надо убедиться, что это за запись и **где она лежит**, — а в
+# списке родитель уже известен из условия запроса.
+GOOGLE_DRIVE_FIELDS_BY_ID = f'{GOOGLE_DRIVE_FIELDS_ONE},parents'
 
 # Папка — такой же файл, отличается типом. Константа, потому что строку эту
 # пишут в каждом втором запросе и опечатка в ней выглядит как «папок нет».
@@ -103,13 +110,17 @@ async def google_drive_token(key_path: str = '', scope: str = '') -> str:
     return token
 
 
-async def google_drive_get(path: str, params: dict | None = None, key_path: str = '') -> dict:
+async def google_drive_get(path: str, params: dict | None = None, key_path: str = '',
+                           absent_ok: bool = False) -> dict:
     """Запрос к Drive API v3 с токеном сервисного аккаунта; ответ — разобранный JSON.
 
     Args:
         path: путь внутри API без ведущего слэша — например `files`.
         params: параметры строки запроса.
         key_path: путь к ключу; пусто — из настроек.
+        absent_ok: считать `404` законным ответом и возвращать пустой словарь.
+            Нужно спрашивающему про **конкретный** номер: «такой записи аккаунту
+            не видно» — это ответ, а не беда.
 
     Raises:
         RuntimeError: Диск ответил не `200`. Текст отказа Google приводится как
@@ -121,9 +132,42 @@ async def google_drive_get(path: str, params: dict | None = None, key_path: str 
         response = await client.get(f'{GOOGLE_DRIVE_API}/{path.lstrip("/")}',
                                     params=params or {},
                                     headers={'Authorization': f'Bearer {token}'})
+    if absent_ok and response.status_code == 404:
+        return {}
     if response.status_code != 200:
         raise RuntimeError(_error_words(response.status_code, response.text))
     return response.json()
+
+
+async def google_drive_file(file_id: str, fields: str = '', key_path: str = '') -> dict:
+    """Запись Диска по её номеру — или пустой словарь, если такой аккаунту не видно.
+
+    Номер у Диска вечный: он переживает и переименование, и переезд в другую
+    папку, — поэтому настройку «вот эта папка» хранят именно им, а не именем.
+
+    Args:
+        file_id: номер файла или папки (`1TfgC8S7…`).
+        fields: поля ответа; пусто — `GOOGLE_DRIVE_FIELDS_BY_ID`, то есть с
+            `parents`.
+        key_path: путь к ключу; пусто — из настроек.
+
+    Returns:
+        Запись Диска либо `{}`. **Пустой словарь — законный ответ**: номера
+        такого нет, он из чужой корзины или папку не расшарили на аккаунт.
+
+    Raises:
+        RuntimeError: всё, кроме `404`, — выключенный API, отобранный доступ,
+            молчащий Диск.
+
+    ⚠ **Пустота здесь не значит «номер неправильный».** Тот же `404` приходит на
+    верный номер, который просто не расшарили, — а это самая частая причина (см.
+    шапку модуля). Показывая отказ человеку, говорите про «Поделиться», а не про
+    опечатку в номере.
+    """
+    return await google_drive_get(f'files/{file_id}',
+                                  {'fields': fields or GOOGLE_DRIVE_FIELDS_BY_ID,
+                                   'supportsAllDrives': 'true'},
+                                  key_path, absent_ok=True)
 
 
 async def google_drive_list(query: str, fields: str = '', key_path: str = '',

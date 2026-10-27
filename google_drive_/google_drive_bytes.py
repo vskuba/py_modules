@@ -126,10 +126,10 @@ if __name__ == '__main__':
     import argparse
     from pathlib import Path
 
-    from google_drive_.google_drive_walk import google_drive_find, google_drive_walk
+    from google_drive_.google_drive_walk import google_drive_folder, google_drive_walk
 
     parser = argparse.ArgumentParser(description='Забрать файл с Google Диска.')
-    parser.add_argument('folder', help='имя общей папки либо её id')
+    parser.add_argument('folder', help='имя общей папки, её номер либо ссылка на неё')
     parser.add_argument('name', help='имя файла внутри (часть имени достаточно)')
     parser.add_argument('--width', type=int, default=0,
                         help=f'ширина превью {GOOGLE_DRIVE_THUMB_SIZES}; 0 — оригинал')
@@ -138,8 +138,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     async def _main() -> None:
-        found = await google_drive_find(args.folder, key_path=args.key, folders_only=True)
-        folder_id = found[0]['id'] if found else args.folder
+        found = await google_drive_folder(args.folder, key_path=args.key)
+        if not found:
+            raise SystemExit(f'ошибка: папки «{args.folder}» аккаунту не видно')
+
+        folder_id = found[0]['id']
         hit = [f for f in await google_drive_walk(folder_id, args.key) if args.name in f['name']]
         if not hit:
             raise SystemExit(f'ошибка: файла с «{args.name}» в папке нет')

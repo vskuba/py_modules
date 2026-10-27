@@ -272,7 +272,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `ai.vision.ai_vision` | `describe`, `normalize` |
 | `ai.vision.ai_vision_json` | `<картинка> «просьба с именами полей» [--model --tokens]` → разобранный объект вместо прозы; ⚠ поля называют в просьбе, пустого словаря не бывает |
 | `google_drive_.google_drive_` | `token`, `shared`, `list '<условие q>'` `[--key путь]` → доступ есть? что видно? файлы по условию |
-| `google_drive_.google_drive_walk` | `<имя папки\|id> [--groups] [--key]` → дерево вглубь; `--groups` — разложенное по папкам, как у человека |
+| `google_drive_.google_drive_walk` | `<имя папки\|номер\|ссылка> [--groups] [--key]` → дерево вглубь; `--groups` — разложенное по папкам, как у человека; ⚠ чужую папку задают **номером**: имя живёт до первого переименования владельцем |
 | `google_drive_.google_drive_bytes` | `<папка> <часть имени> [--width 200\|400\|800\|1600] [--out файл]` → превью или оригинал |
 | `adb_.adb_` | `devices`, `info [--json]`, `size`, `capture`, `describe`; паспорт снимается одной командой, а не пятью |
 | `adb_.adb_ui` | `map`, `find`, `dump`, `wait «надпись» [--timeout]` `[--exact --json]`; find/wait: код возврата 0 — нашлось, 1 — нет |
