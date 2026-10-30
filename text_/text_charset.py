@@ -48,7 +48,7 @@ import sys
 import tokenize
 from pathlib import Path
 
-from file_.file_walk import file_walk
+from file_.file_walk import FILE_WALK_SKIP, file_walk
 from sql_.sql_split import sql_split_masked
 from text_.text_cyrillic import TEXT_CYRILLIC_RE
 
@@ -92,12 +92,19 @@ def text_charset(root: str = '.', strings_ascii: bool = True) -> list[dict]:
 
     ⚠ Колонка питоновской строки — начало литерала, а не самого символа:
     у f-строки и строки из нескольких частей внутренний офсет AST не честнее.
+
+    ⚠ Подмодули и минифицированный вендор (`.min.js`, `.min.css`) не судятся:
+    чужой код правится у себя, а в склейке глазами не разобраться. Подмодули
+    берутся из `.gitmodules` корня — у них свой хозяин и свой проход.
     """
     findings: list[dict] = []
-    for path in file_walk(root, suffixes=TEXT_CHARSET_ALL):
+    walk_skip = tuple(FILE_WALK_SKIP) + _submodule_skips(root)
+    for path in file_walk(root, suffixes=TEXT_CHARSET_ALL, skip=walk_skip):
         try:
             text = Path(path).read_text(encoding='utf-8')
         except (UnicodeDecodeError, OSError):
+            continue
+        if Path(path).name.endswith(('.min.js', '.min.css')):
             continue
         suffix = Path(path).suffix.lower()
         if suffix in TEXT_CHARSET_PY:
@@ -194,6 +201,16 @@ def _pos(break_points: list, offset: int) -> tuple:
     return line + 1, offset - start
 
 
+def _submodule_skips(root: str) -> tuple:
+    """Имена веток подмодулей из `.gitmodules` корня: у чужого договора свой суд."""
+    try:
+        text = (Path(root) / '.gitmodules').read_text(encoding='utf-8')
+    except (UnicodeDecodeError, OSError):
+        return ()
+    return tuple(Path(m).parts[0] for m in re.findall(r'^\s*path\s*=\s*(.+)$', text, re.M)
+                 if Path(m).parts)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Алфавит проекта: где завелись чужие буквы.')
     parser.add_argument('root', nargs='?', default='.', help='каталог-корень')
@@ -205,7 +222,7 @@ if __name__ == '__main__':
     hits = text_charset(args.root, strings_ascii=args.strings)
     if args.json:
         import json
-        print(json.dumps(hits, ensure_ascii=False, indent=2))
+        print(json.dumps(hits, ensure_ascii=False, indent=2, default=str))
     elif not hits:
         print('чисто')
     else:
