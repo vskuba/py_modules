@@ -21,10 +21,17 @@
 `--root <checkout>` нацеливает запрос на **соседний** проект: адрес, порт и
 учётка берутся из его `.env`, контейнер ищется по его каталогу. Так «заглянуть в
 базу соседа» перестаёт быть `docker exec <сосед> mysql -p…` с паролем в `ps`.
+
+`await` — тот же запрос, но вслух до перемены: панель сделала проход, накатились
+миграции, обновился кэш — вопрос «доехало ли» это `SELECT MAX(…)` в цикле. `sleep`
+с одним чтением врёт двояко: короткий сон читает старый снимок и объявляет
+«не доехало», длинный ждёт впустую. Здесь опрос с интервалом и порогом, и ответ
+«значение переменилось» — числом раундов, а не ощущением.
 """
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 # Файл запускают путём (`python3 py_modules/mysql_/mysql_query.py`). Тогда в путях
@@ -150,6 +157,52 @@ def mysql_query_format(result: dict, style: str = 'table') -> str:
     return '\n'.join(out)
 
 
+def mysql_query_await(sql: str, after: str = '', timeout: float = 90.0,
+                      interval: float = 2.0, root: str = '') -> dict:
+    """
+    Дождаться, пока ответ запроса перемениится, — вместо сна и ручного повтора.
+
+    Args:
+        sql: читающий запрос; судится тем же `mysql_query_read_only`, что и `sql`.
+        after: ожидаемое старое значение первой клетки строкой (`'2026-10-30 12:29:15'`);
+            пусто — за базовое принимается значение при первом опросе.
+        timeout: потолок ожидания, секунды.
+        interval: пауза между опросами, секунды.
+        root: checkout соседнего проекта — как в `mysql_query_run`.
+
+    Returns:
+        `{'ok', 'baseline', 'value', 'rounds'}`; при неудаче `ok=False` и `error`,
+        ошибка — значение, а не исключение: ждать — штатная ситуация, а не авария.
+
+    ⚠⚠ Сличается первая клетка первой строки: await стоит ставить на скаляр
+    (`MAX(id)`, `COUNT(*)`, `MAX(snapshot_at)`). Многоколоночный ответ, где
+    переменилась не первая колонка, здесь не виден — вторая колонка могла
+    уехать, а первая нет.
+
+    ⚠ Порог, а не опрос «в момент X»: проход панели не синхронизирован ни с чем,
+    и одно чтение сразу после рестарта показывает прошлый снимок.
+    """
+    if not mysql_query_read_only(sql):
+        raise RuntimeError('await ставится только на читающий запрос')
+    deadline, started = time.monotonic() + timeout, time.monotonic()
+    baseline, value, rounds = after, None, 0
+    while True:
+        rounds += 1
+        result = mysql_query_run(sql, root=root)
+        columns, rows = result.get('columns') or [], result.get('rows') or []
+        value = str(rows[0][columns[0]]) if rows and columns else None
+        if not baseline:
+            baseline = value  # первый опрос задал точку отсчёта
+        if value != baseline:
+            return {'ok': True, 'baseline': baseline, 'value': value,
+                    'rounds': rounds, 'seconds': round(time.monotonic() - started, 1)}
+        if time.monotonic() >= deadline:
+            return {'ok': False, 'baseline': baseline, 'value': value, 'rounds': rounds,
+                    'seconds': round(time.monotonic() - started, 1),
+                    'error': f'без перемены за {timeout:g} с'}
+        time.sleep(interval)
+
+
 # ── детали реализации ──
 
 def _row_json_safe(row: dict) -> dict:
@@ -178,12 +231,17 @@ def _csv_cell(value) -> str:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Разовый запрос к базе проекта.')
-    parser.add_argument('command', choices=['sql', 'tables', 'columns', 'address'],
+    parser.add_argument('command', choices=['sql', 'tables', 'columns', 'address', 'await'],
                         help='sql — выполнить запрос; tables — список таблиц; '
-                             'columns — колонки таблицы; address — куда идёт подключение')
+                             'columns — колонки таблицы; address — куда идёт подключение; '
+                             'await — ждать перемены ответа')
     parser.add_argument('argument', nargs='?', default='', help='текст запроса или имя таблицы')
     parser.add_argument('--write', action='store_true',
                         help='разрешить запрос, меняющий данные или схему')
+    parser.add_argument('--after', default='',
+                        help='старое значение первой клетки — точка отсчёта для await')
+    parser.add_argument('--timeout', type=float, default=90.0, help='потолок ожидания await, секунды')
+    parser.add_argument('--interval', type=float, default=2.0, help='пауза между опросами await, секунды')
     parser.add_argument('--format', default='table', choices=['table', 'json', 'csv'])
     parser.add_argument('--limit', type=int, default=0, help='обрезать выдачу до N строк')
     parser.add_argument('--root', default='',
@@ -196,6 +254,16 @@ if __name__ == '__main__':
             print(f"{host}:{port}  база={config_setting('MYSQL_DATABASE', '', args.root)} "
                   f"пользователь={config_setting('MYSQL_USER', '', args.root)}")
             raise SystemExit(0)
+
+        if args.command == 'await':
+            query = args.argument or sys.stdin.read()
+            if not query.strip():
+                raise SystemExit('ошибка: пустой запрос')
+            verdict = mysql_query_await(query, after=args.after, timeout=args.timeout,
+                                        interval=args.interval, root=args.root)
+            print(f"{'доехало' if verdict['ok'] else 'не дождались'}: раундов {verdict['rounds']}, "
+                  f"{verdict['seconds']} с, {verdict['baseline']!r} -> {verdict['value']!r}")
+            raise SystemExit(0 if verdict['ok'] else 1)
 
         if args.command == 'tables':
             query = 'SHOW TABLES' + (f" LIKE '{args.argument}'" if args.argument else '')

@@ -122,6 +122,7 @@ echo 'print(1)' | python <общий слой>/project_/project_run.py -
 | `mysql_query_run(sql, params=(), limit=0, root='') -> dict` | `{'columns': [...], 'rows': [{колонка: значение}], 'affected': N}`; `root` — соседний checkout |
 | `mysql_query_read_only(sql) -> bool` | меняет ли запрос данные — по первому слову |
 | `mysql_query_format(result, style='table') -> str` | `table` человеку, `json` коду, `csv` в конвейер |
+| `mysql_query_await(sql, after='', timeout=90, interval=2, root='') -> dict` | ждать перемены ответа вместо сна: `{'ok', 'baseline', 'value', 'rounds', 'seconds'}`; сличается первая клетка первой строки — ставится на скаляр (`MAX(id)`, `MAX(snapshot_at)`) |
 
 ```bash
 python <общий слой>/mysql_/mysql_query.py address
@@ -130,6 +131,7 @@ python <общий слой>/mysql_/mysql_query.py columns <таблица>
 python <общий слой>/mysql_/mysql_query.py sql 'select … limit 10' [--format json|csv] [--limit N]
 python <общий слой>/mysql_/mysql_query.py sql '<запрос, меняющий данные>' --write
 python <общий слой>/mysql_/mysql_query.py tables --root ../<соседний проект>   # чужая база, своих .env/контейнер
+python <общий слой>/mysql_/mysql_query.py await 'select max(id) from t' [--after 41] [--timeout 90]   # дождаться перемены
 ```
 
 Учётные данные берутся из настроек проекта и уезжают в драйвер параметрами соединения —
