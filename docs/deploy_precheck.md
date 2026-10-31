@@ -17,7 +17,7 @@
 | `cyrillic` | `variable_cyrillic` + `tool_typo_cyrillic` | стоп | имена **и ключи словарей** латиницей — правило `code_rules.md` §1.2; чужой ключ помечается `# cyrillic-key: причина` |
 | `order` | `function_order` | стоп | публичное выше приватного |
 | `js` | `js_check` | стоп | опечатка в модуле = мёртвая страница, сюита молчит |
-| `migrations` | `mysql_migration_check_check` | смотря по виду | `ALTER` раньше `CREATE`, занятая метка |
+| `migrations` | `mysql_migration_check_check` | смотря по виду | `ALTER` раньше `CREATE`, занятая метка, новый `UNIQUE` на колонке с умолчанием |
 | `collate` | `mysql_collate_risks` | взгляд | разные сличения у прода и локально |
 | `pages` | `page_wire_check` | взгляд | шаблона нет, страница вне навигации |
 | `instead` | `tool_instead` | взгляд | своё поверх готового |

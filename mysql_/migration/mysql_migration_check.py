@@ -83,6 +83,19 @@ MYSQL_MIGRATION_CHECK_INVISIBLE = frozenset(
     '\u201c\u201d'  # двойные «ёлочки» вместо кавычки
     '\ufeff'    # BOM
 )
+# Колонка, добавляемая этим же ALTER с умолчанием, и новый уникальный ключ.
+# ⚠⚠ Вместе они — примета падения на старте: умолчание даёт **всем накопленным
+# строкам одно значение**, и если по остальным колонкам ключа дубли уже есть,
+# ключ не построится. Миграция откатится, а приложение не поднимется — yoyo
+# пробует её на каждом старте.
+_ADD_UNIQUE = re.compile(r'ADD\s+UNIQUE\s+(?:KEY|INDEX)\s+`?\w+`?\s*\(', re.I)
+# Автор сам пересчитал повторы перед постановкой ключа — тревожить не о чем.
+# ⚠ Так защищаются на деле: `GROUP BY … HAVING COUNT(*) > 1` в @-переменную и
+# ветка «ЕСТЬ ПОВТОРЫ: ключ не поставлен». Признак берётся по подсчёту, а не по
+# словам сообщения: текст у каждого автора свой.
+_COUNTS_DUPES = re.compile(r'HAVING\s+COUNT\s*\(\s*\*\s*\)\s*>\s*1', re.I)
+_ADD_COLUMN = re.compile(r'^COLUMN\s+`?(\w+)`?', re.I)
+_GENERATED = re.compile(r'GENERATED\s+ALWAYS\s+AS\s*\(', re.I)
 _COMMENT_BLOCK = re.compile(r'/\*.*?\*/', re.S)
 # COMMENT-литерал целиком (обычный '...' и удвоенный ''...'' внутри @sql,
 # с `=` и без): его содержимое — комментарий колонки, кириллица там законна.
@@ -130,6 +143,11 @@ def mysql_migration_check_check(migrations_dir, applied_ids=()) -> list[dict]:
         if any(_MUTATES.search(l.split('--')[0]) for l in masked) \
                 and not any(_GUARD.search(l.split('--')[0]) for l in masked):
             note(name, 'unguarded', 'DDL без information_schema-страховки')
+        for key_cols in _unique_on_defaulted(raw):
+            note(name, 'unique-on-defaulted-column',
+                 f'ключ ({key_cols}) строится на колонке с умолчанием: '
+                 'накопленные строки получат одно значение. Спроси базу '
+                 'прода о дублях по остальным колонкам ключа')
         body = '\n'.join(l.split('--')[0] for l in masked)
         if len(_STAGE.findall(body)) < 2:
             note(name, 'no-stage-markers', "нет пары SELECT 'before'/'after'")
@@ -248,6 +266,75 @@ def _letters_mixed(query: str) -> list[str]:
     """
     return sorted({word for word in _NOT_LETTER.split(query)
                    if word and _CYRILLIC.search(word) and _LATIN.search(word)})
+
+
+def _unique_on_defaulted(raw: str) -> list[str]:
+    """Новые уникальные ключи, опирающиеся на колонку с умолчанием.
+
+    Returns:
+        список колонок каждого опасного ключа строкой; пусто — чисто.
+
+    ⚠⚠ Цена пропуска измерена 31.10.2026: такая миграция уронила панель на
+    девять минут. Колонка `message_id INT NOT NULL DEFAULT 0` вошла в новый
+    `UNIQUE`, накопленные строки получили по нулю, и две старые записи одной
+    пары стали дублем — `ALTER` отказал, миграция откатилась, приложение не
+    поднялось. Репетиция этого показать не могла: на своей базе дублей нет.
+
+    ⚠⚠ Два приёма **законны, и тревоги на них нет** — проверка, срабатывающая
+    на верном решении, не сообщает ничего, и этот файл уже платил за такую
+    (3988 находок, см. шапку):
+
+    * гашение генерируемой колонкой — `IF(status = 'нужное', поле, NULL)`
+      убирает накопленное из ключа, потому что `NULL` в уникальном ключе
+      дублем не считается;
+    * свой подсчёт повторов в файле — автор пересчитал их сам и ветвится.
+
+    Избирательность измерена на 376 живых миграциях двух проектов: одна
+    находка, и та настоящая.
+    """
+    defaulted: set[str] = set()
+    guarded: set[str] = set()
+    if _COUNTS_DUPES.search(raw):
+        return []
+    # ⚠ Разбор идёт кусками «от ADD до ADD», а не регуляркой на всю колонку:
+    # тип умеет нести запятую (`DECIMAL(10,2)`) и скобки, и выражение «имя …
+    # GENERATED» на них соскальзывает — ловит `COLUMN` вместо имени колонки.
+    for piece in re.split(r'\bADD\s+', raw, flags=re.I)[1:]:
+        m = _ADD_COLUMN.match(piece.strip())
+        if not m:
+            continue
+        head = piece.split(';')[0]
+        if (at := _GENERATED.search(head)) is not None:
+            if re.search(r'\bNULL\b', _brackets_inside(head, head.find(
+                    '(', at.end() - 1)), re.I):
+                guarded.add(m.group(1).lower())
+        elif re.search(r'\bDEFAULT\b', head, re.I):
+            defaulted.add(m.group(1).lower())
+
+    out = []
+    for m in _ADD_UNIQUE.finditer(raw):
+        cols = _brackets_inside(raw, m.end() - 1)
+        named = {c.strip(' `\n\t').lower() for c in cols.split(',')}
+        if named & defaulted and not named & guarded:
+            out.append(', '.join(sorted(named)))
+    return out
+
+
+def _brackets_inside(raw: str, at: int) -> str:
+    """Содержимое скобки, открытой в позиции `at`, со счётом вложенных.
+
+    ⚠ Не `[^)]*`: у функционального индекса внутри свои скобки
+    (`(IF(status = 'x', y, NULL))`), и жадность с ленью обе врут.
+    """
+    depth = 0
+    for no in range(at, len(raw)):
+        if raw[no] == '(':
+            depth += 1
+        elif raw[no] == ')':
+            depth -= 1
+            if depth == 0:
+                return raw[at + 1:no]
+    return ''
 
 
 if __name__ == '__main__':
