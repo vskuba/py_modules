@@ -96,6 +96,42 @@ async def cronicle_api_enable(event_id: str, enabled: bool) -> dict:
                                      'enabled': 1 if enabled else 0})
 
 
+async def cronicle_api_timing(event_id: str, timing: dict) -> dict:
+    """Переписать расписание события — когда ему запускаться.
+
+    Args:
+        event_id: идентификатор события Cronicle.
+        timing: словарь планировщика, `{'hours': [2], 'minutes': [0]}`.
+            Ключ пропущен либо пуст — «любое значение», то есть звёздочка.
+
+    Returns:
+        dict: ответ Cronicle без служебного `code`.
+
+    Raises:
+        ValueError: расписание пустое. См. ⚠⚠ ниже — это не придирка.
+
+    ⚠⚠ **Пустой `timing` значит «каждую минуту», а не «никогда».** У Cronicle
+    пропущенное поле читается звёздочкой, и `{}` — это расписание «ежеминутно,
+    круглосуточно». Отдай мы его молча, событие, которое человек хотел
+    остановить, пошло бы шестьдесят раз в час. Поэтому пустое здесь — отказ, а
+    останавливают событие **выключателем** (`cronicle_api_enable`).
+
+    ⚠ Ключ API обязан иметь привилегию `edit_events`: без неё Cronicle
+    отвечает отказом на `update_event`, а читает расписание по-прежнему молча
+    и верно — то есть страница выглядит рабочей ровно до первого сохранения.
+
+    ⚠ Поля, не названные здесь, событие сохраняет как были: `update_event`
+    правит переданное, а не заменяет запись целиком.
+    """
+    if not timing or not any((timing or {}).values()):
+        raise ValueError('пустое расписание Cronicle читает как «каждую '
+                         'минуту», а не «никогда»: событие останавливают '
+                         'выключателем, а не очисткой расписания')
+
+    return await _cronicle_api_call('post', 'update_event',
+                                    {'id': str(event_id), 'timing': timing})
+
+
 async def cronicle_api_create(title: str, params: dict, timing: dict,
                               like: dict = None, **extra) -> str:
     """Завести событие в расписании; вернуть его идентификатор.
