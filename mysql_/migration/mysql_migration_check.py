@@ -83,11 +83,15 @@ MYSQL_MIGRATION_CHECK_INVISIBLE = frozenset(
     '\u201c\u201d'  # двойные «ёлочки» вместо кавычки
     '\ufeff'    # BOM
 )
-# Колонка, добавляемая этим же ALTER с умолчанием, и новый уникальный ключ.
+# Колонка, добавляемая этим же ALTER с не-NULL умолчанием, и новый уникальный
+# ключ.
 # ⚠⚠ Вместе они — примета падения на старте: умолчание даёт **всем накопленным
 # строкам одно значение**, и если по остальным колонкам ключа дубли уже есть,
 # ключ не построится. Миграция откатится, а приложение не поднимется — yoyo
 # пробует её на каждом старте.
+# ⚠⚠ Решает именно **не-NULL**, а не наличие `DEFAULT`: `DEFAULT NULL` ключ не
+# ломает (`_one_value_for_all`), и проверка «просто на умолчание» звала чинить
+# работающую миграцию соседа.
 _ADD_UNIQUE = re.compile(r'ADD\s+UNIQUE\s+(?:KEY|INDEX)\s+`?\w+`?\s*\(', re.I)
 # Автор сам пересчитал повторы перед постановкой ключа — тревожить не о чем.
 # ⚠ Так защищаются на деле: `GROUP BY … HAVING COUNT(*) > 1` в @-переменную и
@@ -145,9 +149,10 @@ def mysql_migration_check_check(migrations_dir, applied_ids=()) -> list[dict]:
             note(name, 'unguarded', 'DDL без information_schema-страховки')
         for key_cols in _unique_on_defaulted(raw):
             note(name, 'unique-on-defaulted-column',
-                 f'ключ ({key_cols}) строится на колонке с умолчанием: '
-                 'накопленные строки получат одно значение. Спроси базу '
-                 'прода о дублях по остальным колонкам ключа')
+                 f'ключ ({key_cols}) строится на колонке, где у всех '
+                 'накопленных строк будет одно и то же значение. Спроси базу '
+                 'прода о дублях по остальным колонкам ключа — на своей их '
+                 'может не быть')
         body = '\n'.join(l.split('--')[0] for l in masked)
         if len(_STAGE.findall(body)) < 2:
             note(name, 'no-stage-markers', "нет пары SELECT 'before'/'after'")
@@ -289,8 +294,13 @@ def _unique_on_defaulted(raw: str) -> list[str]:
       дублем не считается;
     * свой подсчёт повторов в файле — автор пересчитал их сам и ветвится.
 
-    Избирательность измерена на 376 живых миграциях двух проектов: одна
-    находка, и та настоящая.
+    Третий приём тревоги не вызывает вовсе и потому в списке не нужен:
+    колонка, допускающая `NULL` (`_one_value_for_all`), накопленных из ключа
+    не выводит — она их туда и не вносит.
+
+    Избирательность измерена на 376 живых миграциях двух проектов: **ни одной
+    находки**. Срабатывает только на воспроизведённой аварии и на саботаже
+    каждой из лазеек.
     """
     defaulted: set[str] = set()
     guarded: set[str] = set()
@@ -308,7 +318,7 @@ def _unique_on_defaulted(raw: str) -> list[str]:
             if re.search(r'\bNULL\b', _brackets_inside(head, head.find(
                     '(', at.end() - 1)), re.I):
                 guarded.add(m.group(1).lower())
-        elif re.search(r'\bDEFAULT\b', head, re.I):
+        elif _one_value_for_all(head):
             defaulted.add(m.group(1).lower())
 
     out = []
@@ -318,6 +328,33 @@ def _unique_on_defaulted(raw: str) -> list[str]:
         if named & defaulted and not named & guarded:
             out.append(', '.join(sorted(named)))
     return out
+
+
+def _one_value_for_all(head: str) -> bool:
+    """Получат ли накопленные строки от этой колонки **одно** значение.
+
+    Args:
+        head: объявление колонки от `ADD COLUMN` до конца запроса.
+
+    ⚠⚠ `DEFAULT NULL` — **не** одно значение, а отсутствие значения, и
+    уникальный ключ на такой колонке накопленных не трогает вовсе: MySQL
+    пускает сколько угодно строк, где хоть одна колонка ключа `NULL`.
+    Проверено опытом в обе стороны: `INT NULL DEFAULT NULL` ставит ключ поверх
+    живых дублей, `INT NOT NULL DEFAULT 0` на тех же данных падает `1062`.
+
+    Цена различения названа: не зная его, проверка объявила миной живую
+    миграцию соседа (`workflow_variable_own`, `workflow_id INT NULL DEFAULT
+    NULL`) — то есть позвала чинить работающее.
+
+    ⚠ `NOT NULL` без `DEFAULT` опасен тоже: `ALTER` подставит накопленным
+    неявное умолчание типа — ноль или пустую строку, — и это снова одно
+    значение на всех.
+    """
+    if re.search(r'\bNOT\s+NULL\b', head, re.I):
+        return True
+    if not (at := re.search(r'\bDEFAULT\b', head, re.I)):
+        return False
+    return not re.match(r'\s*NULL\b', head[at.end():], re.I)
 
 
 def _brackets_inside(raw: str, at: int) -> str:
