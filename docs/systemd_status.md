@@ -49,6 +49,27 @@ j = systemd_journal_tail('app.service', lines=50, since='-10 min', grep='error')
 PYTHONPATH=. python -m systemd_.systemd_journal app.service -n 20 --since '1 hour ago' --grep timeout
 ```
 
+### Журнал процесса, когда имени юнита нет
+
+Чужой демон зовут как угодно, а бывает — и заводят руками; зато номер
+процесса, слушающего порт, виден всегда. `pid=` сужает выборку полем `_PID`
+journald, и спросить так можно **вместо** юнита или вместе с ним:
+
+```python
+j = systemd_journal_tail(pid=1273249, grep='token=')          # чей это юнит — неважно
+j = systemd_journal_tail('app.service', pid=1273249)          # этот процесс внутри юнита
+```
+
+Без того и другого ответ — `code` = -1 и `error`: пустой список тут читался
+бы как «в журнале чисто», а на деле не сказано, чей журнал нужен.
+
+⚠ Номера процессов ядро выдаёт по кругу, а журнал помнит всех: выборка по
+`pid` без `since` приносит и строки прежней жизни того же номера.
+
+```bash
+PYTHONPATH=. python -m systemd_.systemd_journal --pid 1273249 -n 5
+```
+
 ## Грабли
 
 1. **Замороженный юнит выглядит живым**: `SIGSTOP` (или `docker pause`

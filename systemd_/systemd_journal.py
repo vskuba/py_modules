@@ -9,6 +9,11 @@
 Права на журнал — не по праву рождения: без группы `adm` чужие юниты не
 читаются, и это должно быть видно в ответе словом, а не пустым списком —
 пустота читается как «в логе чисто».
+
+Спрашивают не всегда юнитом: у чужого демона имя юнита какое угодно, а то и
+заведено руками, — зато номер процесса, слушающего порт, виден всегда.
+Поэтому выборку сужает либо `unit`, либо `pid` (поле `_PID` journald), либо
+оба сразу.
 """
 
 # Хвост по умолчанию — как у `tail`: много для глаза, мало для окна контекста.
@@ -23,14 +28,19 @@ SYSTEMD_JOURNAL_TIMEOUT = 90.0
 SYSTEMD_JOURNAL_SCAN = 5000
 
 
-def systemd_journal_tail(unit: str, *, lines: int = SYSTEMD_JOURNAL_LINES,
+def systemd_journal_tail(unit: str = '', *, pid: int = 0,
+                         lines: int = SYSTEMD_JOURNAL_LINES,
                          since: str = '', grep: str = '', host: str = '',
                          user: bool = False,
                          timeout: float = SYSTEMD_JOURNAL_TIMEOUT) -> dict:
-    """Принести последние строки журнала юнита — своим или с хоста фермы.
+    """Принести последние строки журнала — своим или с хоста фермы.
 
     Args:
         unit: имя юнита, экземпляр — с собачкой (`ds-shell@home.service`).
+        pid: номер процесса (`_PID` journald) — когда имени юнита нет. Юнит
+            чужого демона зовут как угодно, а то и заводят руками, зато
+            номер процесса, слушающего порт, виден всегда. С `unit` вместе
+            фильтры складываются: строки этого процесса внутри юнита.
         lines: сколько последних строк; при `grep` — после фильтра.
         since: отсечка `--since` как её понимает journalctl (`'1 hour ago'`,
             `'2026-02-19 14:00'`); пусто — без отсечки.
@@ -43,21 +53,27 @@ def systemd_journal_tail(unit: str, *, lines: int = SYSTEMD_JOURNAL_LINES,
     Returns:
         {'code': rc, 'lines': [str], 'error': str}; пустой `lines` при
         `code` = 0 — действительно пусто, при непустом `error` — не пустили
-        (нет группы `adm`) или юнит молчал.
+        (нет группы `adm`), юнит молчал или не сказано, чей журнал нужен.
 
     ⚠ Никакого `-f`: процесс слежения за журналом не завершается сам, и
     вызванный из инструмента висел бы до таймаута, держая канал.
+
+    ⚠ Номера процессов ядро выдаёт по кругу, а журнал помнит всех: выборка
+    по `pid` без `since` может принести строки чужой жизни того же номера.
     """
+    if not unit and not pid:
+        return {'code': -1, 'lines': [], 'error': 'не сказано, чей журнал: ни unit, ни pid'}
     scope = '--user ' if user else ''
     taken = SYSTEMD_JOURNAL_SCAN if grep else max(1, lines)
-    parts = [f'journalctl {scope}-q -u {unit} -n {taken} --no-pager -a']
+    target = _target(unit, pid)
+    parts = [f'journalctl {scope}-q {" ".join(target)} -n {taken} --no-pager -a']
     if since:
         parts.append(f'--since {shlex_quote(since)}')
     if host:
         from ssh_.ssh_x import ssh_x
         raw = ssh_x(host, ' '.join(parts), timeout=timeout)
     else:
-        raw = _local(scope, unit, taken, since, timeout)
+        raw = _local(scope, target, taken, since, timeout)
     kept = [line for line in (raw['output'] or '').splitlines()
             if not grep or grep.lower() in line.lower()]
     return {'code': raw['code'], 'lines': kept[-max(1, lines):], 'error': raw['error']}
@@ -65,11 +81,16 @@ def systemd_journal_tail(unit: str, *, lines: int = SYSTEMD_JOURNAL_LINES,
 
 # ── детали реализации ──
 
-def _local(scope: str, unit: str, taken: int, since: str, timeout: float) -> dict:
+def _target(unit: str, pid: int) -> list:
+    """Чем ограничена выборка: юнит — флагом, процесс — полем journald."""
+    return (['-u', unit] if unit else []) + ([f'_PID={int(pid)}'] if pid else [])
+
+
+def _local(scope: str, target: list, taken: int, since: str, timeout: float) -> dict:
     """Журнал своей машины тем же набором флагов, что и походный скрипт."""
     import subprocess
     cmd = ['journalctl'] + (['--user'] if scope else []) + \
-          ['-q', '-u', unit, '-n', str(taken), '--no-pager', '-a']
+          ['-q'] + target + ['-n', str(taken), '--no-pager', '-a']
     if since:
         cmd += ['--since', since]
     try:
@@ -92,9 +113,11 @@ def shlex_quote(text: str) -> str:
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(
-        description='хвост журнала systemd-юнита; пустые строки при code 0 — '
-                    'журнал чист, с error — не пустили.')
-    ap.add_argument('unit', help='имя юнита')
+        description='хвост журнала systemd-юнита или процесса; пустые строки '
+                    'при code 0 — журнал чист, с error — не пустили.')
+    ap.add_argument('unit', nargs='?', default='', help='имя юнита')
+    ap.add_argument('--pid', type=int, default=0,
+                    help='номер процесса вместо юнита (поле _PID)')
     ap.add_argument('-n', '--lines', type=int, default=SYSTEMD_JOURNAL_LINES,
                     help='строк хвост (после --grep)')
     ap.add_argument('--since', default='', help='отсечка journalctl --since')
@@ -103,9 +126,9 @@ if __name__ == '__main__':
     ap.add_argument('--user', action='store_true', help='менеджер пользователя')
     ap.add_argument('--timeout', type=float, default=SYSTEMD_JOURNAL_TIMEOUT)
     ns = ap.parse_args()
-    out = systemd_journal_tail(ns.unit, lines=ns.lines, since=ns.since,
-                               grep=ns.grep, host=ns.host, user=ns.user,
-                               timeout=ns.timeout)
+    out = systemd_journal_tail(ns.unit, pid=ns.pid, lines=ns.lines,
+                               since=ns.since, grep=ns.grep, host=ns.host,
+                               user=ns.user, timeout=ns.timeout)
     if out['error']:
         print(out['error'])
     for line in out['lines']:
