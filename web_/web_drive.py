@@ -35,7 +35,7 @@ import tempfile
 import time
 
 from adb_.adb_ws import adb_ws_open, adb_ws_send, adb_ws_recv
-from web_.web_shot import web_shot_serve, web_shot_argv, _find_browser
+from web_.web_shot import web_shot_serve, web_shot_argv, web_shot_browser
 
 # Потолок ожидания ответа одного CDP-вызова без своего await, секунды.
 WEB_DRIVE_TIMEOUT = 15.0
@@ -103,7 +103,7 @@ def web_drive_eval(src, script, wait_ms=5000, storage=(), shot='',
         RuntimeError: Chrome не поднял DevTools, страница не нашлась или
             вызов DevTools не уложился в свои потолки.
     """
-    browser = chrome or _find_browser()
+    browser = chrome or web_shot_browser()
     is_url = src.startswith(('http://', 'https://'))
     if not is_url and not os.path.isfile(src):
         raise FileNotFoundError(f'страница не найдена: {src}')

@@ -35,7 +35,7 @@ import re
 import subprocess
 
 from web_.web_shot import (WEB_SHOT_ERR_TAIL, WEB_SHOT_SIZE, WEB_SHOT_TIMEOUT,
-                           _find_browser, _served_page, web_shot_argv)
+                           web_shot_browser, _served_page, web_shot_argv)
 
 # Бюджет виртуального времени для дампа, мс: больше снимочных 1200 — зонду
 # мало «после анимаций», ему нужны загруженные шрифты (метрики строк!) и
@@ -75,7 +75,7 @@ def web_probe(src, probe_js, seed_js='', size=WEB_SHOT_SIZE,
         RuntimeError: Chrome ошибся, зонд не оставил узла (страница не дошла
             до скрипта) или сам зонд упал — текст ошибки внутри.
     """
-    browser = chrome or _find_browser()
+    browser = chrome or web_shot_browser()
     if src.startswith(('http://', 'https://')):
         # Зонд вставляется в КОПИЮ файла (`_served_page`), а чужую страницу по
         # адресу подменить нечем: `--dump-dom` отдаёт её как есть, узла зонда в

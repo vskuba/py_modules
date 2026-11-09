@@ -74,7 +74,7 @@ def web_shot_argv(browser: str, size=None) -> list:
     Команда запуска headless Chrome без адреса: общие флаги, окно, песочница.
 
     Args:
-        browser: путь к бинарю (`_find_browser`, если не задан вызывающим).
+        browser: путь к бинарю (`web_shot_browser`, если не задан вызывающим).
         size: (ширина, высота) окна; None — флаг окна не ставится.
 
     Returns:
@@ -126,7 +126,7 @@ def web_shot_capture(src, out, size=WEB_SHOT_SIZE, virtual_time_ms=1200,
         ValueError: `inject_js` вместе с URL — домешивать некуда.
         RuntimeError: Chrome завершился ошибкой или не уложился в таймаут.
     """
-    browser = chrome or _find_browser()
+    browser = chrome or web_shot_browser()
     is_url = src.startswith(('http://', 'https://'))
     if not is_url and not os.path.isfile(src):
         raise FileNotFoundError(f'страница не найдена: {src}')
@@ -187,6 +187,38 @@ def web_shot_serve(directory, port=0):
             yield f'http://127.0.0.1:{srv.server_address[1]}'
         finally:
             srv.shutdown()
+
+
+def web_shot_browser() -> str:
+    """
+    Путь к бинарю headless-Chrome: чем в этой системе рендерить страницу.
+
+    Ищет в PATH по распространённым именам, а следом — в кэше playwright: в
+    контейнере приложения браузер ставят `playwright install
+    chromium-headless-shell`, и в PATH он не попадает никогда — лежит в
+    `~/.cache/ms-playwright/` под именем версии.
+
+    ⚠⚠ Вторая половина поиска — не удобство, а работоспособность на сервере:
+    без неё всё, что печатает и снимает (`web_shot`, `web_drive`, `web_probe`,
+    `pdf_print_html`), на установке с playwright-браузером отвечает «браузера
+    нет» при установленном браузере. На эти грабли уже наступали порознь:
+    `web_` научился смотреть в кэш, а `pdf_chrome` — нет, и печать PDF из
+    приложения была недостижима. Поэтому поиск один и живёт здесь.
+
+    Raises:
+        FileNotFoundError: ни в PATH, ни в кэше playwright браузера нет.
+    """
+    for name in ('google-chrome', 'google-chrome-stable', 'chromium',
+                 'chromium-browser', 'microsoft-edge'):
+        found = shutil.which(name)
+        if found:
+            return found
+    found = _find_playwright_browser()
+    if found:
+        return found
+    raise FileNotFoundError('не найден Chrome/Chromium в PATH '
+                            '(google-chrome, chromium, microsoft-edge) '
+                            'и в кэше playwright')
 
 
 @contextlib.contextmanager
@@ -252,26 +284,6 @@ def _write_variant(src, dst, inject_js, head_js=''):
                 else html + snippet)
     with open(dst, 'w', encoding='utf-8') as fh:
         fh.write(html)
-
-
-def _find_browser():
-    """Первый найденный Chromium/Chrome; имена в порядке вероятности установки.
-
-    PATH, а следом кэш playwright: в контейнере приложения браузер ставят
-    `playwright install chromium-headless-shell`, и в PATH он не попадает
-    никогда — лежит в `~/.cache/ms-playwright/` под именем версии. Без этого
-    шага снимок с сервера недостижим при установленном браузере."""
-    for name in ('google-chrome', 'google-chrome-stable', 'chromium',
-                 'chromium-browser', 'microsoft-edge'):
-        found = shutil.which(name)
-        if found:
-            return found
-    found = _find_playwright_browser()
-    if found:
-        return found
-    raise FileNotFoundError('не найден Chrome/Chromium в PATH '
-                            '(google-chrome, chromium, microsoft-edge) '
-                            'и в кэше playwright')
 
 
 def _find_playwright_browser():

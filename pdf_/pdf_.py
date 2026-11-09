@@ -302,14 +302,20 @@ def pdf_whiteout(path: str, out_png: str, boxes: list[dict], dpi: int = 300, pag
 
 
 def pdf_chrome() -> str | None:
-    """Путь к бинарю headless-Chrome (первый найденный), None если нет."""
-    import shutil
+    """Путь к бинарю headless-Chrome (первый найденный), None если нет.
 
-    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
-        p = shutil.which(name)
-        if p:
-            return p
-    return None
+    Поиск общий с `web_` (`web_shot_browser`): PATH, а следом кэш playwright.
+    ⚠⚠ Своего поиска здесь больше нет намеренно — он смотрел только в PATH, и
+    в контейнере приложения, где браузер ставят `playwright install
+    chromium-headless-shell`, печать отвечала «chrome не найден» при живом
+    браузере. Две половины одного вопроса расходиться не должны.
+    """
+    from web_.web_shot import web_shot_browser
+
+    try:
+        return web_shot_browser()
+    except FileNotFoundError:
+        return None
 
 
 def pdf_crop(src: str, box_mm, out_png: str, dpi: int = 150, page: int = 0,
@@ -344,35 +350,6 @@ def pdf_crop(src: str, box_mm, out_png: str, dpi: int = 150, page: int = 0,
                          Image.LANCZOS)
     img.save(out_png)
     return out_png
-
-
-def _chrome_print(url: str, out_pdf: str | None, binary: str, profile: str,
-                  vtb_ms: int, timeout_s: int):
-    """Один запуск headless Chrome: адрес → PDF (или просто прогрев страницы).
-
-    Флаги измерены на живой задаче: `--no-sandbox --disable-dev-shm-usage` —
-    иначе дохнет в контейнере; отдельный `--user-data-dir` — несколько
-    запусков не ловят «профиль заблокирован»; `--no-pdf-header-footer` —
-    иначе штампуются дата и URL; `--virtual-time-budget` — ждать веб-шрифты
-    и JS-разметку, иначе PDF выйдет шрифтом-заглушкой.
-    """
-    import subprocess
-
-    cmd = [
-        binary, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
-        "--disable-gpu", f"--user-data-dir={profile}", "--no-pdf-header-footer",
-        f"--virtual-time-budget={vtb_ms}",
-    ]
-    if out_pdf:
-        cmd.append(f"--print-to-pdf={out_pdf}")
-    return subprocess.run(cmd + [url], check=False, capture_output=True, timeout=timeout_s)
-
-
-def _chrome_fail(out_pdf: str, proc) -> None:
-    """Общий отказ печати: причина живёт в stderr движка, без хвоста провал — гадание."""
-    if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1024:
-        tail = proc.stderr.decode(errors="replace").strip()[-300:]
-        raise RuntimeError(f"chrome не записал {out_pdf}" + (f": {tail}" if tail else ""))
 
 
 def pdf_print_html(html_path: str, out_pdf: str, chrome: str | None = None, timeout_s: int = 30) -> None:
@@ -553,6 +530,34 @@ def main() -> None:
         x0, y0, x1, y1 = (float(v) for v in a.box.split(","))
         print(pdf_crop(a.src, (x0, y0, x1, y1), a.out_png, dpi=a.dpi, page=a.page, scale=a.scale))
 
+
+def _chrome_print(url: str, out_pdf: str | None, binary: str, profile: str,
+                  vtb_ms: int, timeout_s: int):
+    """Один запуск headless Chrome: адрес → PDF (или просто прогрев страницы).
+
+    Флаги измерены на живой задаче: `--no-sandbox --disable-dev-shm-usage` —
+    иначе дохнет в контейнере; отдельный `--user-data-dir` — несколько
+    запусков не ловят «профиль заблокирован»; `--no-pdf-header-footer` —
+    иначе штампуются дата и URL; `--virtual-time-budget` — ждать веб-шрифты
+    и JS-разметку, иначе PDF выйдет шрифтом-заглушкой.
+    """
+    import subprocess
+
+    cmd = [
+        binary, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage",
+        "--disable-gpu", f"--user-data-dir={profile}", "--no-pdf-header-footer",
+        f"--virtual-time-budget={vtb_ms}",
+    ]
+    if out_pdf:
+        cmd.append(f"--print-to-pdf={out_pdf}")
+    return subprocess.run(cmd + [url], check=False, capture_output=True, timeout=timeout_s)
+
+
+def _chrome_fail(out_pdf: str, proc) -> None:
+    """Общий отказ печати: причина живёт в stderr движка, без хвоста провал — гадание."""
+    if not os.path.exists(out_pdf) or os.path.getsize(out_pdf) < 1024:
+        tail = proc.stderr.decode(errors="replace").strip()[-300:]
+        raise RuntimeError(f"chrome не записал {out_pdf}" + (f": {tail}" if tail else ""))
 
 
 def _descriptor(font_obj):
