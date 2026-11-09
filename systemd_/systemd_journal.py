@@ -68,7 +68,7 @@ def systemd_journal_tail(unit: str = '', *, pid: int = 0,
     target = _target(unit, pid)
     parts = [f'journalctl {scope}-q {" ".join(target)} -n {taken} --no-pager -a']
     if since:
-        parts.append(f'--since {shlex_quote(since)}')
+        parts.append(f'--since {_quote(since)}')
     if host:
         from ssh_.ssh_x import ssh_x
         raw = ssh_x(host, ' '.join(parts), timeout=timeout)
@@ -104,8 +104,12 @@ def _local(scope: str, target: list, taken: int, since: str, timeout: float) -> 
                 'error': f'journalctl не ответил за {timeout:g} c'}
 
 
-def shlex_quote(text: str) -> str:
-    """Кавычка для походной строки — только для неё, в argv кавычки не нужны."""
+def _quote(text: str) -> str:
+    """Кавычка для походной строки — только для неё, в argv кавычки не нужны.
+
+    Имя без префикса файла (`shlex_quote`) звало читателя наружу, будто это чья-то
+    общая обёртка; зовут её только отсюда и только для `ssh_x`.
+    """
     import shlex
     return shlex.quote(text)
 
