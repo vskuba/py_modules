@@ -68,6 +68,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import pathlib
@@ -163,6 +164,13 @@ def opensearch_search(body: dict, env: dict | None = None, timeout: int = 90) ->
     return doc["rawResponse"]
 
 
+def _iso(ms):
+    """epoch-миллисекунды из sort в ISO; не-число (нет сортировки) — как есть."""
+    if isinstance(ms, bool) or not isinstance(ms, (int, float)):
+        return ms
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).isoformat()
+
+
 def _parse_set_cookie(headers: list) -> dict:
     fresh = {}
     for line in headers:
@@ -218,8 +226,23 @@ def opensearch_hits(index: str, query: str = "all", env: dict | None = None, **k
                             time_from=kw.get("time_from"), time_to=kw.get("time_to"))
     r = opensearch_search(_build_body(index, query, ns), env)
     return [{"index": h["_index"], "id": h["_id"],
-             "ts": h["_source"].get("timestamp") or h["_source"].get("@timestamp"),
+             # при --fields timestamp вылетает из _source — берём из sort (epoch ms)
+             "ts": h["_source"].get("timestamp") or h["_source"].get("@timestamp")
+                   or _iso((h.get("sort") or [None])[0]),
              "_source": h["_source"]} for h in r["hits"]["hits"]]
+
+
+def _join_sort(argv: list) -> list:
+    """argparse принимает `-timestamp` за флаг — склеиваем `--sort -x` в `--sort=-x`."""
+    out, i = [], 0
+    while i < len(argv):
+        if argv[i] == "--sort" and i + 1 < len(argv):
+            out.append(f"--sort={argv[i + 1]}")
+            i += 2
+            continue
+        out.append(argv[i])
+        i += 1
+    return out
 
 
 def main() -> None:
@@ -250,11 +273,12 @@ def main() -> None:
     spg.add_argument("--group", action="append", default=[], metavar="FIELD",
                      help="terms-уровень, повторяемый; уровни вложенно")
     spg.add_argument("--hist", metavar="FIELD", help="date_histogram по полю даты (timestamp)")
-    spg.add_argument("--interval", default="1h", help="calendar_interval, напр. 1h/1d")
+    spg.add_argument("--interval", default="1h",
+                     help="интервал: словами (hour/day) calendar или с суффиксом (6h/30m) fixed")
     spg.add_argument("--top", type=int, default=20, help="бакетов на уровень")
     spg.add_argument("--raw", action="store_true", help="сырой rawResponse вместо строк")
 
-    args = ap.parse_args()
+    args = ap.parse_args(_join_sort(sys.argv[1:]))
     env = opensearch_env(args.env_file)
     if args.cmd == "agg":
         if not (args.group or args.hist):

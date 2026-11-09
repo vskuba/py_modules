@@ -16,15 +16,25 @@
 * **terms отсекает по `--top`**: счётчик бакета — это внутри ветки, а не по
   окну целиком; «остальные» бакеты молча не попадают. Для полноты картины —
   параллельно `count`.
+* **interval у date_histogram бывает двух видов**: словами (`hour`, `day`) —
+  в `calendar_interval`, и с суффиксом (`6h`, `30m`) — в `fixed_interval`.
+  Неверный ключ кластер ловит на парсинге (`failed to parse field
+  [calendar_interval]`); здесь ключ выбирается по формату значения.
+* **`--filter` по полю `.keyword` — точное равенство всей строки** (keyword
+  индексируется одним термином, match_phrase по подстроке внутри него не ищется).
+  Для подстрочного поиска — по обычному text-полю без `.keyword`.
 * Ключи бакетов в rawResponse — служебные `_g0`, `_g1`, `_hist` (поля-ключи
   ломались бы на точках в имени поля); настоящие поля видит `opensearch_agg_rows`.
 """
 
 from __future__ import annotations
 
+import re
+
 from opensearch_.opensearch_ import opensearch_filters, opensearch_search
 
 KEYWORD_RETRY_MARK = "not optimised"
+FIXED_INTERVAL_RE = re.compile(r"^\d+[smhdw]$")
 
 
 def opensearch_agg_run(index: str, groups=(), hist: str | None = None, interval: str = "1h",
@@ -79,7 +89,8 @@ def _agg_body(groups, hist, interval, query, filters, time_from, time_to, time_f
                                                                   time_from, time_to, time_field)}}}
     aggs = _terms_chain(groups, top)
     if hist:
-        hist_agg: dict = {"date_histogram": {"field": hist, "calendar_interval": interval,
+        key = "fixed_interval" if FIXED_INTERVAL_RE.match(interval) else "calendar_interval"
+        hist_agg: dict = {"date_histogram": {"field": hist, key: interval,
                                             "min_doc_count": 1}}
         if aggs:
             hist_agg["aggs"] = {"_g0": aggs}
