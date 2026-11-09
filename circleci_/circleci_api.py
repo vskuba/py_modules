@@ -212,13 +212,20 @@ def circleci_api_latest_jobs(slug: str, branch: str) -> dict:
         `{'number', 'state', 'revision', 'workflows': {имя: {'status',
         'jobs': {имя: {'status', 'job_number', 'id'}}}}}`;
         пустой dict, если у ветки нет ни одного пайплайна.
+
+    Ловушка тегов: релизный пайплайн (push тега `v*`) фильтром `branch=` не
+    отдаётся, а в `vcs` у него пустая ветка и заполнен `tag`. Не нашли по
+    ветке — повторяем без фильтра и ищем совпадение по `vcs.tag`.
     """
     got = circleci_api_pipelines(slug, branch=branch, page_size=10)
+    items = [p for p in got['items']
+             if not branch or p.get('vcs', {}).get('branch') == branch]
+    if not items:
+        items = [p for p in circleci_api_pipelines(slug, page_size=20)['items']
+                 if p.get('vcs', {}).get('tag') == branch]
     # фильтр по ветке доверять нельзя: старые инстансы отвечали без него —
     # перестраховываемся сверкой на месте
-    for p in got['items']:
-        if branch and p.get('vcs', {}).get('branch') != branch:
-            continue
+    for p in items:
         out = {'number': p['number'], 'state': p['state'],
                'revision': p.get('vcs', {}).get('revision', ''), 'workflows': {}}
         for w in circleci_api_workflows(p['id']):
