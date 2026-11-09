@@ -36,6 +36,8 @@ OpenSearch за Google SSO: запросы через Dashboards по SAML-се�
   по пути переписывает протировавшиеся cookie в env-файл.
 * `opensearch_hits` — хиты одним списком (index/id/ts/_source), удобно в pipe.
 * `opensearch_count` — только число попаданий.
+* `opensearch_agg_run` (файл `opensearch_agg.py`) — terms-разбиения и
+  date_histogram; `.keyword` к text-полям подставляется сам.
 
 CLI:
 
@@ -47,11 +49,20 @@ CLI:
     python -m opensearch_.opensearch_ count 'cashier-prod-fpm-*' all \\
         --filter jsonPayload.traceId=4cba6a6a-...
 
+    # разбивка: сервис x severity за окно (строки: счётчик, путь...)
+    python -m opensearch_.opensearch_ agg 'cashier-prod-fpm-*' all \\
+        --group jsonPayload.serviceName --group severity \\
+        --time-from 2026-11-07T17:00:00Z --time-to 2026-11-09T17:00:00Z
+
+    # лента по часам (полю timestamp — date, .keyword не трогает)
+    python -m opensearch_.opensearch_ agg 'cashier-prod-fpm-*' all \\
+        --hist timestamp --interval 1h --group severity
+
     # свой JSON целиком (body _search)
     python -m opensearch_.opensearch_ search 'cashier-prod-fpm-*' '{"aggs": …}' --raw
 
 ⚠ ВНИМАНИЕ (PCI): в `jsonPayload.message` кассира чужие данные — маски, телефоны,
-полные PAN. wynik'ы держать в /tmp, в git/файлы репозитория не выгружать.
+полные PAN. результаты держать в /tmp, в git/файлы репозитория не выгружать.
 """
 
 from __future__ import annotations
@@ -161,23 +172,26 @@ def _parse_set_cookie(headers: list) -> dict:
     return fresh
 
 
-def _build_body(index: str, query: str, args) -> dict:
-    if query.strip() in ("all", "*"):
-        q: dict = {"match_all": {}}
-    else:
-        q = json.loads(query)
-    filters: list = [q]
-    for f in args.filter or []:
+def opensearch_filters(query: str = "all", filters=(), time_from: str | None = None,
+                       time_to: str | None = None, time_field: str = "timestamp") -> list:
+    """Фильтры bool.filter: фрагмент запроса + match_phrase FIELD=VALUE + range по времени."""
+    parts: list = [{"match_all": {}}] if query.strip() in ("all", "*") else [json.loads(query)]
+    for f in filters or ():
         k, _, v = f.partition("=")
-        filters.append({"match_phrase": {k: v}})
-    if args.time_from or args.time_to:
+        parts.append({"match_phrase": {k: v}})
+    if time_from or time_to:
         rng = {}
-        if args.time_from:
-            rng["gte"] = args.time_from
-        if args.time_to:
-            rng["lte"] = args.time_to
-        filters.append({"range": {args.time_field: {**rng, "format": "strict_date_optional_time"}}})
-    body: dict = {"query": {"bool": {"filter": filters}} if len(filters) > 1 else q,
+        if time_from:
+            rng["gte"] = time_from
+        if time_to:
+            rng["lte"] = time_to
+        parts.append({"range": {time_field: {**rng, "format": "strict_date_optional_time"}}})
+    return parts
+
+
+def _build_body(index: str, query: str, args) -> dict:
+    fs = opensearch_filters(query, args.filter, args.time_from, args.time_to, args.time_field)
+    body: dict = {"query": {"bool": {"filter": fs}} if len(fs) > 1 else fs[0],
                   "size": args.size, "version": True}
     if args.sort:
         order = "desc" if args.sort.startswith("-") else "asc"
@@ -231,8 +245,33 @@ def main() -> None:
     spc = sub.add_parser("count")
     common(spc)
 
+    spg = sub.add_parser("agg", help="terms-разбиения (.keyword сам) + date_histogram")
+    common(spg)
+    spg.add_argument("--group", action="append", default=[], metavar="FIELD",
+                     help="terms-уровень, повторяемый; уровни вложенно")
+    spg.add_argument("--hist", metavar="FIELD", help="date_histogram по полю даты (timestamp)")
+    spg.add_argument("--interval", default="1h", help="calendar_interval, напр. 1h/1d")
+    spg.add_argument("--top", type=int, default=20, help="бакетов на уровень")
+    spg.add_argument("--raw", action="store_true", help="сырой rawResponse вместо строк")
+
     args = ap.parse_args()
     env = opensearch_env(args.env_file)
+    if args.cmd == "agg":
+        if not (args.group or args.hist):
+            ap.error("нужен хотя бы один --group или --hist")
+        # импорт здесь: opensearch_agg зовёт этот модуль, наверху было бы кольцо
+        from opensearch_.opensearch_agg import opensearch_agg_run
+        out = opensearch_agg_run(args.index, groups=args.group, hist=args.hist,
+                                 interval=args.interval, query=args.query, filters=args.filter,
+                                 time_from=args.time_from, time_to=args.time_to,
+                                 time_field=args.time_field, top=args.top, env=env,
+                                 raw=args.raw)
+        if args.raw:
+            print(json.dumps(out))
+        else:
+            for count, path in out:
+                print("\t".join([str(count)] + [str(x) for x in path]))
+        return
     if args.cmd == "count":
         print(opensearch_count(args.index, args.query, env, filter=args.filter,
                                time_field=args.time_field, time_from=args.time_from,
