@@ -7,12 +7,15 @@ CircleCI API v2: пайплайны, workflow, джобы — без ручно�
 
 ## Карта API (проверено на живом проекте, 2026-11)
 
-* **Логи API не отдаёт вообще.** У v2 нет эндпоинтов вывода/артефактов (видно
-  в `openapi.json`), v1 (`/api/v1/project/…/{номер}.log`) для org-ов эпохи
-  GitHub-приложения — 404. Не ищи: причину пойми косвенно — длительностью
-  джобы (`circleci_blame`) и статус-чеками коммита (`commit_.commit_status`).
-  Прямой путь к логу один: `Rerun Job with SSH` руками человека на упавшей
-  джобе, дальше `ssh -p <порт> <uuid>@ssh.circleci.com`.
+* **Логи — через карточку v1.1, не через v2.** У v2 нет эндпоинтов вывода
+  (`openapi.json` молчит), и это ввёл в заблуждение: казалось, логов нет вовсе.
+  Но `/api/v1.1/project/{slug}/{номер}` отвечает на **тот же CCIPAT-токен**
+  (заголовок `Circle-Token`), а в карточке у каждого шага есть
+  `actions[0].output_url` — presigned-адрес потока консоли (`…/api/private/
+  output/presigned/…`), его тело — JSON-массив чанков `{"message": …}`.
+  Это и есть полный лог джобы: `circleci_api_job_log`. Раньше верили, что
+  путь к логу один — `Rerun Job with SSH` руками человека; теперь это только
+  для интерактивной отладки.
 * **workflow спрашивает по uuid пайплайна, не по номеру**: `/pipeline/687/...`
   отвечает «Invalid pipeline ID» — и это выглядит как сломанный эндпоинт, а
   это номер вместо uuid.
@@ -28,6 +31,7 @@ CircleCI API v2: пайплайны, workflow, джобы — без ручно�
 * `circleci_api_workflows` — workflow пайплайна (по uuid).
 * `circleci_api_jobs` — джобы workflow с номерами, статусами и uuid.
 * `circleci_api_job` — детали одной джобы (времена; логов нет — см. карту).
+* `circleci_api_job_log` — полный лог джобы: карточка v1.1 → output_url шага.
 * `circleci_api_latest_jobs` — вся цепочка до джоб последнего пайплайна ветки.
 
 CLI:
@@ -35,6 +39,7 @@ CLI:
     python -m circleci_.circleci_api pipelines --slug gh/org/repo --branch dev
     python -m circleci_.circleci_api jobs --slug gh/org/repo --branch dev
     python -m circleci_.circleci_api jobs --workflow <uuid-workflow>
+    python -m circleci_.circleci_api job-log --job 3957 --tail 40
 
 ⚠ `slug` — это `gh/<org>/<repo>` (или git-remote из текущего каталога, если
 каталог — клон того же проекта).
@@ -42,11 +47,13 @@ CLI:
 import argparse
 import json
 import os
+import re
 import subprocess
 import urllib.parse
 import urllib.request
 
 BASE = 'https://circleci.com/api/v2'
+BASE_V1 = 'https://circleci.com/api/v1.1/project'
 
 
 def circleci_api_token() -> str:
@@ -84,20 +91,22 @@ def circleci_api_slug(repo_dir: str = '.') -> str:
 
 
 def circleci_api_get(path: str, params: dict | None = None,
-                     token: str | None = None, timeout: float = 15) -> dict:
-    """GET к v2 API; возвращает разобранный JSON.
+                     token: str | None = None, timeout: float = 15,
+                     base: str = BASE):
+    """GET к API (v2 по умолчанию); возвращает разобранный JSON.
 
     Args:
         path: путь после версии, напр. `project/gh/org/repo/pipeline`.
         params: query-параметры, пустые отбрасываются.
         token: перебивает `circleci_api_token`.
+        base: префикс версии; `BASE_V1` для карточек v1.1.
 
     Raises:
         RuntimeError: HTTP-ошибка — текст ответа в сообщении.
     """
     tok = token or circleci_api_token()
     query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v not in (None, '')})
-    url = f'{BASE}/{path}' + (f'?{query}' if query else '')
+    url = f'{base}/{path}' + (f'?{query}' if query else '')
     req = urllib.request.Request(url, headers={'Circle-Token': tok})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -144,6 +153,58 @@ def circleci_api_job(job_id: str) -> dict:
     return circleci_api_get(f'jobs/{job_id}')
 
 
+def circleci_api_job_log(slug: str, job_number: int, step: str = '',
+                         all_steps: bool = False) -> str:
+    """Полный консольный лог джобы, очищенный от ANSI-кодов и `\\r`.
+
+    Путь: карточка v1.1 (`project/{slug}/{номер}`) → шаги → `output_url`
+    экшенов → JSON-чанки `{"message": ...}`. По умолчанию берётся упавший шаг
+    (exit_code != 0) или, если он не опознан, шаги с логом целиком; `step` —
+    подстрока имени шага, `all_steps` — собрать всё.
+
+    Raises:
+        RuntimeError: карточка или поток шага недоступны.
+    """
+    card = circleci_api_get(f'{slug}/{job_number}', base=BASE_V1, timeout=30)
+    steps = card.get('steps', [])
+    chosen = []
+    for s_ in steps:
+        if step and step not in (s_.get('name') or ''):
+            continue
+        acts = s_.get('actions') or []
+        # без указания шага берём только упавший; пустой exit_code — шаг ещё
+        # не отчитался, это не провал
+        if all_steps or step or any(a.get('exit_code') for a in acts):
+            chosen.append((s_, acts))
+    if not chosen and not step:
+        chosen = [(s_, s_.get('actions') or []) for s_ in steps]
+    parts = []
+    for s_, acts in chosen:
+        name = s_.get('name') or ''
+        for a in acts:
+            url = a.get('output_url')
+            if not url:
+                continue
+            req = urllib.request.Request(url, headers={'Circle-Token': circleci_api_token()})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = resp.read().decode('utf-8', 'replace')
+            try:
+                chunks = json.loads(body)
+                body = ''.join(c.get('message', '') for c in chunks)
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            parts.append(f'===== шаг: {name} =====\n' + _clean(body))
+    if not parts:
+        raise RuntimeError(f'шаг {step!r} без лога в джобе {job_number}')
+    return '\n'.join(parts)
+
+
+def _clean(text: str) -> str:
+    """Консольный поток к читаемому: ANSI, `\\r` как в `docker compose`."""
+    text = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', text)
+    return text.replace('\r\n', '\n').replace('\r', '')
+
+
 def circleci_api_latest_jobs(slug: str, branch: str) -> dict:
     """Джобы последнего пайплайна ветки разом — вся цепочка одним вызовом.
 
@@ -174,15 +235,26 @@ def circleci_api_latest_jobs(slug: str, branch: str) -> dict:
 
 def _cli(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[1])
-    ap.add_argument('cmd', choices=['pipelines', 'workflows', 'jobs'])
+    ap.add_argument('cmd', choices=['pipelines', 'workflows', 'jobs', 'job-log'])
     ap.add_argument('--slug', default='', help='gh/org/repo; пусто — из git-remote каталога')
     ap.add_argument('--branch', default='')
     ap.add_argument('--pipeline', default='', help='uuid пайплайна (не номер)')
     ap.add_argument('--workflow', default='', help='uuid workflow')
     ap.add_argument('--limit', type=int, default=10)
+    ap.add_argument('--job', type=int, default=0, help='номер джобы для job-log')
+    ap.add_argument('--step', default='', help='подстрока имени шага')
+    ap.add_argument('--tail', type=int, default=0, help='последние N строк лога')
     a = ap.parse_args(argv)
     slug = a.slug or circleci_api_slug()
 
+    if a.cmd == 'job-log':
+        if not a.job:
+            raise SystemExit('--job <номер> обязателен')
+        log = circleci_api_job_log(slug, a.job, step=a.step, all_steps=a.step == '')
+        if a.tail:
+            log = '\n'.join(log.splitlines()[-a.tail:])
+        print(log)
+        return
     if a.cmd == 'pipelines':
         for p in circleci_api_pipelines(slug, branch=a.branch,
                                         page_size=a.limit)['items']:
