@@ -121,14 +121,16 @@ def circleci_release_wait(slug: str, tag: str, timeout: int = 1800,
         last = circleci_api_latest_jobs(slug, branch=tag)
         if last:
             statuses = [w['status'] for w in last['workflows'].values()]
+            # `last` первым, `state` после: у latest_jobs свой 'state' пайплайна
+            # ('created'/'executing'), он не должен затирать вычисленный исход
             if any(s in _FAILED for s in statuses) or last['state'] in _FAILED:
-                return {'state': 'failed', **last}
+                return {**last, 'state': 'failed'}
             if all(s == 'success' for s in statuses):
-                return {'state': 'success', **last}
+                return {**last, 'state': 'success'}
             if 'on_hold' in statuses and until == 'hold':
-                return {'state': 'hold', **last}
+                return {**last, 'state': 'hold'}
         time.sleep(interval)
-    return {'state': 'timeout', **last}
+    return {**last, 'state': 'timeout'}
 
 
 def _ls_remote(repo_dir: str) -> dict:
