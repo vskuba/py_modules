@@ -150,7 +150,9 @@ def _gh(root: str, *argv: str) -> str:
 
 
 def _git(root: str, *argv: str) -> str:
-    return _retry(['git', *argv], cwd=root)
+    # git оканчивает вывод переводом строки; без rstrip имя ветки уходило в
+    # push с новой строкой внутри refspec — fatal: invalid refspec
+    return _retry(['git', *argv], cwd=root).rstrip('\n')
 
 
 def _retry(argv: list, cwd: str, attempts: int = _RETRY) -> str:
