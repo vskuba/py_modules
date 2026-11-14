@@ -15,6 +15,7 @@ RabbitMQ-инфраструктура проекта: management-API :15672 бе
 """
 import base64
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,12 +33,16 @@ RABBITMQ_MGMT_USER_AGENT = 'python-urllib (dsh tool)'  # «User-Agent вида p
 def rabbitmq_mgmt_request(method: str, host: str = 'rabbitmq', path: str = 'overview',
                           user: str = RABBITMQ_MGMT_AUTH[0], password: str = RABBITMQ_MGMT_AUTH[1],
                           port: int = RABBITMQ_MGMT_PORT, timeout: int = RABBITMQ_MGMT_TIMEOUT,
-                          body: dict = None) -> tuple:
+                          body: dict = None, scheme: str = 'http') -> tuple:
     """HTTP-запрос management-API :15672 (basic-auth `guest/guest`, stdlib urllib).
 
     «Vhost payment_gateway/payment_gateway_test, yml rabbitmq/payment_gateway_vhost.yml,
     `vhost:mapping:create -Hrabbitmq -uguest -pguest`» — креды дефолтными гостями,
     vhost в URL кодируется (`/` → `%2F`).
+
+    ⚠ Облачные консоли (prod/stage/dev) — это `scheme='https'`, порт 443 и свой
+    набор кредов на каждую среду; сертификат внутренний, системным store не
+    проверяется — для https проверка TLS отключена (диагностика, не секреты).
 
     Args:
         method: 'GET' | 'PUT' | 'DELETE' | 'POST'.
@@ -47,11 +52,12 @@ def rabbitmq_mgmt_request(method: str, host: str = 'rabbitmq', path: str = 'over
         port: порт management-API; 15672 — дефолт.
         timeout: таймаут коннекта, сек.
         body: тело JSON; None — без тела.
+        scheme: 'http' (docker-брокер) | 'https' (облачные консоли).
 
     Returns:
         (parsed, None) — parsed dict|list|str; либо (None, 'текст ошибки с телом').
     """
-    url = f'http://{host}:{port}/api/{path.lstrip("/")}'
+    url = f'{scheme}://{host}:{port}/api/{path.lstrip("/")}'
     auth = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
     headers = {'Authorization': f'Basic {auth}', 'User-Agent': RABBITMQ_MGMT_USER_AGENT,
                'Accept': 'application/json'}
@@ -60,8 +66,9 @@ def rabbitmq_mgmt_request(method: str, host: str = 'rabbitmq', path: str = 'over
         data = json.dumps(body, ensure_ascii=False).encode('utf-8')
         headers['Content-Type'] = 'application/json;charset=utf-8'
     request = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
+    context = ssl._create_unverified_context() if scheme.startswith('https') else None
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             payload = response.read().decode('utf-8', 'ignore')
     except urllib.error.HTTPError as err:
         return None, f'{method.upper()} {url} -> HTTP {err.code}: ' \
@@ -78,7 +85,8 @@ def rabbitmq_mgmt_request(method: str, host: str = 'rabbitmq', path: str = 'over
 
 def rabbitmq_mgmt_get(host: str = 'rabbitmq', path: str = 'overview',
                       user: str = RABBITMQ_MGMT_AUTH[0], password: str = RABBITMQ_MGMT_AUTH[1],
-                      port: int = RABBITMQ_MGMT_PORT, timeout: int = RABBITMQ_MGMT_TIMEOUT) -> tuple:
+                      port: int = RABBITMQ_MGMT_PORT, timeout: int = RABBITMQ_MGMT_TIMEOUT,
+                      scheme: str = 'http') -> tuple:
     """GET management-API :15672 для диагностики очередей (обёртка rabbitmq_mgmt_request).
 
     Args:
@@ -87,11 +95,13 @@ def rabbitmq_mgmt_get(host: str = 'rabbitmq', path: str = 'overview',
         user, password: креды.
         port: порт management-API.
         timeout: таймаут коннекта, сек.
+        scheme: 'http' | 'https' (см. rabbitmq_mgmt_request).
 
     Returns:
         (parsed, None) либо (None, 'текст ошибки').
     """
-    return rabbitmq_mgmt_request('GET', host, path, user, password, port, timeout)
+    return rabbitmq_mgmt_request('GET', host, path, user, password, port, timeout,
+                                scheme=scheme)
 
 
 def rabbitmq_queue_publish(host: str = 'rabbitmq', vhost: str = '', routing_key: str = '',

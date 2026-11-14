@@ -1,0 +1,16 @@
+card-bin|Call to undefined method
+card-bin|Can not persist or load data
+cashier-aggregate-psp|Check of transaction status
+cashier-aggregate-psp|Undefined array key
+cashier-aggregate-psp|Deprecated:
+cashier-aggregate-psp|RequestException
+cashier-aggregate-psp|CONNECT tunnel
+cashier_admin_api_gateway|nil pointer dereference
+cashier-api-gateway|NotFoundHttpException
+cashier-api-gateway|No routes found
+cashier-api-gateway|InvalidKeyProvided
+cashier-deposit|Jaeger tracing error
+cashier-aggregate-psp|Payment transaction compatible exception
+cashier-aggregate-psp|page not found
+cashier-apm-service|page not found
+cashier-aggregate-psp|ValidationException
