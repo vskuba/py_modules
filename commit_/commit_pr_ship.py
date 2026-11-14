@@ -129,8 +129,13 @@ def _pr_ensure(root: str, head: str, base: str, title: str, body: str) -> int:
         # гонка/прошлое создание: PR уже есть — берём его номер
         if 'already exists' not in str(exc):
             raise
-    got = _gh(root, 'pr', 'view', '--head', head, '--base', base, '--json', 'number')
-    return json.loads(got)['number']
+    # `gh pr view` не умеет --head — номер берём тем же list, но без state
+    got = _gh(root, 'pr', 'list', '--head', head, '--base', base,
+              '--state', 'all', '--json', 'number')
+    items = json.loads(got)
+    if not items:
+        raise RuntimeError(f'PR {head}→{base} не виден после create')
+    return items[0]['number']
 
 
 def _pr_merged(root: str, pr: int, timeout: int = 60) -> str:
