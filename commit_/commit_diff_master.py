@@ -48,7 +48,7 @@ def commit_diff_master(branch: str = '', base: str = '', root: str = '.') -> dic
         root: каталог репозитория.
 
     Returns:
-        {'branch', 'base', 'merge_base', 'ahead', 'behind',
+        {'branch', 'base', 'merge_base', 'head', 'ahead', 'behind', 'link',
          'commits': [{'sha', 'subject'}],
          'files': [{'path', 'added', 'removed', 'binary', 'submodule'}],
          'totals': {'files', 'added', 'removed'},
@@ -108,12 +108,39 @@ def commit_diff_master(branch: str = '', base: str = '', root: str = '.') -> dic
                       'paths': sub})
 
     return {'branch': branch, 'base': base, 'merge_base': merge_base[:7],
-            'ahead': int(counts[1]), 'behind': int(counts[0]),
+            'head': head[:7], 'ahead': int(counts[1]), 'behind': int(counts[0]),
+            'link': commit_diff_master_link(merge_base[:7], head[:7], root),
             'commits': commits, 'files': files,
             'totals': {'files': len(files),
                        'added': sum(f['added'] for f in files),
                        'removed': sum(f['removed'] for f in files)},
             'flags': flags}
+
+
+def commit_diff_master_link(merge_base: str, head: str,
+                            root: str = '.') -> str:
+    """Ссылка на сравнение в web-интерфейсе: тот же diff, но глазами человека.
+
+    ⚠ Пара обязательна: base и head должны быть **на сервере** — до push
+    незапушенного head там нет и GitHub ответит 404. Для ещё не отправленного
+    срез годен только локальный `--diff`; ссылка становится живой вместе
+    с push.
+    """
+    url = _git('remote', 'get-url', 'origin', root).strip()
+    if url.startswith('git@'):
+        host, _, path = url.partition(':')
+        url = 'https://' + host[4:].removesuffix('.git') + '/' + path
+    url = url.removesuffix('.git')
+    found = re.match(r'https?://([^/]+)/(.+)', url)
+    if not found:
+        return ''
+    host, repo = found.groups()
+    # GitLab-подобные несут compare под `/-/`, GitHub — прямо.
+    # Ссылка — по коротким sha: имя базы с косой чертой (`origin/master`)
+    # в path GitHub читает двусмысленно, номера коммитов — всегда верно.
+    tail = f"{merge_base}...{head}"
+    return f"https://{host}/{repo}{'' if 'github' in host else '/-'}" \
+           f"/compare/{tail}"
 
 
 def commit_diff_master_report(view: dict, patch: bool = False,
@@ -122,6 +149,8 @@ def commit_diff_master_report(view: dict, patch: bool = False,
     lines = [f"`{view['branch']}` против `{view['base']}` "
              f"(база {view['merge_base']}): впереди {view['ahead']}, "
              f"позади {view['behind']}"]
+    if view.get('link'):
+        lines.append('смотреть глазами: ' + view['link'])
     if view['behind']:
         lines.append('⚠ база ушла вперёд — обнови ветку, иначе сверяешь не то')
 
