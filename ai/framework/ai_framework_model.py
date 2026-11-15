@@ -48,6 +48,12 @@ class AiFrameworkModel:
     tokens_output: int | None = None
     thinking_enable: bool = False
 
+    # GBNF-грамматика ответа этого вызова ('' — без ограничения). Просьбу кладёт
+    # вызывающий — например, workflow-шаг с чипсами ответов, — собирая её через
+    # `ai_gbnf_enum_grammar`. Применяет только тот провайдер, который грамматику
+    # понимает (gx10); остальные поле игнорируют — ответ свободный, как было.
+    gbnf_grammar: str = ''
+
     # params for operation using
     metadata: dict = field(default_factory=dict)
 

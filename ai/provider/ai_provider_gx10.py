@@ -17,6 +17,11 @@ GX10 — локальная модель на llama.cpp.
 Поэтому смотрим на `thinking` — просьбу шага с учётом запрета, — а не на один
 только запрет, как у соседей.
 
+**Грамматика ответа (GBNF).** llama.cpp понимает поле `grammar` в теле запроса —
+в pydantic-ai поля такого нет, оно едет в `extra_body`. С грамматикой дополнительно
+гасится thinking: reasoning-блок в грамматику не влезает, и с размышлениями модель
+возвращает пустой `content` (замер на ноде).
+
 Практический повод: с включёнными размышлениями эта модель тратит на внутренний
 монолог весь бюджет ответа и возвращает пустой `content`. По той же причине
 `enable_thinking: false` зашит в `~/.claude/bin/gx10`.
@@ -44,12 +49,20 @@ class AiProviderGx10(AiProvider):
             http_client=self.http_client,
         )
 
+        extra_body: dict = {'chat_template_kwargs': {'enable_thinking': framework_model.thinking}}
+
+        if framework_model.gbnf_grammar:
+            # Грамматика и размышления в одном ответе не живут: thinking-блок в
+            # грамматику не влезает, и с включёнными размышлениями модель возвращает
+            # пустой `content` (замер на ноде). Куда идёт грамматика, там thinking
+            # гасится — независимо от просьбы шага.
+            extra_body['chat_template_kwargs']['enable_thinking'] = False
+            extra_body['grammar'] = framework_model.gbnf_grammar
+
         return OpenAIChatModel(
             model_name,
             provider=provider,
-            settings=ModelSettings(extra_body={
-                'chat_template_kwargs': {'enable_thinking': framework_model.thinking},
-            }),
+            settings=ModelSettings(extra_body=extra_body),
         )
 
     def raw_endpoint(self, model_name: str) -> tuple[str, str]:
