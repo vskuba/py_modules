@@ -185,6 +185,24 @@ print('готово:', DST)
 '''
 
 
+def comfyui_trainer_wrap(container: str, cmd: str, stdin: bool = False) -> str:
+    """Команда для фермы: внутри контейнера или прямо на хосте.
+
+    ⚠ Пустой `container` значит «инструмент стоит НА ХОСТЕ». Так бывает:
+    ai-toolkit это отдельный `run.py` со своим venv, ComfyUI ему не нужен, и
+    заводить контейнер только ради него незачем. Прежде пустое имя давало
+    `docker exec -i  bash -s` — docker ругался на пустой аргумент, и отказ
+    выглядел как «ферма недоступна».
+
+    `stdin=True` — команде скармливают скрипт через поток (`bash -s`), и для
+    контейнера нужен флаг `-i`, иначе docker закроет ввод.
+    """
+    name = str(container or '').strip()
+    if not name:
+        return cmd
+    return f'docker exec {"-i " if stdin else ""}{name} {cmd}'
+
+
 def comfyui_trainer_base(src, dst, *, farm_ssh, farm_container,
                         python='/opt/ComfyUI/tools/aitk/bin/python',
                         repo=COMFYUI_TRAINER_BASE_REPO):
@@ -199,9 +217,12 @@ def comfyui_trainer_base(src, dst, *, farm_ssh, farm_container,
     script = (COMFYUI_TRAINER_BASE_SCRIPT
               .replace('__SRC__', src).replace('__DST__', str(dst))
               .replace('__REPO__', repo))
-    r = subprocess.run(['ssh', *str(farm_ssh).split(), f'docker exec -i {farm_container} '
-                        f'bash -c "cat > /tmp/comfyui_trainer_base.py"'],
-                       input=script.encode(), check=True, capture_output=True)
+    r = subprocess.run(
+        ['ssh', *str(farm_ssh).split(),
+         comfyui_trainer_wrap(farm_container,
+                              'bash -c "cat > /tmp/comfyui_trainer_base.py"',
+                              stdin=True)],
+        input=script.encode(), check=True, capture_output=True)
 
     def _run(cmd):
         return subprocess.run(cmd, capture_output=True, text=True,

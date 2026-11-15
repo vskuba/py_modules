@@ -88,11 +88,11 @@ def commit_diff_master(branch: str = '', base: str = '', root: str = '.') -> dic
         # Формат raw — `:режим режим sha sha<TAB>статус<TAB>путь`: табы и
         # делят строку, путь последний, статус предпоследний.
         parts = line.split('\t')
-        head, path = parts[0], parts[-1]
+        modes, path = parts[0], parts[-1]
         added, removed = numbers.get(path, ('0', '0'))
         files.append({'path': path,
                       'binary': added == '-' or removed == '-',
-                      'submodule': '160000' in head,
+                      'submodule': '160000' in modes,
                       'added': int(added) if added != '-' else 0,
                       'removed': int(removed) if removed != '-' else 0})
 

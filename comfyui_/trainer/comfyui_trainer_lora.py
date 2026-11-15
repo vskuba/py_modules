@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import yaml
+from comfyui_.trainer.comfyui_trainer_base import comfyui_trainer_wrap
 
 
 COMFYUI_TRAINER_TIMEOUT = 36000.0  # 4000 шагов на запечатках — часы, не минуты
@@ -75,8 +76,10 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
     }
     yml = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)
     remote_cfg = f'{toolkit}/config/{name}.yaml'
-    subprocess.run([*_ssh(farm_ssh), f'docker exec -i {farm_container} '
-                    f'bash -c "cat > {remote_cfg}"'],
+    subprocess.run([*_ssh(farm_ssh),
+                    comfyui_trainer_wrap(farm_container,
+                                         f'bash -c "cat > {remote_cfg}"',
+                                         stdin=True)],
                    input=yml.encode(), check=True, capture_output=True,
                    timeout=COMFYUI_TRAINER_SSH_TIMEOUT)
     # единая память GB10: не влезает с запасом — отказ, не отправляя
@@ -127,7 +130,7 @@ def _ssh(host):
 
 
 def _sh(host, container, sh):
-    return subprocess.run([*_ssh(host), f'docker exec {container} sh -c "{sh}"'],
+    return subprocess.run([*_ssh(host), comfyui_trainer_wrap(container, f'sh -c "{sh}"')],
                           capture_output=True, text=True, check=True,
                           errors='replace',
                           timeout=COMFYUI_TRAINER_SSH_TIMEOUT).stdout
@@ -149,7 +152,7 @@ def _pull(host, container, remote, out, name):
     """
     p = f'{out}/{name}.safetensors'
     with open(p, 'wb') as f:
-        got = subprocess.run([*_ssh(host), f'docker exec {container} cat {remote}'],
+        got = subprocess.run([*_ssh(host), comfyui_trainer_wrap(container, f'cat {remote}')],
                              check=True, stderr=subprocess.PIPE, stdout=f,
                              timeout=COMFYUI_TRAINER_SSH_TIMEOUT)
     if not Path(p).stat().st_size:
