@@ -37,7 +37,8 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
                          toolkit='/opt/ComfyUI/tools/ai-toolkit',
                          python='/opt/ComfyUI/tools/aitk/bin/python',
                          output_dir='/opt/ComfyUI/output/train', timeout=None,
-                         buckets=(512, 768, 1024), quantize=True, checkpointing=True):
+                         buckets=(512, 768, 1024), quantize=True, checkpointing=True,
+                         on_step=None):
     """Один прогон обучения лоры; возвращает путь в проекте.
 
     name — имя лоры (папка/файл у трейнера и файл в --out), dataset — папка
@@ -53,6 +54,11 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
     распаковывает веса. checkpointing — пересчёт активаций на обратном проходе
     вместо хранения: меньше памяти ценой ~трети лишнего счёта. Оба — обмен
     скорости на память; на GB10 со 120 ГБ единой памяти без них можно обойтись.
+
+    on_step — `on_step(dict)` каждым кругом опроса, когда в логе трейнера есть
+    строка прогресса: `{'step', 'total', 'passed', 'left'}` (секунды — как их
+    пишет сам трейнер). ⚠ Отсчёт трейнера, а не вызывающего: тот мог
+    перезапуститься и подключиться к идущему обучению — и считал бы с нуля.
     """
     if not buckets:
         raise ValueError('buckets пуст: учить не на чем')
@@ -129,12 +135,20 @@ def comfyui_trainer_lora(name, dataset, *, base, vae, rank, alpha,
             found = _sh(farm_ssh, farm_container,
                         f'ls {output_dir}/{name}/*.safetensors 2>/dev/null; '
                         f"pgrep -f '[r]un.py config/{name}.yaml' >/dev/null "
-                        f'&& echo жив || echo нет')
+                        f'&& echo жив || echo нет; '
+                        f"tail -c 2000 /tmp/{name}.log 2>/dev/null | tr '\\r' '\\n' "
+                        f"| grep -oE '[0-9]+/{steps} [[][^]]*[]]' | tail -1")
         except subprocess.SubprocessError:
             if time.monotonic() > deadline:
                 raise
             time.sleep(30)
             continue
+        got = comfyui_trainer_lora_progress(found)
+        if on_step and got:
+            try:
+                on_step(got)
+            except Exception:  # noqa: BLE001 — показ прогресса не роняет обучение
+                pass
         lines = found.split()
         if any(l.endswith('.safetensors') for l in lines):
             remote = [l for l in lines if l.endswith('.safetensors')][-1]
@@ -170,6 +184,28 @@ def comfyui_trainer_lora_alive(name: str, farm_ssh: str, farm_container: str = '
             if i + 1 < tries:
                 time.sleep(pause)
     raise err
+
+
+def comfyui_trainer_lora_progress(text: str) -> dict | None:
+    """Строка прогресса ai-toolkit (tqdm) → `{'step', 'total', 'passed', 'left'}`.
+
+    `1212/1500 [3:03:00<38:10,  7.95s/it, …]` → шаг 1212 из 1500, прошло
+    10980 с, осталось 2290 с. Нет строки или не разобралась — None.
+    """
+    import re
+    m = re.search(r'(\d+)/(\d+) \[([\d:]+)<([\d:?]+)', text or '')
+    if not m:
+        return None
+
+    def sec(t):
+        if '?' in t:
+            return None
+        n = 0
+        for part in t.split(':'):
+            n = n * 60 + int(part)
+        return n
+    return {'step': int(m.group(1)), 'total': int(m.group(2)),
+            'passed': sec(m.group(3)), 'left': sec(m.group(4))}
 
 
 def _ssh(host):
