@@ -12,7 +12,11 @@
 1. Сценарий `browser_scenario_run`: `goto` на форму, `fill` полей значениями из
    `secrets` (`{{имя}}`, в трассу и журнал не попадают), `click` по кнопке.
 2. Клики после входа (`clicks`) — тем же сценарием, на той же сессии.
-3. Каждая страница: `goto`, пауза, `page.screenshot` в файл.
+3. Каждая страница: `goto`, пауза, клики по странице (`page_clicks` — открыть
+   карточку, раскрыть строку), `page.screenshot` в файл.
+4. Метки (`marks`): селектор → `bounding_box` в браузере → стрелка с подписью
+   поверх PNG (`image_arrows`). Координаты из браузера, не на глаз; у снимка на
+   всю высоту к ним прибавляется прокрутка.
 
 Креды не передаются аргументами: в аргументах — **имена ключей** (`selector=КЛЮЧ`),
 значения читает `config_env` из `.env`/`.env.local` каталога `--root`. Иначе пароль
@@ -36,7 +40,9 @@ CLI:
         --root /path/to/project \\
         --field 'input[name=email]=UI_EMAIL' --field 'input[name=password]=UI_PASSWORD' \\
         --click 'header [role=combobox] >> nth=0' --click 'li[role=option]:text-is("WC1")' \\
-        --page '/wc1/settings/cascading=cascading.png' --out /tmp/shots [--full]
+        --page '/wc1/settings/cascading=cascading.png' --out /tmp/shots [--full] \\
+        --page-click 'payouts.png|tr:has-text("a54422b0")' \\
+        --mark 'cascading.png|tr:has-text("Nuvei")|Nuvei payout in cascading'
 """
 import argparse
 import asyncio
@@ -54,6 +60,7 @@ from browser_.browser_pool import (
 )
 from browser_.browser_scenario import BrowserScenario, BrowserScenarioStep
 from browser_.browser_scenario_run import browser_scenario_run
+from image_.image_arrow import image_arrows
 
 BROWSER_LOGIN_SHOTS_WAIT_MS = 6000
 BROWSER_LOGIN_SHOTS_VIEWPORT = {'width': 1600, 'height': 900}
@@ -63,7 +70,8 @@ async def browser_login_shots(base: str, fields: dict, secrets: dict, pages: lis
                               out_dir: str, login_path: str = '/login',
                               submit: str = 'button[type=submit]', clicks: list | None = None,
                               wait_ms: int = BROWSER_LOGIN_SHOTS_WAIT_MS, full_page: bool = False,
-                              viewport: dict | None = None) -> list:
+                              viewport: dict | None = None, page_clicks: dict | None = None,
+                              marks: dict | None = None) -> list:
     """Войти формой, сделать клики, снять страницы; вернуть пути PNG.
 
     Args:
@@ -72,9 +80,12 @@ async def browser_login_shots(base: str, fields: dict, secrets: dict, pages: lis
         secrets: {имя: значение}; в трассу и журнал сценария не попадают.
         pages: [(путь от base, имя файла PNG)].
         clicks: селекторы, по которым щёлкнуть после входа (переключатель контекста).
+        page_clicks: {имя файла: [селектор]} — клики на странице перед снимком.
+        marks: {имя файла: [(селектор, подпись)]} — стрелки на элементы после снимка.
 
     Raises:
-        RuntimeError: вход или клик не сработал — с номером шага и ошибкой сценария.
+        RuntimeError: вход или клик не сработал — с номером шага и ошибкой сценария;
+            метка не нашла элемент — с именем файла и селектором.
     """
     step = BrowserScenarioStep
     steps = [step(action='goto', url=base + login_path)]
@@ -100,13 +111,38 @@ async def browser_login_shots(base: str, fields: dict, secrets: dict, pages: lis
         for path, name in pages:
             await page.goto(base + path, wait_until='domcontentloaded')
             await page.wait_for_timeout(wait_ms)
+            for sel in (page_clicks or {}).get(name, []):
+                await page.locator(sel).first.click()
+                await page.wait_for_timeout(wait_ms // 2)
+            boxes = await _boxes(page, (marks or {}).get(name, []), name, full_page)
             target = os.path.join(out_dir, name)
             await page.screenshot(path=target, full_page=full_page)
+            if boxes:
+                image_arrows(target, boxes)
             saved.append(target)
     finally:
         await browser_pool_session_close(sid)
         await browser_pool_stop()
     return saved
+
+
+async def _boxes(page, marks: list, name: str, full_page: bool) -> list:
+    """Метки страницы → [{'box': (x, y, w, h), 'label'}] в пикселях будущего снимка."""
+    scroll = await page.evaluate('[window.scrollX, window.scrollY]') if full_page else [0, 0]
+    height = page.viewport_size['height']
+    boxes = []
+    for sel, label in marks:
+        box = await page.locator(sel).first.bounding_box()
+        if not box:
+            raise RuntimeError(f'{name}: метка «{sel}» не нашла видимый элемент')
+        # ⚠ Элемент в DOM, но прокручен за край окна (модалка с прокруткой):
+        # стрелка указала бы в пустоту. Снимок окна такой метки не покажет.
+        if not full_page and (box['y'] + box['height'] < 0 or box['y'] > height):
+            raise RuntimeError(f'{name}: метка «{sel}» вне кадра (y={int(box["y"])}) — '
+                               f'указать видимый элемент или снимать --full')
+        boxes.append({'box': (box['x'] + scroll[0], box['y'] + scroll[1], box['width'], box['height']),
+                      'label': label})
+    return boxes
 
 
 def _cli(argv=None):
@@ -122,6 +158,10 @@ def _cli(argv=None):
     ap.add_argument('--out', required=True, help='каталог для PNG')
     ap.add_argument('--wait-ms', type=int, default=BROWSER_LOGIN_SHOTS_WAIT_MS)
     ap.add_argument('--full', action='store_true', help='страница целиком, с прокруткой')
+    ap.add_argument('--page-click', action='append', default=[], metavar='ФАЙЛ.png|СЕЛЕКТОР',
+                    help='клик на странице перед её снимком (по порядку)')
+    ap.add_argument('--mark', action='append', default=[], metavar='ФАЙЛ.png|СЕЛЕКТОР|ПОДПИСЬ',
+                    help='стрелка с подписью на элемент страницы')
     a = ap.parse_args(argv)
 
     env = {**config_env(a.root), **os.environ}
@@ -133,10 +173,17 @@ def _cli(argv=None):
         name = key.lower()
         fields[sel], secrets[name] = name, env[key]
     pages = [tuple(p.rsplit('=', 1)) for p in a.page]
+    page_clicks, marks = {}, {}
+    for item in a.page_click:
+        name, _, sel = item.partition('|')
+        page_clicks.setdefault(name, []).append(sel)
+    for item in a.mark:
+        name, sel, label = (item.split('|', 2) + ['', ''])[:3]
+        marks.setdefault(name, []).append((sel, label))
     try:
         for path in asyncio.run(browser_login_shots(
                 a.base.rstrip('/'), fields, secrets, pages, a.out, a.login, a.submit,
-                a.click, a.wait_ms, a.full)):
+                a.click, a.wait_ms, a.full, None, page_clicks, marks)):
             print(path)
     except RuntimeError as err:
         sys.exit(f'login-shots: {err}')

@@ -293,8 +293,9 @@ def jira_api_adf_text(node) -> str:
 def jira_api_text_adf(text: str, media: dict | None = None) -> dict:
     """Текст → ADF-документ: абзацы по пустой строке, `- ` — список, ``` — код.
 
-    Строка `!имя!` (имя из `media`) — картинка (`mediaSingle`); `[~accountid:ID|Имя]`
-    внутри строки — упоминание (Jira уведомит человека, как при «@Имя» в браузере).
+    Строка `!имя!` (имя из `media`) — картинка (`mediaSingle`); внутри строки
+    `[~accountid:ID|Имя]` — упоминание (Jira уведомит человека, как при «@Имя» в
+    браузере), `[текст](url)` и голый `https://…` — ссылка, `` `…` `` — код.
     """
     media = media or {}
     content, para, items = [], [], []
@@ -313,7 +314,7 @@ def jira_api_text_adf(text: str, media: dict | None = None) -> dict:
         if items:
             content.append({'type': 'bulletList', 'content': [
                 {'type': 'listItem', 'content': [
-                    {'type': 'paragraph', 'content': [{'type': 'text', 'text': it}]}]}
+                    {'type': 'paragraph', 'content': _jira_inline(it)}]}
                 for it in items]})
             items.clear()
 
@@ -351,12 +352,30 @@ def jira_api_text_adf(text: str, media: dict | None = None) -> dict:
 
 
 def _jira_inline(line: str) -> list:
-    """Строка → ADF-узлы: текст и упоминания `[~accountid:ID|Имя]`."""
+    """Строка → ADF-узлы: текст, упоминания, ссылки и код.
+
+    `[~accountid:ID|Имя]` — упоминание; `[текст](https://…)` и голый `https://…` —
+    ссылка (иначе Jira показывает адрес простым текстом, по нему не кликнуть);
+    `` `…` `` — моноширинный код.
+    """
+    pattern = re.compile(r'\[~accountid:([^|\]]+)\|([^\]]+)\]'
+                         r'|\[([^\]]+)\]\((https?://[^)\s]+)\)'
+                         r'|`([^`]+)`'
+                         r'|(https?://[^\s<>"]+[^\s<>".,;:!?)])')
     nodes, pos = [], 0
-    for m in re.finditer(r'\[~accountid:([^|\]]+)\|([^\]]+)\]', line):
+    for m in pattern.finditer(line):
         if m.start() > pos:
             nodes.append({'type': 'text', 'text': line[pos:m.start()]})
-        nodes.append({'type': 'mention', 'attrs': {'id': m.group(1), 'text': '@' + m.group(2)}})
+        if m.group(1):
+            nodes.append({'type': 'mention', 'attrs': {'id': m.group(1), 'text': '@' + m.group(2)}})
+        elif m.group(3):
+            nodes.append({'type': 'text', 'text': m.group(3),
+                          'marks': [{'type': 'link', 'attrs': {'href': m.group(4)}}]})
+        elif m.group(5):
+            nodes.append({'type': 'text', 'text': m.group(5), 'marks': [{'type': 'code'}]})
+        else:
+            nodes.append({'type': 'text', 'text': m.group(6),
+                          'marks': [{'type': 'link', 'attrs': {'href': m.group(6)}}]})
         pos = m.end()
     if pos < len(line):
         nodes.append({'type': 'text', 'text': line[pos:]})
