@@ -1,0 +1,345 @@
+"""
+Jira Cloud REST v3: задача по ключу, поиск по JQL, комментарий — из терминала.
+
+Родился, чтобы агент читал задачи, номера которых ему дают словами, и отвечал
+в них комментарием, не открывая браузер.
+
+## Доступ (проверено на protonixltd.atlassian.net, 2026-11)
+
+Ключи — в `.env.local` проекта (`JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`),
+читаются `config_env`, в `os.environ` не подмешиваются; переменные окружения
+процесса перебивают файл. Авторизация — basic `email:token`.
+
+* **Токен бывает двух видов, и ошибка у них разная.** Классический (без
+  scopes) работает на `JIRA_URL`. Scoped-токен на `JIRA_URL` отвечает
+  `401 Client must be authenticated` — будто неверный пароль, — а работает
+  только через шлюз `https://api.atlassian.com/ex/jira/{cloudId}`. Там же
+  токен без Jira-scopes даёт `401 Unauthorized; scope does not match`: почта
+  и токен верны, не хватает областей (`read:jira-work`, `write:jira-work`,
+  `read:jira-user`). `jira_api_request` пробует прямой адрес, а на 401 —
+  шлюз; `cloudId` берётся без авторизации из `{JIRA_URL}/_edge/tenant_info`.
+* **Нет задачи и нет прав — один и тот же 404** («Issue does not exist or you
+  do not have permission to see it»). Прежде чем решить «нет прав», проверь
+  ключ: в git-ветках Cashier задачи зовутся `TIER-1635`, а в Jira это
+  `TIER3-1635`. `jira_api_key` переводит сам (`KEY_ALIASES`).
+* **Поиск — `POST /rest/api/3/search/jql`**: старый `/rest/api/3/search`
+  Atlassian выключил (410). Пагинация — `nextPageToken`, не `startAt`; поля
+  надо перечислить явно, иначе вернутся только id.
+* **Описание и комментарии — ADF** (JSON-дерево), не текст. Читаем через
+  `jira_api_adf_text`, пишем через `jira_api_text_adf` (абзацы, списки `- `,
+  блоки ``` ```).
+
+## Что здесь есть
+
+* `jira_api_env` — url/email/token из `.env.local`.
+* `jira_api_key` — ключ из «TIER-1635», ветки `fix/TIER-1635-x`, ссылки.
+* `jira_api_request` — запрос с выбором прямого адреса или шлюза.
+* `jira_api_issue` / `jira_api_issue_text` — задача сырым JSON / читаемым текстом.
+* `jira_api_search` — JQL, свежие сверху.
+* `jira_api_comment` — добавить комментарий (⚠ публикация от имени владельца токена).
+* `jira_api_adf_text` / `jira_api_text_adf` — ADF ↔ текст.
+
+CLI:
+
+    python -m jira_.jira_api issue TIER-1635                 # описание + комментарии
+    python -m jira_.jira_api issue TIER3-1637 --json         # сырой JSON
+    python -m jira_.jira_api search 'assignee = currentUser() AND statusCategory != Done'
+    python -m jira_.jira_api comment TIER3-1637 'Текст'      # или '-' — текст из stdin
+    python -m jira_.jira_api myself                          # проверка доступа
+
+`--root` — каталог проекта с `.env.local` (по умолчанию текущий).
+"""
+import argparse
+import base64
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from config.config import config_env
+
+KEY_ALIASES = {'TIER': 'TIER3'}
+ISSUE_FIELDS = ['summary', 'status', 'assignee', 'reporter', 'priority', 'issuetype',
+                'created', 'updated', 'description', 'comment', 'labels', 'parent']
+_GATEWAY_CACHE: dict = {}
+
+
+def jira_api_env(root: str = '.') -> dict:
+    """Доступ к Jira: `url`, `email`, `token` — окружение процесса, иначе `.env.local`.
+
+    Raises:
+        RuntimeError: каких-то ключей нет.
+    """
+    file_env = config_env(root)
+    env = {k: os.environ.get(f'JIRA_{k.upper()}') or file_env.get(f'JIRA_{k.upper()}', '')
+           for k in ('url', 'email', 'api_token')}
+    missing = [f'JIRA_{k.upper()}' for k, v in env.items() if not v]
+    if missing:
+        raise RuntimeError(f'нет {", ".join(missing)} ни в окружении, ни в {root}/.env.local')
+    return {'url': env['url'].rstrip('/'), 'email': env['email'], 'token': env['api_token']}
+
+
+def jira_api_key(text: str) -> str:
+    """Ключ задачи из строки: `TIER-1635`, `fix/TIER-1635-foo`, ссылки `/browse/…`.
+
+    Префиксы из `KEY_ALIASES` переводятся (`TIER-1635` → `TIER3-1635`).
+
+    Raises:
+        ValueError: ключа в строке нет.
+    """
+    match = re.search(r'\b([A-Z][A-Z0-9]+)-(\d+)\b', text.upper())
+    if not match:
+        raise ValueError(f'в «{text}» нет ключа задачи вида ABC-123')
+    project = KEY_ALIASES.get(match.group(1), match.group(1))
+    return f'{project}-{match.group(2)}'
+
+
+def jira_api_request(method: str, path: str, body: dict | None = None,
+                     params: dict | None = None, env: dict | None = None,
+                     timeout: float = 20):
+    """Запрос к REST Jira; вернёт разобранный JSON (или None на пустой ответ).
+
+    Сначала прямой `JIRA_URL`, на 401 — шлюз `api.atlassian.com` (scoped-токен);
+    удачный вариант запоминается на процесс.
+
+    Args:
+        path: путь от корня, напр. `rest/api/3/myself`.
+
+    Raises:
+        RuntimeError: HTTP-ошибка — код и начало ответа в сообщении.
+    """
+    env = env or jira_api_env()
+    query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v not in (None, '')})
+    tail = path.lstrip('/') + (f'?{query}' if query else '')
+    bases = [_GATEWAY_CACHE[env['url']]] if env['url'] in _GATEWAY_CACHE else [env['url'], None]
+    error = None
+    for base in bases:
+        base = base or _jira_gateway(env['url'])
+        try:
+            result = _jira_http(method, f'{base}/{tail}', body, env, timeout)
+            _GATEWAY_CACHE[env['url']] = base
+            return result
+        except urllib.error.HTTPError as err:
+            error = RuntimeError(f'{err.code} {method} {base}/{tail}: '
+                                 f'{err.read().decode(errors="replace")[:300]}')
+            if err.code != 401:
+                break
+    raise error
+
+
+def jira_api_issue(key: str, env: dict | None = None) -> dict:
+    """Задача сырым JSON с полями `ISSUE_FIELDS` (ключ пропускается через `jira_api_key`)."""
+    return jira_api_request('GET', f'rest/api/3/issue/{jira_api_key(key)}',
+                            params={'fields': ','.join(ISSUE_FIELDS)}, env=env)
+
+
+def jira_api_issue_text(issue: dict, base_url: str = '') -> str:
+    """Задача читаемым текстом: шапка, описание, комментарии по времени."""
+    f = issue.get('fields', {})
+    name = lambda user: (user or {}).get('displayName', '—')
+    lines = [
+        f"{issue['key']}  [{(f.get('issuetype') or {}).get('name', '')}]  {f.get('summary', '')}",
+        f"статус: {(f.get('status') or {}).get('name', '')} · исполнитель: {name(f.get('assignee'))}"
+        f" · автор: {name(f.get('reporter'))} · приоритет: {(f.get('priority') or {}).get('name', '')}",
+        f"создана {f.get('created', '')[:16]} · обновлена {f.get('updated', '')[:16]}",
+    ]
+    if f.get('parent'):
+        lines.append(f"родитель: {f['parent']['key']} {f['parent']['fields'].get('summary', '')}")
+    if f.get('labels'):
+        lines.append('метки: ' + ', '.join(f['labels']))
+    if base_url:
+        lines.append(f"{base_url}/browse/{issue['key']}")
+    lines += ['', '## Описание', jira_api_adf_text(f.get('description')) or '—']
+    comments = (f.get('comment') or {}).get('comments', [])
+    lines += ['', f'## Комментарии ({len(comments)})']
+    for c in comments:
+        lines += ['', f"— {name(c.get('author'))}, {c.get('created', '')[:16]}:",
+                  jira_api_adf_text(c.get('body'))]
+    return '\n'.join(lines)
+
+
+def jira_api_search(jql: str, fields: list | None = None, limit: int = 50,
+                    env: dict | None = None) -> list:
+    """Задачи по JQL (до `limit`), листает `nextPageToken` сам."""
+    issues, token = [], None
+    while len(issues) < limit:
+        body = {'jql': jql, 'maxResults': min(100, limit - len(issues)),
+                'fields': fields or ['summary', 'status', 'assignee', 'updated']}
+        if token:
+            body['nextPageToken'] = token
+        page = jira_api_request('POST', 'rest/api/3/search/jql', body=body, env=env)
+        issues += page.get('issues', [])
+        token = page.get('nextPageToken')
+        if not token or page.get('isLast'):
+            break
+    return issues
+
+
+def jira_api_comment(key: str, text: str, env: dict | None = None) -> dict:
+    """Добавить комментарий к задаче; вернёт созданный комментарий (`id`, `self`).
+
+    ⚠ Публикация от имени владельца токена — звать только по прямой просьбе.
+    """
+    return jira_api_request('POST', f'rest/api/3/issue/{jira_api_key(key)}/comment',
+                            body={'body': jira_api_text_adf(text)}, env=env)
+
+
+def jira_api_adf_text(node) -> str:
+    """ADF (описание, комментарий) → простой текст; None → ''."""
+    if not node:
+        return ''
+    if isinstance(node, str):
+        return node
+    return _jira_adf_walk(node).strip()
+
+
+def jira_api_text_adf(text: str) -> dict:
+    """Текст → ADF-документ: абзацы по пустой строке, `- ` — список, ``` — код."""
+    content, para, items = [], [], []
+    lines = text.splitlines()
+    i = 0
+
+    def flush():
+        if para:
+            inline = []
+            for n, line in enumerate(para):
+                if n:
+                    inline.append({'type': 'hardBreak'})
+                inline.append({'type': 'text', 'text': line})
+            content.append({'type': 'paragraph', 'content': inline})
+            para.clear()
+        if items:
+            content.append({'type': 'bulletList', 'content': [
+                {'type': 'listItem', 'content': [
+                    {'type': 'paragraph', 'content': [{'type': 'text', 'text': it}]}]}
+                for it in items]})
+            items.clear()
+
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('```'):
+            flush()
+            lang, code = line[3:].strip(), []
+            i += 1
+            while i < len(lines) and not lines[i].startswith('```'):
+                code.append(lines[i])
+                i += 1
+            block = {'type': 'codeBlock', 'content': [{'type': 'text', 'text': '\n'.join(code) or ' '}]}
+            if lang:
+                block['attrs'] = {'language': lang}
+            content.append(block)
+        elif re.match(r'^\s*[-*] ', line):
+            if para:
+                flush()
+            items.append(re.sub(r'^\s*[-*] ', '', line))
+        elif not line.strip():
+            flush()
+        else:
+            if items:
+                flush()
+            para.append(line)
+        i += 1
+    flush()
+    return {'type': 'doc', 'version': 1, 'content': content}
+
+
+def _jira_http(method, url, body, env, timeout):
+    auth = base64.b64encode(f"{env['email']}:{env['token']}".encode()).decode()
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        'Authorization': f'Basic {auth}', 'Accept': 'application/json',
+        **({'Content-Type': 'application/json'} if data else {})})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return json.loads(raw) if raw else None
+
+
+def _jira_gateway(url):
+    with urllib.request.urlopen(f'{url}/_edge/tenant_info', timeout=10) as resp:
+        cloud_id = json.loads(resp.read())['cloudId']
+    return f'https://api.atlassian.com/ex/jira/{cloud_id}'
+
+
+def _jira_adf_walk(node) -> str:
+    kind, attrs = node.get('type'), node.get('attrs') or {}
+    if kind == 'text':
+        text = node.get('text', '')
+        for mark in node.get('marks', []):
+            if mark.get('type') == 'link' and mark.get('attrs', {}).get('href') not in (None, text):
+                text = f"{text} ({mark['attrs']['href']})"
+            elif mark.get('type') == 'code':
+                text = f'`{text}`'
+        return text
+    if kind == 'hardBreak':
+        return '\n'
+    if kind == 'mention':
+        return attrs.get('text', '@?')
+    if kind in ('inlineCard', 'blockCard', 'embedCard'):
+        return attrs.get('url', '')
+    if kind == 'emoji':
+        return attrs.get('text') or attrs.get('shortName', '')
+    if kind in ('media', 'mediaSingle', 'mediaGroup') and not node.get('content'):
+        return '[вложение]'
+    inner = ''.join(_jira_adf_walk(c) for c in node.get('content', []))
+    if kind == 'mediaSingle' or kind == 'mediaGroup':
+        return '[вложение]\n'
+    if kind == 'codeBlock':
+        return f"```{attrs.get('language', '')}\n{inner}\n```\n\n"
+    if kind == 'heading':
+        return '#' * attrs.get('level', 2) + ' ' + inner + '\n\n'
+    if kind == 'listItem':
+        return '- ' + inner.strip().replace('\n', '\n  ') + '\n'
+    if kind in ('bulletList', 'orderedList'):
+        return inner + '\n'
+    if kind == 'tableRow':
+        return '| ' + ' | '.join(_jira_adf_walk(c).strip() for c in node.get('content', [])) + ' |\n'
+    if kind in ('paragraph', 'blockquote', 'panel', 'table', 'rule'):
+        return (inner if kind != 'rule' else '---') + ('\n' if kind == 'table' else '\n\n')
+    return inner
+
+
+def _jira_main():
+    parser = argparse.ArgumentParser(description='Jira Cloud: задача, поиск, комментарий.')
+    parser.add_argument('--root', default='.', help='каталог проекта с .env.local')
+    sub = parser.add_subparsers(dest='cmd', required=True)
+    p_issue = sub.add_parser('issue', help='задача по ключу')
+    p_issue.add_argument('key')
+    p_issue.add_argument('--json', action='store_true', help='сырой JSON')
+    p_search = sub.add_parser('search', help='задачи по JQL')
+    p_search.add_argument('jql')
+    p_search.add_argument('--limit', type=int, default=50)
+    p_comment = sub.add_parser('comment', help='добавить комментарий (публикация!)')
+    p_comment.add_argument('key')
+    p_comment.add_argument('text', help="текст или '-' — из stdin")
+    sub.add_parser('myself', help='проверка доступа')
+    args = parser.parse_args()
+
+    env = jira_api_env(args.root)
+    try:
+        if args.cmd == 'issue':
+            issue = jira_api_issue(args.key, env)
+            print(json.dumps(issue, ensure_ascii=False, indent=2) if args.json
+                  else jira_api_issue_text(issue, env['url']))
+        elif args.cmd == 'search':
+            for it in jira_api_search(args.jql, limit=args.limit, env=env):
+                f = it['fields']
+                print(f"{it['key']}\t{(f.get('status') or {}).get('name', '')}\t"
+                      f"{(f.get('assignee') or {}).get('displayName', '—')}\t{f.get('summary', '')}")
+        elif args.cmd == 'comment':
+            text = sys.stdin.read() if args.text == '-' else args.text
+            key = jira_api_key(args.key)
+            made = jira_api_comment(key, text, env)
+            print(f"комментарий {made['id']}: {env['url']}/browse/{key}"
+                  f"?focusedCommentId={made['id']}")
+        elif args.cmd == 'myself':
+            me = jira_api_request('GET', 'rest/api/3/myself', env=env)
+            print(f"{me['displayName']} · {me['emailAddress']} · {me['accountId']}")
+    except RuntimeError as err:
+        sys.exit(f'jira: {err}')
+
+
+if __name__ == '__main__':
+    _jira_main()
