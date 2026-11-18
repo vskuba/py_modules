@@ -38,6 +38,8 @@ Jira Cloud REST v3: задача по ключу, поиск по JQL, комм�
 * `jira_api_issue` / `jira_api_issue_text` — задача сырым JSON / читаемым текстом.
 * `jira_api_search` — JQL, свежие сверху.
 * `jira_api_comment` — добавить комментарий (⚠ публикация от имени владельца токена).
+* `jira_api_attach` — приложить файлы к задаче (⚠ тоже публикация).
+* `jira_api_media_id` — media-uuid вложения для картинки в комментарии (только из 303 `Location`).
 * `jira_api_adf_text` / `jira_api_text_adf` — ADF ↔ текст.
 
 CLI:
@@ -46,6 +48,7 @@ CLI:
     python -m jira_.jira_api issue TIER3-1637 --json         # сырой JSON
     python -m jira_.jira_api search 'assignee = currentUser() AND statusCategory != Done'
     python -m jira_.jira_api comment TIER3-1637 'Текст'      # или '-' — текст из stdin
+    python -m jira_.jira_api comment TIER3-1637 - --attach a.png b.png   # `!a.png!` в тексте — картинка
     python -m jira_.jira_api myself                          # проверка доступа
 
 `--root` — каталог проекта с `.env.local` (по умолчанию текущий).
@@ -104,7 +107,8 @@ def jira_api_key(text: str, aliases: dict | None = None) -> str:
 
 def jira_api_request(method: str, path: str, body: dict | None = None,
                      params: dict | None = None, env: dict | None = None,
-                     timeout: float = 20, product: str = 'jira'):
+                     timeout: float = 20, product: str = 'jira',
+                     raw: bytes | None = None, headers: dict | None = None):
     """Запрос к REST Jira; вернёт разобранный JSON (или None на пустой ответ).
 
     Сначала прямой `JIRA_URL`, на 401 — шлюз `api.atlassian.com` (scoped-токен);
@@ -114,6 +118,7 @@ def jira_api_request(method: str, path: str, body: dict | None = None,
         path: путь от корня, напр. `rest/api/3/myself` (Confluence — `wiki/api/v2/...`).
         product: `jira` или `confluence` — у шлюза разные префиксы
             (`/ex/jira/{cloudId}`, `/ex/confluence/{cloudId}`); сайт и токен общие.
+        raw, headers: готовое тело (напр. multipart) и свои заголовки вместо JSON `body`.
 
     Raises:
         RuntimeError: HTTP-ошибка — код и начало ответа в сообщении.
@@ -127,7 +132,7 @@ def jira_api_request(method: str, path: str, body: dict | None = None,
     for base in bases:
         base = base or _jira_gateway(env['url'], product)
         try:
-            result = _jira_http(method, f'{base}/{tail}', body, env, timeout)
+            result = _jira_http(method, f'{base}/{tail}', body, env, timeout, raw, headers)
             _GATEWAY_CACHE[cache_key] = base
             return result
         except urllib.error.HTTPError as err:
@@ -187,14 +192,71 @@ def jira_api_search(jql: str, fields: list | None = None, limit: int = 50,
     return issues
 
 
-def jira_api_comment(key: str, text: str, env: dict | None = None) -> dict:
+def jira_api_comment(key: str, text: str, env: dict | None = None,
+                     media: dict | None = None) -> dict:
     """Добавить комментарий к задаче; вернёт созданный комментарий (`id`, `self`).
+
+    `media` — {имя файла: media-uuid} для строк `!имя!` в тексте (см. `jira_api_text_adf`);
+    собирается `jira_api_attach` + `jira_api_media_id`, CLI делает это сам (`--attach`).
 
     ⚠ Публикация от имени владельца токена — звать только по прямой просьбе.
     """
     env = env or jira_api_env()
     return jira_api_request('POST', f"rest/api/3/issue/{jira_api_key(key, env['aliases'])}/comment",
-                            body={'body': jira_api_text_adf(text)}, env=env)
+                            body={'body': jira_api_text_adf(text, media)}, env=env)
+
+
+def jira_api_media_id(attachment_id: str, env: dict | None = None) -> str:
+    """UUID файла в Media Services по id вложения — его ждёт ADF-узел `media`.
+
+    В метаданных вложения (`rest/api/3/attachment/{id}`) этого UUID нет. Он есть
+    только в `Location` ответа 303 на `rest/api/3/attachment/content/{id}`
+    (`…api.media.atlassian.com/file/<uuid>/binary…`), поэтому редирект не выполняем.
+    С `?redirect=false` Jira отдаёт сам файл — UUID не узнать.
+    """
+    env = env or jira_api_env()
+    jira_api_request('GET', 'rest/api/3/myself', env=env)  # выбрать прямой адрес или шлюз
+    base = _GATEWAY_CACHE[(env['url'], 'jira')]
+    auth = base64.b64encode(f"{env['email']}:{env['token']}".encode()).decode()
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    req = urllib.request.Request(f'{base}/rest/api/3/attachment/content/{attachment_id}',
+                                 headers={'Authorization': f'Basic {auth}'})
+    try:
+        urllib.request.build_opener(_NoRedirect).open(req, timeout=20)
+    except urllib.error.HTTPError as err:
+        match = re.search(r'/file/([0-9a-f-]{36})/', err.headers.get('Location') or '')
+        if err.code in (301, 302, 303, 307) and match:
+            return match.group(1)
+        raise RuntimeError(f'{err.code} attachment/content/{attachment_id}: нет media-uuid в Location')
+    raise RuntimeError(f'attachment/content/{attachment_id}: ждали 303, пришёл файл')
+
+
+def jira_api_attach(key: str, paths: list, env: dict | None = None) -> list:
+    """Приложить файлы к задаче; вернёт список вложений (`id`, `filename`, `content`).
+
+    ⚠ Публикация: вложение видно всем, кто видит задачу, — звать только по просьбе.
+    Multipart на `rest/api/3/issue/{key}/attachments` с `X-Atlassian-Token: no-check`
+    (без него Jira отвечает 403 XSRF check failed).
+    """
+    env = env or jira_api_env()
+    boundary = 'jira-api-' + base64.b16encode(os.urandom(8)).decode().lower()
+    parts = []
+    for path in paths:
+        name = os.path.basename(path)
+        with open(path, 'rb') as fh:
+            payload = fh.read()
+        mime = 'image/png' if name.lower().endswith('.png') else 'application/octet-stream'
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+                     f'filename="{name}"\r\nContent-Type: {mime}\r\n\r\n'.encode() + payload + b'\r\n')
+    raw = b''.join(parts) + f'--{boundary}--\r\n'.encode()
+    return jira_api_request('POST', f"rest/api/3/issue/{jira_api_key(key, env['aliases'])}/attachments",
+                            env=env, timeout=60, raw=raw, headers={
+                                'Content-Type': f'multipart/form-data; boundary={boundary}',
+                                'X-Atlassian-Token': 'no-check'})
 
 
 def jira_api_adf_text(node) -> str:
@@ -206,8 +268,13 @@ def jira_api_adf_text(node) -> str:
     return _jira_adf_walk(node).strip()
 
 
-def jira_api_text_adf(text: str) -> dict:
-    """Текст → ADF-документ: абзацы по пустой строке, `- ` — список, ``` — код."""
+def jira_api_text_adf(text: str, media: dict | None = None) -> dict:
+    """Текст → ADF-документ: абзацы по пустой строке, `- ` — список, ``` — код.
+
+    Строка `!имя!` (имя из `media`) — картинка (`mediaSingle`); `[~accountid:ID|Имя]`
+    внутри строки — упоминание (Jira уведомит человека, как при «@Имя» в браузере).
+    """
+    media = media or {}
     content, para, items = [], [], []
     lines = text.splitlines()
     i = 0
@@ -218,7 +285,7 @@ def jira_api_text_adf(text: str) -> dict:
             for n, line in enumerate(para):
                 if n:
                     inline.append({'type': 'hardBreak'})
-                inline.append({'type': 'text', 'text': line})
+                inline.extend(_jira_inline(line))
             content.append({'type': 'paragraph', 'content': inline})
             para.clear()
         if items:
@@ -241,6 +308,11 @@ def jira_api_text_adf(text: str) -> dict:
             if lang:
                 block['attrs'] = {'language': lang}
             content.append(block)
+        elif re.fullmatch(r'!(.+)!', line.strip()) and line.strip()[1:-1] in media:
+            flush()
+            content.append({'type': 'mediaSingle', 'attrs': {'layout': 'align-start'}, 'content': [
+                {'type': 'media', 'attrs': {'type': 'file', 'id': media[line.strip()[1:-1]],
+                                            'collection': '', 'alt': line.strip()[1:-1]}}]})
         elif re.match(r'^\s*[-*] ', line):
             if para:
                 flush()
@@ -256,12 +328,26 @@ def jira_api_text_adf(text: str) -> dict:
     return {'type': 'doc', 'version': 1, 'content': content}
 
 
-def _jira_http(method, url, body, env, timeout):
+def _jira_inline(line: str) -> list:
+    """Строка → ADF-узлы: текст и упоминания `[~accountid:ID|Имя]`."""
+    nodes, pos = [], 0
+    for m in re.finditer(r'\[~accountid:([^|\]]+)\|([^\]]+)\]', line):
+        if m.start() > pos:
+            nodes.append({'type': 'text', 'text': line[pos:m.start()]})
+        nodes.append({'type': 'mention', 'attrs': {'id': m.group(1), 'text': '@' + m.group(2)}})
+        pos = m.end()
+    if pos < len(line):
+        nodes.append({'type': 'text', 'text': line[pos:]})
+    return nodes
+
+
+def _jira_http(method, url, body, env, timeout, raw=None, headers=None):
     auth = base64.b64encode(f"{env['email']}:{env['token']}".encode()).decode()
-    data = json.dumps(body).encode() if body is not None else None
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
     req = urllib.request.Request(url, data=data, method=method, headers={
         'Authorization': f'Basic {auth}', 'Accept': 'application/json',
-        **({'Content-Type': 'application/json'} if data else {})})
+        **({'Content-Type': 'application/json'} if data and raw is None else {}),
+        **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
     return json.loads(raw) if raw else None
@@ -324,6 +410,8 @@ def _jira_main():
     p_comment = sub.add_parser('comment', help='добавить комментарий (публикация!)')
     p_comment.add_argument('key')
     p_comment.add_argument('text', help="текст или '-' — из stdin")
+    p_comment.add_argument('--attach', nargs='+', default=[],
+                           help='файлы: приложить к задаче; строка `!имя!` в тексте вставит картинку')
     sub.add_parser('myself', help='проверка доступа')
     args = parser.parse_args()
 
@@ -341,7 +429,9 @@ def _jira_main():
         elif args.cmd == 'comment':
             text = sys.stdin.read() if args.text == '-' else args.text
             key = jira_api_key(args.key, env['aliases'])
-            made = jira_api_comment(key, text, env)
+            media = {a['filename']: jira_api_media_id(a['id'], env)
+                     for a in (jira_api_attach(key, args.attach, env) if args.attach else [])}
+            made = jira_api_comment(key, text, env, media)
             print(f"комментарий {made['id']}: {env['url']}/browse/{key}"
                   f"?focusedCommentId={made['id']}")
         elif args.cmd == 'myself':
