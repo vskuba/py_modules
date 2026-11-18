@@ -128,8 +128,16 @@ async def browser_login_shots(base: str, fields: dict, secrets: dict, pages: lis
 
 async def _boxes(page, marks: list, name: str, full_page: bool) -> list:
     """Метки страницы → [{'box': (x, y, w, h), 'label'}] в пикселях будущего снимка."""
+    if marks:
+        # ⚠ Таблицы SPA прокручиваются внутри своего контейнера, а не окна: снимок
+        # «на всю высоту» их не раскрывает, и строка ниже первого экрана в кадр не
+        # попадает. Прокрутка к первой метке двигает и такой контейнер.
+        # По центру, а не «лишь бы видно»: у края кадра стрелке и подписи некуда встать.
+        await page.locator(marks[0][0]).first.evaluate("e => e.scrollIntoView({block: 'center'})")
+        await page.wait_for_timeout(500)
     scroll = await page.evaluate('[window.scrollX, window.scrollY]') if full_page else [0, 0]
-    height = page.viewport_size['height']
+    height = (await page.evaluate('document.documentElement.scrollHeight') if full_page
+              else page.viewport_size['height'])
     boxes = []
     for sel, label in marks:
         box = await page.locator(sel).first.bounding_box()
@@ -137,9 +145,10 @@ async def _boxes(page, marks: list, name: str, full_page: bool) -> list:
             raise RuntimeError(f'{name}: метка «{sel}» не нашла видимый элемент')
         # ⚠ Элемент в DOM, но прокручен за край окна (модалка с прокруткой):
         # стрелка указала бы в пустоту. Снимок окна такой метки не покажет.
-        if not full_page and (box['y'] + box['height'] < 0 or box['y'] > height):
-            raise RuntimeError(f'{name}: метка «{sel}» вне кадра (y={int(box["y"])}) — '
-                               f'указать видимый элемент или снимать --full')
+        y = box['y'] + scroll[1]
+        if y + box['height'] < 0 or y > height:
+            raise RuntimeError(f'{name}: метка «{sel}» вне кадра (y={int(y)}, кадр {height}) — '
+                               f'элемент в другом прокручиваемом блоке, чем первая метка')
         boxes.append({'box': (box['x'] + scroll[0], box['y'] + scroll[1], box['width'], box['height']),
                       'label': label})
     return boxes
@@ -158,6 +167,10 @@ def _cli(argv=None):
     ap.add_argument('--out', required=True, help='каталог для PNG')
     ap.add_argument('--wait-ms', type=int, default=BROWSER_LOGIN_SHOTS_WAIT_MS)
     ap.add_argument('--full', action='store_true', help='страница целиком, с прокруткой')
+    ap.add_argument('--width', type=int, default=BROWSER_LOGIN_SHOTS_VIEWPORT['width'])
+    ap.add_argument('--height', type=int, default=BROWSER_LOGIN_SHOTS_VIEWPORT['height'],
+                    help='высота окна: таблица во внутреннем контейнере выше окна не раскроется, '
+                         'и последней строке негде оставить место под стрелку')
     ap.add_argument('--page-click', action='append', default=[], metavar='ФАЙЛ.png|СЕЛЕКТОР',
                     help='клик на странице перед её снимком (по порядку)')
     ap.add_argument('--mark', action='append', default=[], metavar='ФАЙЛ.png|СЕЛЕКТОР|ПОДПИСЬ',
@@ -183,7 +196,8 @@ def _cli(argv=None):
     try:
         for path in asyncio.run(browser_login_shots(
                 a.base.rstrip('/'), fields, secrets, pages, a.out, a.login, a.submit,
-                a.click, a.wait_ms, a.full, None, page_clicks, marks)):
+                a.click, a.wait_ms, a.full, {'width': a.width, 'height': a.height},
+                page_clicks, marks)):
             print(path)
     except RuntimeError as err:
         sys.exit(f'login-shots: {err}')
