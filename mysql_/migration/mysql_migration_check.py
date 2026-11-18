@@ -390,10 +390,11 @@ if __name__ == '__main__':
         import subprocess
         import pymysql
         from mysql_.mysql_ import mysql_get_url
+        from mysql_.mysql_host import mysql_host_reachable
         from urllib.parse import unquote
         p = urlparse(mysql_get_url())
         host, port = p.hostname, int(p.port or 3306)
-        if not _reachable(host, port):
+        if not mysql_host_reachable(host, port):
             got = _published_mysql(port)
             if got:
                 host, port = got
@@ -405,14 +406,6 @@ if __name__ == '__main__':
             ids = [r[0] for r in cur.fetchall()]
         conn.close()
         return ids
-
-    def _reachable(host: str, port: int) -> bool:
-        import socket
-        try:
-            with socket.create_connection((host, port), timeout=2):
-                return True
-        except OSError:
-            return False
 
     def _published_mysql(container_port: int):
         import subprocess

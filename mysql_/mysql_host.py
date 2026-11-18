@@ -55,7 +55,7 @@ def mysql_host_address(timeout: float = 2.0, root: str = '') -> tuple:
     host = str(config_setting('MYSQL_HOST', 'mysql', root))
     port = int(config_setting('MYSQL_PORT', '3306', root) or 3306)
 
-    if _reachable(host, port, timeout):
+    if mysql_host_reachable(host, port, timeout):
         return host, port
 
     published = _published_port(host, port, root)
@@ -83,14 +83,16 @@ def mysql_host_container(root: str = '') -> str:
     return found[0] if found else ''
 
 
-# ── детали реализации ──
-
-def _reachable(host: str, port: int, timeout: float) -> bool:
+def mysql_host_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
+    """Отвечает ли TCP-порт: база жива и сеть (VPN, compose) до неё есть."""
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+# ── детали реализации ──
 
 
 def _published_port(service: str, container_port: int, root: str = '') -> int:

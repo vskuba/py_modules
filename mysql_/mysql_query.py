@@ -22,6 +22,16 @@
 учётка берутся из его `.env`, контейнер ищется по его каталогу. Так «заглянуть в
 базу соседа» перестаёт быть `docker exec <сосед> mysql -p…` с паролем в `ps`.
 
+`--profile <имя>` — **удалённая** база, не своя: всё берётся из ключей
+`MYSQL_<ИМЯ>_HOST/PORT/USER/PASSWORD/DATABASE/SSL` (`.env.local`), контейнер не
+ищется. Так заводятся базы окружений (`--profile dev`, `--profile stage`), до
+которых ходят напрямую — часто только из-под VPN. `MYSQL_<ИМЯ>_SSL=1` —
+TLS без проверки сертификата (как «Use SSL: Require» в Workbench). Адрес не
+отвечает — ошибка говорит «VPN?», а не «поднят ли compose».
+⚠ Запись (`--write`) в профиль — это правка общего окружения: только по
+прямой просьбе. `--database` перебивает базу из настроек (на сервере окружения
+базы всех сервисов разом).
+
 `await` — тот же запрос, но вслух до перемены: панель сделала проход, накатились
 миграции, обновился кэш — вопрос «доехало ли» это `SELECT MAX(…)` в цикле. `sleep`
 с одним чтением врёт двояко: короткий сон читает старый снимок и объявляет
@@ -47,7 +57,7 @@ import pymysql
 import pymysql.cursors
 
 from config.config import config_setting
-from mysql_.mysql_host import mysql_host_address
+from mysql_.mysql_host import mysql_host_address, mysql_host_reachable
 from sql_.sql_split import sql_split_statements
 
 # Первое слово читающего запроса. Всё остальное меняет данные или схему и требует `--write`.
@@ -58,7 +68,8 @@ MYSQL_QUERY_READ_ONLY = ('select', 'show', 'describe', 'desc', 'explain', 'with'
 MYSQL_QUERY_CELL_WIDTH = 80
 
 
-def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = '') -> dict:
+def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = '',
+                    profile: str = '', database: str = '') -> dict:
     """
     Выполнить один запрос и вернуть результат.
 
@@ -67,6 +78,8 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = ''
         params: значения подстановок.
         limit: обрезать выдачу до N строк; 0 — вернуть всё.
         root: checkout **соседнего** проекта, к чьей базе идём; пусто — этот.
+        profile: удалённая база из `MYSQL_<PROFILE>_*`; пусто — база проекта.
+        database: перебить имя базы из настроек.
 
     Returns:
         `{'columns': [имена], 'rows': [{колонка: значение}], 'affected': N}`.
@@ -75,13 +88,13 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = ''
     Raises:
         RuntimeError: база недоступна или отвергла запрос.
     """
-    host, port = mysql_host_address(root=root)
+    target = mysql_query_target(root, profile)
+    host, port = target['host'], target['port']
     try:
         connection = pymysql.connect(
-            host=host, port=port,
-            user=config_setting('MYSQL_USER', 'developer', root),
-            password=config_setting('MYSQL_PASSWORD', '', root),
-            database=config_setting('MYSQL_DATABASE', '', root),
+            host=host, port=port, user=target['user'], password=target['password'],
+            database=database or target['database'] or None,
+            ssl={'check_hostname': False} if target['ssl'] else None,
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=True, connect_timeout=10, read_timeout=120,
         )
@@ -101,6 +114,41 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = ''
     if limit:
         rows = rows[:limit]
     return {'columns': columns, 'rows': [_row_json_safe(row) for row in rows], 'affected': affected}
+
+
+def mysql_query_target(root: str = '', profile: str = '') -> dict:
+    """
+    Куда и с какой учёткой идёт подключение: `host`, `port`, `user`, `password`, `database`, `ssl`.
+
+    Без `profile` — база проекта (`MYSQL_*` и поиск контейнера, `mysql_host_address`).
+    С `profile` — ключи `MYSQL_<PROFILE>_*` как есть, без контейнеров; без `root`
+    они читаются из `.env`/`.env.local` текущего каталога.
+
+    Raises:
+        RuntimeError: профиль не заведён или его адрес не отвечает.
+    """
+    if not profile:
+        host, port = mysql_host_address(root=root)
+        return {'host': host, 'port': port,
+                'user': config_setting('MYSQL_USER', 'developer', root),
+                'password': config_setting('MYSQL_PASSWORD', '', root),
+                'database': config_setting('MYSQL_DATABASE', '', root), 'ssl': False}
+
+    # Профиль — удалённая база конкретного проекта: его ключи лежат в `.env.local`
+    # текущего каталога, а не в проекте, к которому подключён py_modules.
+    root = root or '.'
+    prefix = f'MYSQL_{profile.upper()}_'
+    host = config_setting(prefix + 'HOST', '', root)
+    if not host:
+        raise RuntimeError(f'профиль {profile} не заведён: нет {prefix}HOST в .env.local')
+    port = int(config_setting(prefix + 'PORT', '3306', root) or 3306)
+    if not mysql_host_reachable(host, port, 4.0):
+        raise RuntimeError(f'{host}:{port} (профиль {profile}) не отвечает — VPN включён?')
+    return {'host': host, 'port': port,
+            'user': config_setting(prefix + 'USER', '', root),
+            'password': config_setting(prefix + 'PASSWORD', '', root),
+            'database': config_setting(prefix + 'DATABASE', '', root),
+            'ssl': config_setting(prefix + 'SSL', '', root).lower() in ('1', 'true', 'yes', 'require')}
 
 
 def mysql_query_read_only(sql: str) -> bool:
@@ -158,7 +206,8 @@ def mysql_query_format(result: dict, style: str = 'table') -> str:
 
 
 def mysql_query_await(sql: str, after: str = '', timeout: float = 90.0,
-                      interval: float = 2.0, root: str = '') -> dict:
+                      interval: float = 2.0, root: str = '', profile: str = '',
+                      database: str = '') -> dict:
     """
     Дождаться, пока ответ запроса перемениится, — вместо сна и ручного повтора.
 
@@ -168,7 +217,7 @@ def mysql_query_await(sql: str, after: str = '', timeout: float = 90.0,
             пусто — за базовое принимается значение при первом опросе.
         timeout: потолок ожидания, секунды.
         interval: пауза между опросами, секунды.
-        root: checkout соседнего проекта — как в `mysql_query_run`.
+        root, profile, database: куда идём — как в `mysql_query_run`.
 
     Returns:
         `{'ok', 'baseline', 'value', 'rounds'}`; при неудаче `ok=False` и `error`,
@@ -188,7 +237,7 @@ def mysql_query_await(sql: str, after: str = '', timeout: float = 90.0,
     baseline, value, rounds = after, None, 0
     while True:
         rounds += 1
-        result = mysql_query_run(sql, root=root)
+        result = mysql_query_run(sql, root=root, profile=profile, database=database)
         columns, rows = result.get('columns') or [], result.get('rows') or []
         value = str(rows[0][columns[0]]) if rows and columns else None
         if not baseline:
@@ -246,13 +295,17 @@ if __name__ == '__main__':
     parser.add_argument('--limit', type=int, default=0, help='обрезать выдачу до N строк')
     parser.add_argument('--root', default='',
                         help='checkout соседнего проекта: адрес и учётка из его .env')
+    parser.add_argument('--profile', default='',
+                        help='удалённая база из MYSQL_<PROFILE>_* (.env.local), напр. dev, stage')
+    parser.add_argument('--database', default='', help='имя базы вместо заданного в настройках')
     args = parser.parse_args()
+    where = {'root': args.root, 'profile': args.profile, 'database': args.database}
 
     try:
         if args.command == 'address':
-            host, port = mysql_host_address(root=args.root)
-            print(f"{host}:{port}  база={config_setting('MYSQL_DATABASE', '', args.root)} "
-                  f"пользователь={config_setting('MYSQL_USER', '', args.root)}")
+            target = mysql_query_target(args.root, args.profile)
+            print(f"{target['host']}:{target['port']}  база={args.database or target['database']} "
+                  f"пользователь={target['user']}{'  tls' if target['ssl'] else ''}")
             raise SystemExit(0)
 
         if args.command == 'await':
@@ -260,7 +313,7 @@ if __name__ == '__main__':
             if not query.strip():
                 raise SystemExit('ошибка: пустой запрос')
             verdict = mysql_query_await(query, after=args.after, timeout=args.timeout,
-                                        interval=args.interval, root=args.root)
+                                        interval=args.interval, **where)
             print(f"{'доехало' if verdict['ok'] else 'не дождались'}: раундов {verdict['rounds']}, "
                   f"{verdict['seconds']} с, {verdict['baseline']!r} -> {verdict['value']!r}")
             raise SystemExit(0 if verdict['ok'] else 1)
@@ -278,6 +331,6 @@ if __name__ == '__main__':
             if not args.write and not mysql_query_read_only(query):
                 raise SystemExit('ошибка: запрос меняет данные — повтори с --write')
 
-        print(mysql_query_format(mysql_query_run(query, limit=args.limit, root=args.root), args.format))
+        print(mysql_query_format(mysql_query_run(query, limit=args.limit, **where), args.format))
     except RuntimeError as err:
         raise SystemExit(f"ошибка: {err}")

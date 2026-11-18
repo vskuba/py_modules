@@ -119,10 +119,11 @@ echo 'print(1)' | python <общий слой>/project_/project_run.py -
 
 | Функция | Контракт |
 |---------|----------|
-| `mysql_query_run(sql, params=(), limit=0, root='') -> dict` | `{'columns': [...], 'rows': [{колонка: значение}], 'affected': N}`; `root` — соседний checkout |
+| `mysql_query_run(sql, params=(), limit=0, root='', profile='', database='') -> dict` | `{'columns': [...], 'rows': [{колонка: значение}], 'affected': N}`; `root` — соседний checkout, `profile` — удалённая база из `MYSQL_<PROFILE>_*`, `database` — перебить имя базы |
+| `mysql_query_target(root='', profile='') -> dict` | куда пойдёт подключение: `host`, `port`, `user`, `password`, `database`, `ssl` |
 | `mysql_query_read_only(sql) -> bool` | меняет ли запрос данные — по первому слову |
 | `mysql_query_format(result, style='table') -> str` | `table` человеку, `json` коду, `csv` в конвейер |
-| `mysql_query_await(sql, after='', timeout=90, interval=2, root='') -> dict` | ждать перемены ответа вместо сна: `{'ok', 'baseline', 'value', 'rounds', 'seconds'}`; сличается первая клетка первой строки — ставится на скаляр (`MAX(id)`, `MAX(snapshot_at)`) |
+| `mysql_query_await(sql, after='', timeout=90, interval=2, root='', profile='', database='') -> dict` | ждать перемены ответа вместо сна: `{'ok', 'baseline', 'value', 'rounds', 'seconds'}`; сличается первая клетка первой строки — ставится на скаляр (`MAX(id)`, `MAX(snapshot_at)`) |
 
 ```bash
 python <общий слой>/mysql_/mysql_query.py address
@@ -132,7 +133,16 @@ python <общий слой>/mysql_/mysql_query.py sql 'select … limit 10' [--
 python <общий слой>/mysql_/mysql_query.py sql '<запрос, меняющий данные>' --write
 python <общий слой>/mysql_/mysql_query.py tables --root ../<соседний проект>   # чужая база, своих .env/контейнер
 python <общий слой>/mysql_/mysql_query.py await 'select max(id) from t' [--after 41] [--timeout 90]   # дождаться перемены
+python <общий слой>/mysql_/mysql_query.py sql 'show databases' --profile stage                         # удалённая база окружения
+python <общий слой>/mysql_/mysql_query.py tables --profile dev --database <база>
 ```
+
+**Профиль — удалённая база окружения** (dev/stage сервера, куда ходят напрямую, часто
+только из-под VPN). Ключи в `.env.local` текущего каталога: `MYSQL_<ИМЯ>_HOST`, `_PORT`,
+`_USER`, `_PASSWORD`, `_DATABASE` (можно пусто — тогда `--database`), `_SSL=1` — TLS без
+проверки сертификата (Workbench «Use SSL: Require»). Контейнер не ищется; порт не
+отвечает — ошибка «VPN включён?», а не «поднят ли compose». ⚠ `--write` в профиль —
+правка общего окружения.
 
 Учётные данные берутся из настроек проекта и уезжают в драйвер параметрами соединения —
 в командной строке их нет, и в списке процессов они не видны. Запрос, меняющий данные,
