@@ -213,7 +213,19 @@ def _confluence_node(node) -> str:
         return f"[картинка: {att.get('ri:filename', '') if att else ''}]"
     if name in ('ri:attachment',):
         return f"[вложение: {node.get('ri:filename', '')}]"
-    if name in ('ac:parameter', 'ac:placeholder'):
+    if name == 'ac:adf-extension':
+        # ADF-панель: содержимое в ac:adf-content, ac:adf-fallback — его же HTML-дубль
+        kind = node.find('ac:adf-attribute', {'key': 'panel-type'})
+        content = node.find('ac:adf-content')
+        inner = _confluence_children(content).strip() if content else ''
+        return f"\n[{kind.get_text() if kind else 'panel'}] {inner}\n" if inner else ''
+    if name == 'ac:task':
+        body = node.find('ac:task-body')
+        status = node.find('ac:task-status')
+        mark = 'x' if status and status.get_text() == 'complete' else ' '
+        return f"- [{mark}] {_confluence_children(body).strip() if body else ''}\n"
+    if name in ('ac:parameter', 'ac:placeholder', 'ac:adf-attribute', 'ac:adf-fallback',
+                'ac:task-id', 'ac:task-uuid', 'ac:task-status'):
         return ''
     if name == 'br':
         return '\n'
