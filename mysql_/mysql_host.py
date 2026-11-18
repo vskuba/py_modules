@@ -25,10 +25,10 @@ compose, `MYSQL_PORT` — порт внутри сети. С машины раз
 mysql -u… -p…` с тем же паролем в `ps`.
 """
 import re
-import socket
 import subprocess
 
 from config.config import config_setting
+from net_.net_port import net_port_free
 from project_.project_ import project_main_root
 
 # Метка compose с каталогом, из которого проект подняли. По ней контейнер и ищется.
@@ -85,11 +85,7 @@ def mysql_host_container(root: str = '') -> str:
 
 def mysql_host_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
     """Отвечает ли TCP-порт: база жива и сеть (VPN, compose) до неё есть."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+    return not net_port_free(port, host=host, timeout=timeout)
 
 
 # ── детали реализации ──

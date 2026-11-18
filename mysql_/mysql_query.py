@@ -28,6 +28,10 @@
 которых ходят напрямую — часто только из-под VPN. `MYSQL_<ИМЯ>_SSL=1` —
 TLS без проверки сертификата (как «Use SSL: Require» в Workbench). Адрес не
 отвечает — ошибка говорит «VPN?», а не «поднят ли compose».
+`MYSQL_<ИМЯ>_WIREGUARD=<конфиг>` — база за VPN без VPN на всю машину: при
+выключенном системном `wg0` на время запроса поднимается свой туннель
+(`net_wireguard_tcp`, userspace `wireproxy`, без root); `wg0` поднят — идём
+через него (тот же ключ дважды рвал бы обоих).
 ⚠ Запись (`--write`) в профиль — это правка общего окружения: только по
 прямой просьбе. `--database` перебивает базу из настроек (на сервере окружения
 базы всех сервисов разом).
@@ -53,11 +57,14 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import contextlib
+
 import pymysql
 import pymysql.cursors
 
 from config.config import config_setting
 from mysql_.mysql_host import mysql_host_address, mysql_host_reachable
+from net_.net_wireguard import net_wireguard_tcp, net_wireguard_up
 from sql_.sql_split import sql_split_statements
 
 # Первое слово читающего запроса. Всё остальное меняет данные или схему и требует `--write`.
@@ -89,27 +96,27 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = ''
         RuntimeError: база недоступна или отвергла запрос.
     """
     target = mysql_query_target(root, profile)
-    host, port = target['host'], target['port']
-    try:
-        connection = pymysql.connect(
-            host=host, port=port, user=target['user'], password=target['password'],
-            database=database or target['database'] or None,
-            ssl={'check_hostname': False} if target['ssl'] else None,
-            cursorclass=pymysql.cursors.DictCursor,
-            autocommit=True, connect_timeout=10, read_timeout=120,
-        )
-    except pymysql.Error as err:
-        raise RuntimeError(f"База {host}:{port} не пустила: {err}")
+    with mysql_query_route(target) as (host, port):
+        try:
+            connection = pymysql.connect(
+                host=host, port=port, user=target['user'], password=target['password'],
+                database=database or target['database'] or None,
+                ssl={'check_hostname': False} if target['ssl'] else None,
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=True, connect_timeout=10, read_timeout=120,
+            )
+        except pymysql.Error as err:
+            raise RuntimeError(f"База {target['host']}:{target['port']} не пустила: {err}")
 
-    try:
-        with connection.cursor() as cursor:
-            affected = cursor.execute(sql, params or None)
-            rows = list(cursor.fetchall() or ()) if cursor.description else []
-            columns = [item[0] for item in (cursor.description or ())]
-    except pymysql.Error as err:
-        raise RuntimeError(f"Запрос отвергнут: {err}")
-    finally:
-        connection.close()
+        try:
+            with connection.cursor() as cursor:
+                affected = cursor.execute(sql, params or None)
+                rows = list(cursor.fetchall() or ()) if cursor.description else []
+                columns = [item[0] for item in (cursor.description or ())]
+        except pymysql.Error as err:
+            raise RuntimeError(f"Запрос отвергнут: {err}")
+        finally:
+            connection.close()
 
     if limit:
         rows = rows[:limit]
@@ -118,21 +125,23 @@ def mysql_query_run(sql: str, params: tuple = (), limit: int = 0, root: str = ''
 
 def mysql_query_target(root: str = '', profile: str = '') -> dict:
     """
-    Куда и с какой учёткой идёт подключение: `host`, `port`, `user`, `password`, `database`, `ssl`.
+    Куда и с какой учёткой идёт подключение: `host`, `port`, `user`, `password`,
+    `database`, `ssl`, `wireguard` (конфиг туннеля или пусто).
 
     Без `profile` — база проекта (`MYSQL_*` и поиск контейнера, `mysql_host_address`).
     С `profile` — ключи `MYSQL_<PROFILE>_*` как есть, без контейнеров; без `root`
     они читаются из `.env`/`.env.local` текущего каталога.
 
     Raises:
-        RuntimeError: профиль не заведён или его адрес не отвечает.
+        RuntimeError: профиль не заведён.
     """
     if not profile:
         host, port = mysql_host_address(root=root)
         return {'host': host, 'port': port,
                 'user': config_setting('MYSQL_USER', 'developer', root),
                 'password': config_setting('MYSQL_PASSWORD', '', root),
-                'database': config_setting('MYSQL_DATABASE', '', root), 'ssl': False}
+                'database': config_setting('MYSQL_DATABASE', '', root), 'ssl': False,
+                'wireguard': ''}
 
     # Профиль — удалённая база конкретного проекта: его ключи лежат в `.env.local`
     # текущего каталога, а не в проекте, к которому подключён py_modules.
@@ -142,13 +151,38 @@ def mysql_query_target(root: str = '', profile: str = '') -> dict:
     if not host:
         raise RuntimeError(f'профиль {profile} не заведён: нет {prefix}HOST в .env.local')
     port = int(config_setting(prefix + 'PORT', '3306', root) or 3306)
-    if not mysql_host_reachable(host, port, 4.0):
-        raise RuntimeError(f'{host}:{port} (профиль {profile}) не отвечает — VPN включён?')
     return {'host': host, 'port': port,
             'user': config_setting(prefix + 'USER', '', root),
             'password': config_setting(prefix + 'PASSWORD', '', root),
             'database': config_setting(prefix + 'DATABASE', '', root),
-            'ssl': config_setting(prefix + 'SSL', '', root).lower() in ('1', 'true', 'yes', 'require')}
+            'ssl': config_setting(prefix + 'SSL', '', root).lower() in ('1', 'true', 'yes', 'require'),
+            'wireguard': config_setting(prefix + 'WIREGUARD', '', root)}
+
+
+@contextlib.contextmanager
+def mysql_query_route(target: dict):
+    """
+    Адрес, по которому до базы `target` реально дойти, — на время блока.
+
+    Туннель (`target['wireguard']`) поднимается, только если системный `wg0`
+    выключен: при поднятом идём напрямую — тот же ключ дважды рвал бы оба туннеля.
+    Без туннеля адрес проверяется заранее, чтобы ошибка сказала «VPN?», а не
+    «connection timed out» через десять секунд.
+
+    Yields:
+        `(хост, порт)` — исходный или локальный конец туннеля.
+
+    Raises:
+        RuntimeError: туннеля нет, а адрес не отвечает.
+    """
+    host, port = target['host'], target['port']
+    if target.get('wireguard') and not net_wireguard_up():
+        with net_wireguard_tcp(target['wireguard'], host, port) as local:
+            yield local
+        return
+    if not mysql_host_reachable(host, port, 4.0):
+        raise RuntimeError(f'{host}:{port} не отвечает — VPN включён?')
+    yield host, port
 
 
 def mysql_query_read_only(sql: str) -> bool:
@@ -304,8 +338,10 @@ if __name__ == '__main__':
     try:
         if args.command == 'address':
             target = mysql_query_target(args.root, args.profile)
+            route = ('  через wireguard' if target['wireguard'] and not net_wireguard_up()
+                     else '  через wg0' if net_wireguard_up() and args.profile else '')
             print(f"{target['host']}:{target['port']}  база={args.database or target['database']} "
-                  f"пользователь={target['user']}{'  tls' if target['ssl'] else ''}")
+                  f"пользователь={target['user']}{'  tls' if target['ssl'] else ''}{route}")
             raise SystemExit(0)
 
         if args.command == 'await':
