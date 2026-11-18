@@ -21,6 +21,12 @@ CircleCI API v2: пайплайны, workflow, джобы — без ручно�
   это номер вместо uuid.
 * **GraphQL (`circleci.com/graphql`) — тупик**: отвечает без авторизации,
   интроспекции нет, полей пайплайнов/джоб под токеном не найдено. Не трать время.
+* **Токен только на чтение: любой POST даёт `403 Permission denied`.** Проверено
+  2026-11-18 на `workflow/{uuid}/rerun` и на запуске пайплайна
+  `project/{slug}/pipeline` (так же, как Approval `hold-prod`). Если упал не код,
+  а инфраструктура (например, `setup` не скачал пайплайн: `tar: This does not
+  look like a tar archive`), перезапуск делает человек кнопкой «Rerun workflow
+  from failed» в UI. Писать обёртку rerun под этот токен незачем.
 * Цепочка, которая работает: `pipeline?branch=` → (uuid) `pipeline/{uuid}/workflow`
   → (uuid) `workflow/{uuid}/job` → (uuid) `jobs/{uuid}`.
 
