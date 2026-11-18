@@ -21,7 +21,8 @@ Jira Cloud REST v3: задача по ключу, поиск по JQL, комм�
 * **Нет задачи и нет прав — один и тот же 404** («Issue does not exist or you
   do not have permission to see it»). Прежде чем решить «нет прав», проверь
   ключ: в git-ветках Cashier задачи зовутся `TIER-1635`, а в Jira это
-  `TIER3-1635`. `jira_api_key` переводит сам (`KEY_ALIASES`).
+  `TIER3-1635`. `jira_api_key` переводит по `JIRA_KEY_ALIASES` из env
+  (`TIER:TIER3,ABC:ABC2` — знание проекта, в слое его нет).
 * **Поиск — `POST /rest/api/3/search/jql`**: старый `/rest/api/3/search`
   Atlassian выключил (410). Пагинация — `nextPageToken`, не `startAt`; поля
   надо перечислить явно, иначе вернутся только id.
@@ -31,7 +32,7 @@ Jira Cloud REST v3: задача по ключу, поиск по JQL, комм�
 
 ## Что здесь есть
 
-* `jira_api_env` — url/email/token из `.env.local`.
+* `jira_api_env` — url/email/token и псевдонимы ключей из `.env.local`.
 * `jira_api_key` — ключ из «TIER-1635», ветки `fix/TIER-1635-x`, ссылки.
 * `jira_api_request` — запрос с выбором прямого адреса или шлюза.
 * `jira_api_issue` / `jira_api_issue_text` — задача сырым JSON / читаемым текстом.
@@ -61,14 +62,15 @@ import urllib.request
 
 from config.config import config_env
 
-KEY_ALIASES = {'TIER': 'TIER3'}
 ISSUE_FIELDS = ['summary', 'status', 'assignee', 'reporter', 'priority', 'issuetype',
                 'created', 'updated', 'description', 'comment', 'labels', 'parent']
 _GATEWAY_CACHE: dict = {}
 
 
 def jira_api_env(root: str = '.') -> dict:
-    """Доступ к Jira: `url`, `email`, `token` — окружение процесса, иначе `.env.local`.
+    """Доступ к Jira: `url`, `email`, `token`, `aliases` — окружение процесса, иначе `.env.local`.
+
+    `aliases` — из `JIRA_KEY_ALIASES` (`TIER:TIER3,…`), пустой словарь, если не задано.
 
     Raises:
         RuntimeError: каких-то ключей нет.
@@ -79,13 +81,16 @@ def jira_api_env(root: str = '.') -> dict:
     missing = [f'JIRA_{k.upper()}' for k, v in env.items() if not v]
     if missing:
         raise RuntimeError(f'нет {", ".join(missing)} ни в окружении, ни в {root}/.env.local')
-    return {'url': env['url'].rstrip('/'), 'email': env['email'], 'token': env['api_token']}
+    raw_aliases = os.environ.get('JIRA_KEY_ALIASES') or file_env.get('JIRA_KEY_ALIASES', '')
+    aliases = dict(pair.split(':', 1) for pair in raw_aliases.replace(' ', '').split(',') if ':' in pair)
+    return {'url': env['url'].rstrip('/'), 'email': env['email'], 'token': env['api_token'],
+            'aliases': aliases}
 
 
-def jira_api_key(text: str) -> str:
+def jira_api_key(text: str, aliases: dict | None = None) -> str:
     """Ключ задачи из строки: `TIER-1635`, `fix/TIER-1635-foo`, ссылки `/browse/…`.
 
-    Префиксы из `KEY_ALIASES` переводятся (`TIER-1635` → `TIER3-1635`).
+    Префиксы из `aliases` переводятся (`{'TIER': 'TIER3'}`: `TIER-1635` → `TIER3-1635`).
 
     Raises:
         ValueError: ключа в строке нет.
@@ -93,20 +98,22 @@ def jira_api_key(text: str) -> str:
     match = re.search(r'\b([A-Z][A-Z0-9]+)-(\d+)\b', text.upper())
     if not match:
         raise ValueError(f'в «{text}» нет ключа задачи вида ABC-123')
-    project = KEY_ALIASES.get(match.group(1), match.group(1))
+    project = (aliases or {}).get(match.group(1), match.group(1))
     return f'{project}-{match.group(2)}'
 
 
 def jira_api_request(method: str, path: str, body: dict | None = None,
                      params: dict | None = None, env: dict | None = None,
-                     timeout: float = 20):
+                     timeout: float = 20, product: str = 'jira'):
     """Запрос к REST Jira; вернёт разобранный JSON (или None на пустой ответ).
 
     Сначала прямой `JIRA_URL`, на 401 — шлюз `api.atlassian.com` (scoped-токен);
     удачный вариант запоминается на процесс.
 
     Args:
-        path: путь от корня, напр. `rest/api/3/myself`.
+        path: путь от корня, напр. `rest/api/3/myself` (Confluence — `wiki/api/v2/...`).
+        product: `jira` или `confluence` — у шлюза разные префиксы
+            (`/ex/jira/{cloudId}`, `/ex/confluence/{cloudId}`); сайт и токен общие.
 
     Raises:
         RuntimeError: HTTP-ошибка — код и начало ответа в сообщении.
@@ -114,13 +121,14 @@ def jira_api_request(method: str, path: str, body: dict | None = None,
     env = env or jira_api_env()
     query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v not in (None, '')})
     tail = path.lstrip('/') + (f'?{query}' if query else '')
-    bases = [_GATEWAY_CACHE[env['url']]] if env['url'] in _GATEWAY_CACHE else [env['url'], None]
+    cache_key = (env['url'], product)
+    bases = [_GATEWAY_CACHE[cache_key]] if cache_key in _GATEWAY_CACHE else [env['url'], None]
     error = None
     for base in bases:
-        base = base or _jira_gateway(env['url'])
+        base = base or _jira_gateway(env['url'], product)
         try:
             result = _jira_http(method, f'{base}/{tail}', body, env, timeout)
-            _GATEWAY_CACHE[env['url']] = base
+            _GATEWAY_CACHE[cache_key] = base
             return result
         except urllib.error.HTTPError as err:
             error = RuntimeError(f'{err.code} {method} {base}/{tail}: '
@@ -132,7 +140,8 @@ def jira_api_request(method: str, path: str, body: dict | None = None,
 
 def jira_api_issue(key: str, env: dict | None = None) -> dict:
     """Задача сырым JSON с полями `ISSUE_FIELDS` (ключ пропускается через `jira_api_key`)."""
-    return jira_api_request('GET', f'rest/api/3/issue/{jira_api_key(key)}',
+    env = env or jira_api_env()
+    return jira_api_request('GET', f"rest/api/3/issue/{jira_api_key(key, env['aliases'])}",
                             params={'fields': ','.join(ISSUE_FIELDS)}, env=env)
 
 
@@ -183,7 +192,8 @@ def jira_api_comment(key: str, text: str, env: dict | None = None) -> dict:
 
     ⚠ Публикация от имени владельца токена — звать только по прямой просьбе.
     """
-    return jira_api_request('POST', f'rest/api/3/issue/{jira_api_key(key)}/comment',
+    env = env or jira_api_env()
+    return jira_api_request('POST', f"rest/api/3/issue/{jira_api_key(key, env['aliases'])}/comment",
                             body={'body': jira_api_text_adf(text)}, env=env)
 
 
@@ -257,10 +267,10 @@ def _jira_http(method, url, body, env, timeout):
     return json.loads(raw) if raw else None
 
 
-def _jira_gateway(url):
+def _jira_gateway(url, product='jira'):
     with urllib.request.urlopen(f'{url}/_edge/tenant_info', timeout=10) as resp:
         cloud_id = json.loads(resp.read())['cloudId']
-    return f'https://api.atlassian.com/ex/jira/{cloud_id}'
+    return f'https://api.atlassian.com/ex/{product}/{cloud_id}'
 
 
 def _jira_adf_walk(node) -> str:
@@ -330,7 +340,7 @@ def _jira_main():
                       f"{(f.get('assignee') or {}).get('displayName', '—')}\t{f.get('summary', '')}")
         elif args.cmd == 'comment':
             text = sys.stdin.read() if args.text == '-' else args.text
-            key = jira_api_key(args.key)
+            key = jira_api_key(args.key, env['aliases'])
             made = jira_api_comment(key, text, env)
             print(f"комментарий {made['id']}: {env['url']}/browse/{key}"
                   f"?focusedCommentId={made['id']}")
