@@ -15,7 +15,7 @@ import pathlib
 import re
 import time
 
-from browser_.browser_scenario import (BROWSER_SCENARIO_PACE_MAX_MS,
+from browser_.scenario.browser_scenario import (BROWSER_SCENARIO_PACE_MAX_MS,
                                        BROWSER_SCENARIO_PACE_MIN_MS,
                                        BrowserScenario,
                                        browser_scenario_variables_used)

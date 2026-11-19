@@ -29,7 +29,7 @@ import asyncio
 
 from logging_.logging_ import logger_info
 
-from browser_.browser_scenario import (BROWSER_SCENARIO_NET_BODY_LIMIT,
+from browser_.scenario.browser_scenario import (BROWSER_SCENARIO_NET_BODY_LIMIT,
                                        BROWSER_SCENARIO_NET_BODY_TYPES,
                                        BROWSER_SCENARIO_NET_HEADERS,
                                        BROWSER_SCENARIO_NET_LIMIT)

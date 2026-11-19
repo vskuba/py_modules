@@ -11,7 +11,7 @@
 списка — это запись, поля ищутся **внутри неё**.
 """
 
-from browser_.browser_scenario import (BROWSER_SCENARIO_ATTR_VALUE,
+from browser_.scenario.browser_scenario import (BROWSER_SCENARIO_ATTR_VALUE,
                                        BROWSER_SCENARIO_ROWS_LIMIT)
 
 # Сколько ждать чтения одного поля внутри уже найденной строки. Секунды хватает с

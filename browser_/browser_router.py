@@ -14,7 +14,7 @@ from fastapi import APIRouter
 from browser_.browser_api import router as browser_api_router
 from browser_.browser_api_page import router as browser_api_page_router
 from browser_.browser_record import router as browser_record_router
-from browser_.browser_scenario_run import router as browser_scenario_run_router
+from browser_.scenario.browser_scenario_run import router as browser_scenario_run_router
 from browser_.browser_snapshot import router as browser_snapshot_router
 from browser_.browser_view import router as browser_view_router
 from browser_.browser_ws import router as browser_ws_router

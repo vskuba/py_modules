@@ -20,8 +20,8 @@ import asyncio
 import json
 import sys
 
-from browser_.browser_scenario import BROWSER_SCENARIO_ACTIONS
-from browser_.browser_scenario_store import browser_scenario_get, browser_scenario_save
+from browser_.scenario.browser_scenario import BROWSER_SCENARIO_ACTIONS
+from browser_.scenario.browser_scenario_store import browser_scenario_get, browser_scenario_save
 
 # Поля, которые вообще бывают у шага (`BrowserScenarioStep`). Обязательность
 # по конкретному действию проверяет схема при сохранении, а не здесь: тот же

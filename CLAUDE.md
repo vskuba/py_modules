@@ -64,7 +64,7 @@ namespace-папок, которые проекты импортируют на�
 | `web_/web_grab.py` | `docs/web_grab.md` — пачка ссылок в честные файлы: тип по голове, UA, JSON-API в ссылки; ⚠ страница вместо файла — отказ, не `.jpg` с `<html>` |
 | `js_/js_check.py` | `docs/js_check.md` — цел ли JS как браузерный ESM-модуль: парсинг node, адрес поломки, граф импортов; ⚠ `node --check` по `.js` молчит там, где браузер умер бы |
 | `browser_/browser_pool.py`, `browser_api*`, `browser_view*`, `browser_record`, `browser_inspect`, `browser_selector` | `docs/browser_control.md` — сессии-контексты, рестарт сервиса убивает страницы, скрипты в страницу, селекторы |
-| `browser_/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
+| `browser_/scenario/browser_scenario*.py` | `docs/browser_scenario.md` — действия, ожидание по признаку, секреты, сбор данных, трасса |
 | `browser_/browser_read.py`, `browser_capture`, `browser_watch`, `browser_console`, `browser_cookie`, `browser_file`, `browser_wait` | `docs/browser_page.md` — вопросы к живой странице; **и `docs/web_shot.md`**: разовый кадр или зонд страницы уже умеет `web_` |
 | `cloudflare_/cloudflare.py` | `docs/cloudflare.md` — виджет Turnstile: найти сквозь тень, нажать мышью, провал объяснить сетью; ⚠ токен появляется и до прохождения |
 | `font_/font_.py` | `docs/font_tooling.md` — паспорт, покрытие, нормировка по upem |

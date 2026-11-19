@@ -22,13 +22,13 @@ from browser_.browser_console import (browser_console_rows, browser_console_star
                                       browser_console_stop)
 from browser_.browser_file import browser_file_download, browser_file_upload
 from browser_.browser_read import browser_read_page
-from browser_.browser_scenario import (BROWSER_SCENARIO_ATTR_MARK,
+from browser_.scenario.browser_scenario import (BROWSER_SCENARIO_ATTR_MARK,
                                        BROWSER_SCENARIO_FIELDS_DEPTH,
                                        BrowserScenarioStep,
                                        browser_scenario_render)
-from browser_.browser_scenario_net import (browser_scenario_net_dump,
+from browser_.scenario.browser_scenario_net import (browser_scenario_net_dump,
                                            browser_scenario_net_start)
-from browser_.browser_scenario_rows import browser_scenario_rows_collect
+from browser_.scenario.browser_scenario_rows import browser_scenario_rows_collect
 from browser_.browser_wait import (BROWSER_WAIT_QUIET_MS, browser_wait_dom_stable,
                                    browser_wait_text)
 

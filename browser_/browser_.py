@@ -43,8 +43,8 @@ from browser_.browser_pool import (browser_pool_session_close, browser_pool_sess
                                    browser_pool_session_open, browser_pool_start,
                                    browser_pool_stop)
 from browser_.browser_read import browser_read_page  # noqa: E402
-from browser_.browser_scenario import BrowserScenario  # noqa: E402
-from browser_.browser_scenario_run import browser_scenario_run  # noqa: E402
+from browser_.scenario.browser_scenario import BrowserScenario  # noqa: E402
+from browser_.scenario.browser_scenario_run import browser_scenario_run  # noqa: E402
 from browser_.browser_snapshot import browser_snapshot_take  # noqa: E402
 
 # Сколько ждём загрузки страницы. Больше, чем у контейнера: команду зовут руками,

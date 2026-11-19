@@ -58,8 +58,8 @@ from browser_.browser_pool import (
     browser_pool_start,
     browser_pool_stop,
 )
-from browser_.browser_scenario import BrowserScenario, BrowserScenarioStep
-from browser_.browser_scenario_run import browser_scenario_run
+from browser_.scenario.browser_scenario import BrowserScenario, BrowserScenarioStep
+from browser_.scenario.browser_scenario_run import browser_scenario_run
 from image_.image_arrow import image_arrows
 
 BROWSER_LOGIN_SHOTS_WAIT_MS = 6000

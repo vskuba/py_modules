@@ -18,7 +18,7 @@ import asyncio
 import json
 import urllib.parse
 
-from browser_.browser_scenario_store import browser_scenario_runs
+from browser_.scenario.browser_scenario_store import browser_scenario_runs
 
 
 async def browser_scenario_trace(run_id: int = 0, scenario_id: int = 0) -> dict:

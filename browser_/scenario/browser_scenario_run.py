@@ -26,17 +26,17 @@ from browser_.browser_pool import (
     browser_pool_session_get,
     browser_pool_session_open,
 )
-from browser_.browser_scenario import (
+from browser_.scenario.browser_scenario import (
     BrowserScenario,
     BrowserScenarioStep,
     browser_scenario_step_target,
     browser_scenario_variables_missing,
 )
-from browser_.browser_scenario_mask import (browser_scenario_mask,
+from browser_.scenario.browser_scenario_mask import (browser_scenario_mask,
                                             browser_scenario_mask_data)
-from browser_.browser_scenario_net import (browser_scenario_net_new,
+from browser_.scenario.browser_scenario_net import (browser_scenario_net_new,
                                            browser_scenario_net_stop)
-from browser_.browser_scenario_step import browser_scenario_step_apply
+from browser_.scenario.browser_scenario_step import browser_scenario_step_apply
 
 router = APIRouter()
 

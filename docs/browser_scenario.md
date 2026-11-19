@@ -68,7 +68,7 @@
 между ними `wait_ms` случайной длительности.
 
 ```python
-from browser_.browser_scenario import browser_scenario_pace
+from browser_.scenario.browser_scenario import browser_scenario_pace
 
 steps = browser_scenario_pace(steps, 400, 1800)   # умолчания слоя
 ```
@@ -301,7 +301,7 @@ JSON**, из-за чего его собственный скрипт ответ
 гасит никогда**: сценарий часто крутят на странице, которую человек в этот момент
 смотрит в живом окне.
 
-**Разбор прогона — одной командой**, `python -m browser_.browser_scenario_trace`
+**Разбор прогона — одной командой**, `python -m browser_.scenario.browser_scenario_trace`
 (по номеру или `--scenario` — последний): шаги с исходом, временем и ошибкой,
 собранные значения и — отдельно — что реально уехало на сайт: тела запросов из
 `extract` раскодированы из urlencoded в `ключ = значение`, телефон виден

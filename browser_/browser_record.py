@@ -28,7 +28,7 @@ from logging_.logging_ import logger_info
 
 from browser_.browser_api import browser_api_auth
 from browser_.browser_pool import browser_pool_pages, browser_pool_session_get
-from browser_.browser_scenario import BROWSER_SCENARIO_STEP_LIMIT
+from browser_.scenario.browser_scenario import BROWSER_SCENARIO_STEP_LIMIT
 from browser_.browser_selector import BROWSER_SELECTOR_ONE_JS
 
 router = APIRouter()
