@@ -14,6 +14,7 @@ BLOB-«data» — JSON-обёртка `{key, value, ms, db, dbf, pk}` (type 2), 
 raw-байтами и `typeof(value)` врет «text», потому value режется regex-ом по
 сырым байтам read-only копии.
 """
+import gzip
 import http.client
 import json
 import os
@@ -21,6 +22,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 from browser_.browser_profile import browser_profile_cookies_db
 from sqllite3.sqllite3_ import sqllite3_connect_readonly, sqllite3_copy_readonly
@@ -269,7 +271,8 @@ def slack_api_call(method: str, token: str = '', params: dict = None,
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler,
                                              urllib.request.HTTPHandler)
         with opener.open(request, timeout=timeout) as response:
-            payload = response.read().decode('utf-8', 'ignore')
+            payload = _slack_decode_body(response.read(),
+                                         response.headers.get('Content-Encoding', ''))
     except urllib.error.HTTPError as err:
         try:
             detail = err.read().decode('utf-8', 'ignore')[:240]
@@ -326,6 +329,16 @@ def _slack_scan_blob(tmp_db: str) -> tuple:
         return None, f'read-only копия localStorage не читается ({tmp_db}): {err}'
     finally:
         conn.close()
+
+
+def _slack_decode_body(raw: bytes, encoding: str) -> str:
+    """Тело ответа в текст: заголовки просят gzip/deflate — urllib сам не распаковывает."""
+    encoding = (encoding or '').lower()
+    if encoding == 'gzip' or raw[:2] == b'\x1f\x8b':
+        raw = gzip.decompress(raw)
+    elif encoding == 'deflate':
+        raw = zlib.decompress(raw)
+    return raw.decode('utf-8', 'ignore')
 
 
 def _slack_parse_payload(payload: str, method: str) -> object:

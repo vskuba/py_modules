@@ -1,7 +1,7 @@
 """
 OpenSearch за Google SSO: запросы через Dashboards по SAML-сессии, без REST-кредов.
 
-Модуль родился на выладке (2026-11), где REST кластера оказался закрыт извне, а
+Модуль родился на выкладке (2026-11), где REST кластера оказался закрыт извне, а
 вход — только SAML через Google. Карта ловушек — в docstring, она половина
 ценности модуля.
 
@@ -57,6 +57,10 @@ CLI:
     # лента по часам (полю timestamp — date, .keyword не трогает)
     python -m opensearch_.opensearch_ agg 'cashier-prod-fpm-*' all \\
         --hist timestamp --interval 1h --group severity
+
+    # строка Lucene вместо JSON — уходит в query_string
+    python -m opensearch_.opensearch_ count 'cashier-prod-fpm-*' \\
+        'jsonPayload.message:*nack* AND NOT jsonPayload.logLevel:INFO'
 
     # свой JSON целиком (body _search)
     python -m opensearch_.opensearch_ search 'cashier-prod-fpm-*' '{"aggs": …}' --raw
@@ -182,8 +186,14 @@ def _parse_set_cookie(headers: list) -> dict:
 
 def opensearch_filters(query: str = "all", filters=(), time_from: str | None = None,
                        time_to: str | None = None, time_field: str = "timestamp") -> list:
-    """Фильтры bool.filter: фрагмент запроса + match_phrase FIELD=VALUE + range по времени."""
-    parts: list = [{"match_all": {}}] if query.strip() in ("all", "*") else [json.loads(query)]
+    """Фильтры bool.filter: фрагмент запроса + match_phrase FIELD=VALUE + range по времени.
+
+    `query` — `all`/`*`, JSON query clause либо строка Lucene
+    (`jsonPayload.message:*nack* AND NOT jsonPayload.logLevel:INFO`), которая
+    заворачивается в `query_string`. Строка, начатая с `{`, считается JSON —
+    битый JSON падает с ошибкой, а не тихо уходит в Lucene.
+    """
+    parts: list = [_query_clause(query)]
     for f in filters or ():
         k, _, v = f.partition("=")
         parts.append({"match_phrase": {k: v}})
@@ -195,6 +205,19 @@ def opensearch_filters(query: str = "all", filters=(), time_from: str | None = N
             rng["lte"] = time_to
         parts.append({"range": {time_field: {**rng, "format": "strict_date_optional_time"}}})
     return parts
+
+
+def _query_clause(query: str) -> dict:
+    """all/* -> match_all; `{…}` -> JSON clause; остальное -> query_string (Lucene)."""
+    text = query.strip()
+    if text in ("all", "*", ""):
+        return {"match_all": {}}
+    if text.startswith("{"):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"query похож на JSON, но не разбирается: {exc}") from exc
+    return {"query_string": {"query": text}}
 
 
 def _build_body(index: str, query: str, args) -> dict:
@@ -252,7 +275,7 @@ def main() -> None:
 
     def common(sp):
         sp.add_argument("index", help="паттерн индекса, напр. cashier-prod-fpm-*")
-        sp.add_argument("query", help="all | JSON запроса (query_clause)")
+        sp.add_argument("query", help="all | JSON запроса (query_clause) | строка Lucene (query_string)")
         sp.add_argument("--filter", action="append", metavar="FIELD=VALUE",
                         help="match_phrase, повторяемый")
         sp.add_argument("--time-field", default="timestamp")
