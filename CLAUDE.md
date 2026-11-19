@@ -92,6 +92,7 @@ namespace-папок, которые проекты импортируют на�
 | `comfyui_/comfyui_collection.py` | `docs/comfyui_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/http_mock.py` | `docs/testing_rules.md`, §5.1 — сторож «живого HTTP в тестах не бывает»: на транспорте httpx и на весь прогон, а не на сокете и не на тест |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
+| `socketio_/` | `docs/socketio.md` — чат socket.io 2 без браузера; ⚠ пинг шлёт клиент, третье поколение не подходит |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
 | `setting_/setting_state.py` | `docs/setting_state.md` — JSON-состояние кругов поверх настроек, `dynamic=1` |
