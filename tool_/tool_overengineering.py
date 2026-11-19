@@ -32,8 +32,9 @@
 ⚠ `single_impl` ищет наследников текстом по `root` (`class X(...Base...)`), а не графом:
 регистрация через реестр, `type()` или конфиг его обманет. Поэтому это кандидат.
 
-⚠ Разбирается только `.py` (`ast`). Для PHP/JS приметы те же — `code_rules.md` §4.5, —
-но смотрит их тот, кто правил.
+PHP разбирается соседом `tool_overengineering_php` (nikic/php-parser из vendor проекта,
+те же приметы, кроме `class_as_function`). Не нашлось `php` или парсера — в отчёте строка
+`skipped`, а не тихое «чисто». JS и прочее — `code_rules.md` §4.5, смотрит тот, кто правил.
 
 ## Чего здесь нет намеренно
 
@@ -46,6 +47,8 @@ import ast
 import re
 from pathlib import Path
 
+from tool_.tool_overengineering_php import tool_overengineering_php
+
 TOOL_OVERENGINEERING_SKIP = ('node_modules', '.git', 'dist', 'build', 'vendor', '.venv', 'venv',
                              '__pycache__', '.mypy_cache')
 TOOL_OVERENGINEERING_ABSTRACT_BASES = ('ABC', 'Protocol', 'ABCMeta')
@@ -55,7 +58,7 @@ def tool_overengineering(paths, root=None) -> list[dict]:
     """Найти в файлах обвязку, пережившую свою причину: обёртки, мёртвые опции, абстракции над одним случаем.
 
     Args:
-        paths: файлы `.py` или каталоги; каталог обходится целиком.
+        paths: пути `.py`/`.php` или каталоги; каталог обходится целиком.
         root: где искать наследников для `single_impl`; пусто — общий корень `paths`.
 
     Returns:
@@ -66,8 +69,9 @@ def tool_overengineering(paths, root=None) -> list[dict]:
     ⚠ Нечитаемый или неразбираемый файл молча пропускается — находки с остальных
     важнее, чем падение на одном (застава зовёт это на каждой партии правок).
     """
-    files = _files(paths)
-    base = Path(root) if root else _common_root(files)
+    files = tool_overengineering_files(paths)
+    php_files = tool_overengineering_files(paths, ('.php',))
+    base = Path(root) if root else _common_root(files + php_files)
     texts = {}              # тексты корня для поиска наследников — читаются один раз, лениво
     out = []
 
@@ -82,7 +86,31 @@ def tool_overengineering(paths, root=None) -> list[dict]:
         out.extend(dict(one, file=str(spot)) for one in _class_as_function(tree))
         out.extend(dict(one, file=str(spot)) for one in _single_impl(tree, base, texts))
 
+    php_found, php_skip = tool_overengineering_php(php_files, base)
+    out.extend(php_found)
+
+    if php_skip:
+        out.append({'kind': 'skipped', 'file': str(base), 'line': 0, 'name': f'{len(php_files)} .php',
+                    'hint': php_skip})
+
     return sorted(out, key=lambda one: (one['file'], one['line'], one['kind']))
+
+
+def tool_overengineering_files(paths, suffixes=('.py',)) -> list:
+    """Файлы с нужными расширениями из списка путей; каталоги — обходом без служебных (vendor и т.п.)."""
+    out = []
+
+    for one in paths or []:
+        spot = Path(one)
+
+        if spot.is_dir():
+            out.extend(p for p in sorted(spot.rglob('*'))
+                       if p.suffix in suffixes and p.is_file()
+                       and not any(part in TOOL_OVERENGINEERING_SKIP for part in p.parts))
+        elif spot.suffix in suffixes and spot.is_file():
+            out.append(spot)
+
+    return out
 
 
 def tool_overengineering_format(found) -> str:
@@ -119,20 +147,6 @@ def main() -> int:
     return min(len(found), 100)
 
 
-def _files(paths) -> list:
-    """Файлы `.py` из списка путей; каталоги — обходом без служебных."""
-    out = []
-
-    for one in paths or []:
-        spot = Path(one)
-
-        if spot.is_dir():
-            out.extend(p for p in sorted(spot.rglob('*.py'))
-                       if not any(part in TOOL_OVERENGINEERING_SKIP for part in p.parts))
-        elif spot.suffix == '.py' and spot.is_file():
-            out.append(spot)
-
-    return out
 
 
 def _common_root(files) -> Path:
@@ -325,7 +339,7 @@ def _heirs(name, base, texts) -> list:
     out = []
 
     if not texts:
-        for spot in _files([base]):
+        for spot in tool_overengineering_files([base]):
             try:
                 texts[spot] = spot.read_text(encoding='utf-8')
             except (OSError, UnicodeDecodeError):

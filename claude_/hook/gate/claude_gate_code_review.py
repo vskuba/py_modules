@@ -226,8 +226,8 @@ def claude_gate_code_review_lint(paths) -> dict:
 
     Returns:
         dict: {'cyrillic': находки `tool_typo_cyrillic`, 'order': находки
-            `function_order`, 'over': находки `tool_overengineering`}. Все поля
-            пусты — механика чистая. К находкам
+            `function_order`, 'over': находки `tool_overengineering` — по `.py` и
+            `.php`}. Все поля пусты — механика чистая. К находкам
             подставлено `file` — путь того файла, откуда они. Судейские пункты
             (размазан ли функционал, жив ли код, актуальны ли доки) здесь **не**
             считаются: у заставы нет контекста правки.
@@ -244,6 +244,15 @@ def claude_gate_code_review_lint(paths) -> dict:
     cyr, order, over = [], [], []
 
     for spot in paths or []:
+        if str(spot).lower().endswith('.php'):
+            try:
+                # PHP: только overengineering — кириллицу и порядок `ast` в нём не видит.
+                over.extend(one for one in tool_overengineering([spot], root=_repo_root(spot))
+                            if one['kind'] != 'skipped')
+            except Exception:  # noqa: BLE001 — файл молча пропускаем, см. ⚠ выше
+                pass
+            continue
+
         if not str(spot).lower().endswith('.py'):
             continue
 
@@ -370,7 +379,7 @@ def _over_lines(lint) -> list:
             '   Остаётся намеренно (чужой формат, известный второй случай) — причину в докстринг.']
 
     if not found:
-        return [*head, '   `.py` партии механика проверила — примет нет; не-`.py` (PHP, JS) — глазами.']
+        return [*head, '   `.py`/`.php` партии механика проверила — примет нет; JS и прочее — глазами.']
 
     lines = [*head, '   Застава нашла сама:',
              *[f"   {one.get('file', '')}:{one.get('line', 0)} {one.get('kind', '')} "
