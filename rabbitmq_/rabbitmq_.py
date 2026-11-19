@@ -59,8 +59,10 @@ def rabbitmq_mgmt_request(method: str, host: str = 'rabbitmq', path: str = 'over
     """
     url = f'{scheme}://{host}:{port}/api/{path.lstrip("/")}'
     auth = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
+    # ⚠ `Accept: */*`, а не `application/json`: на DELETE (purge, удаление) API отвечает
+    # 204 без тела и при `Accept: application/json` даёт 406 — purge прод-DLQ так и не шёл.
     headers = {'Authorization': f'Basic {auth}', 'User-Agent': RABBITMQ_MGMT_USER_AGENT,
-               'Accept': 'application/json'}
+               'Accept': '*/*'}
     data = None
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode('utf-8')
@@ -185,7 +187,8 @@ def rabbitmq_queue_declare(host: str = 'rabbitmq', vhost: str = '', queue: str =
 
 def rabbitmq_queue_purge(host: str = 'rabbitmq', vhost: str = '', queue: str = '',
                          user: str = RABBITMQ_MGMT_AUTH[0], password: str = RABBITMQ_MGMT_AUTH[1],
-                         port: int = RABBITMQ_MGMT_PORT, timeout: int = RABBITMQ_MGMT_TIMEOUT) -> tuple:
+                         port: int = RABBITMQ_MGMT_PORT, timeout: int = RABBITMQ_MGMT_TIMEOUT,
+                         scheme: str = 'http') -> tuple:
     """Полный дрейн очереди: DELETE /api/queues/{vhost}/{queue}/contents.
 
     Args:
@@ -195,6 +198,7 @@ def rabbitmq_queue_purge(host: str = 'rabbitmq', vhost: str = '', queue: str = '
         user, password: креды.
         port: порт management-API.
         timeout: таймаут коннекта, сек.
+        scheme: 'http' (docker-брокер) | 'https' (облачные консоли, порт 443).
 
     Returns:
         (True, None) либо (False, 'текст ошибки').
@@ -202,7 +206,8 @@ def rabbitmq_queue_purge(host: str = 'rabbitmq', vhost: str = '', queue: str = '
     if not queue:
         return False, 'нужен queue (имя очереди)'
     path = f'queues/{urllib.parse.quote(vhost or "/", safe="")}/{urllib.parse.quote(queue, safe="")}'
-    _, err = rabbitmq_mgmt_request('DELETE', host, path + '/contents', user, password, port, timeout)
+    _, err = rabbitmq_mgmt_request('DELETE', host, path + '/contents', user, password, port, timeout,
+                                   scheme=scheme)
     return (err is None), err
 
 

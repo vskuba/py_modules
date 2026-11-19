@@ -1,8 +1,8 @@
 """
 Заглянуть в сообщение очереди, не потеряв его.
 
-`GET /api/queues/{vhost}/{queue}/get_messages` — коварный эндпоинт: с
-`ack_requeue_false` он **удаляет** выданные сообщения. На живом прод-DLQ это
+`POST /api/queues/{vhost}/{queue}/get` — коварный эндпоинт: с
+`ackmode: ack_requeue_false` он **удаляет** выданные сообщения. На живом прод-DLQ это
 уже стоило расследования: первый peek показал вину, второй зашёл пустым —
 доказательство исчезло. Здесь `ack_requeue_true` зашит в код и наружу не
 отдаётся: сообщения возвращаются, но остаются в очереди.
@@ -17,15 +17,11 @@
 ready посчитан с конца; для DLQ обычно берут `count=ready` и смотрят хвост.
 ⚠ Peek увеличивает счётчик deliver'ов — в `message_stats` будет рост,
 сообщения при этом целы.
-⚠ **Облачный LB консолей (prod/stage/dev) `/get_messages` не пропускает** —
-проверено 2026-11-14: 404 (или 406 с Accept: json) по всем трём средам,
-прямой :15672 снаружи недоступен, dev/stage за Cloudflare ещё и режут
-не-браузерный UA (1010). В тот же полдень, часом ранее, эндпоинт отдавал
-дайлапы — судя по всему, платформу подкрутили в течение дня. Живой запасной
-путь — вручную через UI консоли: очередь → Get Messages → галка Requeue.
-Тело DLQ-сообщения ищи в opensearch-логах консьюмера (там то же самое в
-`jsonPayload.message`), либо зови оттуда, где :15672 достижим (docker-брокер,
-in-cluster).
+⚠⚠ **Эндпоинт — `POST …/get` с JSON-телом**, а не `GET …/get_messages` (такого в
+management API нет). Раньше здесь стоял второй, и его 404/406 по всем средам
+приняли за запрет облачного балансировщика — «тело ищи в логах». Проверено
+2026-11-19 на prod: `POST …/get` через тот же балансировщик отдаёт сообщение с
+`x-death`, очередь после peek того же размера.
 
 Конфиг доступов — тот же, что у `rabbitmq_fleet` (`~/.config/rabbitmq_mgmt.json`).
 
@@ -38,7 +34,7 @@ import argparse
 import json
 import urllib.parse
 
-from rabbitmq_.rabbitmq_ import rabbitmq_mgmt_get
+from rabbitmq_.rabbitmq_ import rabbitmq_mgmt_request
 from rabbitmq_.rabbitmq_fleet import rabbitmq_fleet_conf
 
 PEEK_TRUNCATE = 8192  # payload длиннее обрежется — для DLQ-разборов хватает с запасом
@@ -66,15 +62,14 @@ def rabbitmq_peek(env: str, vhost: str, queue: str, count: int = 1,
         raise RuntimeError(f'среды {env!r} нет в конфиге; есть: '
                            f'{", ".join(sorted(conf))}')
     one = conf[env]
+    # Эндпоинт — `POST /api/queues/{vhost}/{queue}/get` с JSON-телом. `GET …/get_messages`
+    # в management API нет вовсе: его 404/406 принимали за запрет балансировщика.
     path = (f'queues/{urllib.parse.quote(vhost, safe="")}/'
-            f'{urllib.parse.quote(queue, safe="")}/get_messages'
-            f'?count={int(count)}&ack_requeue_true=true&encoding=auto'
-            f'&truncate={PEEK_TRUNCATE}')
-    got, err = rabbitmq_mgmt_get(one['host'], path, one['user'], one['password'],
-                                 one['port'], scheme='https')
-    if err and 'HTTP 404' in err:
-        err += ' — вероятно, LB консоли не пропускает /get_messages ' \
-               '(см. карту ловушек в докстринге); тело ищи в opensearch-логах'
+            f'{urllib.parse.quote(queue, safe="")}/get')
+    body = {'count': int(count), 'ackmode': 'ack_requeue_true', 'encoding': 'auto',
+            'truncate': PEEK_TRUNCATE}
+    got, err = rabbitmq_mgmt_request('POST', one['host'], path, one['user'], one['password'],
+                                     one['port'], body=body, scheme='https')
     if err:
         raise RuntimeError(err)
     return [{'payload': m.get('payload', ''),
