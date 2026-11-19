@@ -3,8 +3,8 @@
 
 Правила, которые она сторожит, — `py_modules/docs/code_rules.md`: один и тот же
 функционал не живёт в двух файлах, DDD / SOLID / GRASP и имена по правилу префикса,
-латиница в именах, приватные ниже публичных, мёртвый код удалён, документация
-актуальна. Пока правка лежит в одном файле, её видно глазами вместе с правкой; на трёх
+латиница в именах, приватные ниже публичных, мёртвый код удалён, нет обвязки,
+пережившей свою причину (overengineering, §4.5), документация актуальна. Пока правка лежит в одном файле, её видно глазами вместе с правкой; на трёх
 файлах изменение перестаёт читаться как целое — и ровно на этом размере «гляну потом»
 не наступает никогда.
 
@@ -42,9 +42,17 @@
 ## Что застава считает сама, а что решает агент
 
 Пункты, у которых есть машинная формулировка, она считает **сама** — готовыми
-`tool_typo_cyrillic` (§1.2) и `function_order` (§3) по файлам партии, и кладёт находки в
-замечание: цена — один `ast` на файл, а без них агент тратит круг на то, что уже
-посчитано.
+`tool_typo_cyrillic` (§1.2), `function_order` (§3) и `tool_overengineering` (§4.5) по
+файлам партии, и кладёт находки в замечание: цена — один `ast` на файл, а без них агент
+тратит круг на то, что уже посчитано.
+
+## ⚠⚠ Overengineering судится по файлу целиком, а не по правке
+
+Новый код редко бывает переусложнённым — им становится старый: абстракция пережила
+две из трёх реализаций, опцию больше никто не передаёт, старое имя осталось обёрткой.
+Поэтому `tool_overengineering` смотрит **весь** файл партии: зашёл в legacy ради одной
+строки — увидишь обвязку прошлых правок вокруг неё. Наследников абстракций он ищет по
+корню git-репозитория каждого файла — партия бывает в двух проектах сразу.
 
 Судейские пункты — размазан ли функционал, на месте ли предметная область, жив ли
 оставленный код, не обещает ли док удалённого, — застава **не решает**: контекста правки
@@ -84,6 +92,7 @@ from claude_.hook.gate.claude_gate import (claude_gate_asked,                   
                                           claude_gate_noted, claude_gate_off,
                                           claude_gate_spot)
 from function_.function_order import function_order, function_order_format               # noqa: E402
+from tool_.tool_overengineering import tool_overengineering                              # noqa: E402
 from tool_.tool_typo import tool_typo_cyrillic                                            # noqa: E402
 
 # Память: `{сессия: {'asks': N, 'seen': [файлы партии], 'at': epoch}}`, сутки (`claude_gate.md`).
@@ -217,7 +226,8 @@ def claude_gate_code_review_lint(paths) -> dict:
 
     Returns:
         dict: {'cyrillic': находки `tool_typo_cyrillic`, 'order': находки
-            `function_order`}. Оба поля пусты — механика чистая. К находкам
+            `function_order`, 'over': находки `tool_overengineering`}. Все поля
+            пусты — механика чистая. К находкам
             подставлено `file` — путь того файла, откуда они. Судейские пункты
             (размазан ли функционал, жив ли код, актуальны ли доки) здесь **не**
             считаются: у заставы нет контекста правки.
@@ -231,7 +241,7 @@ def claude_gate_code_review_lint(paths) -> dict:
     пропускается. Застава и так обязана отпускать вызов при своей поломке
     (`claude_hook.md`), но до обвязки лучше не доводить: там молчит уже весь список.
     """
-    cyr, order = [], []
+    cyr, order, over = [], [], []
 
     for spot in paths or []:
         if not str(spot).lower().endswith('.py'):
@@ -245,10 +255,11 @@ def claude_gate_code_review_lint(paths) -> dict:
             # файл: в замечании от него осталось бы голое имя без каталога.
             cyr.extend(dict(one, file=str(spot)) for one in tool_typo_cyrillic(Path(spot)))
             order.extend(function_order(str(spot)))
+            over.extend(tool_overengineering([spot], root=_repo_root(spot)))
         except Exception:      # noqa: BLE001 — файл молча пропускаем, см. ⚠ выше
             continue
 
-    return {'cyrillic': cyr, 'order': order}
+    return {'cyrillic': cyr, 'order': order, 'over': over}
 
 
 def claude_gate_code_review_format(verdict) -> str:
@@ -292,6 +303,7 @@ def claude_gate_code_review_format(verdict) -> str:
         '   dictionary_.dictionary_spell_check_ru` — слово, незнакомое словарю, чья',
         '   замена в одну букву частотна в репозитории. ⚠ Корпусу нужен весь корень,',
         '   по одному файлу проверка слепнет; своё слово ремесла — в `.spell-allow`.',
+        *_over_lines(lint),
         '',
         'Не продолжаем, пока список не пройден: назови вердикт по каждому пункту — или',
         'вслух скажи, почему пункт здесь не при чём. Вопрос один на партию правок;',
@@ -336,6 +348,40 @@ def _is_code(where) -> bool:
         return False
 
     return not any(part in CLAUDE_GATE_CODE_REVIEW_SKIP for part in Path(spot).parts[:-1])
+
+
+def _repo_root(spot) -> Path:
+    """Корень git-репозитория файла — там ищутся наследники абстракций; нет — каталог файла."""
+    here = Path(spot).resolve().parent
+
+    for one in (here, *here.parents):
+        if (one / '.git').exists():
+            return one
+
+    return here
+
+
+def _over_lines(lint) -> list:
+    """Пункт 8 замечания: обвязка, пережившая свою причину (§4.5), — находки и судейская часть."""
+    found = lint.get('over') or []
+    head = ['8. Overengineering (§4.5) — смотри файлы партии ЦЕЛИКОМ, не только свою правку:',
+            '   абстракция с одной реализацией, опция, которую никто не передаёт, обёртка-',
+            '   переименование, fallback для снятого режима, флаг, который нигде не меняется.',
+            '   Остаётся намеренно (чужой формат, известный второй случай) — причину в докстринг.']
+
+    if not found:
+        return [*head, '   `.py` партии механика проверила — примет нет; не-`.py` (PHP, JS) — глазами.']
+
+    lines = [*head, '   Застава нашла сама:',
+             *[f"   {one.get('file', '')}:{one.get('line', 0)} {one.get('kind', '')} "
+               f"{one.get('name', '')} — {one.get('hint', '')}"
+               for one in found[:CLAUDE_GATE_CODE_REVIEW_FOUND]]]
+
+    if len(found) > CLAUDE_GATE_CODE_REVIEW_FOUND:
+        lines.append(f'   … и ещё {len(found) - CLAUDE_GATE_CODE_REVIEW_FOUND}'
+                     ' — `python -m tool_.tool_overengineering <файлы>`')
+
+    return lines
 
 
 def _cyrillic_lines(lint) -> list:
