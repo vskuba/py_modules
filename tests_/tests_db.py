@@ -116,15 +116,30 @@ def tests_db_env_load() -> None:
     ⚠ Именно поверх: случайная `MYSQL_DATABASE` в окружении молча увела бы тесты
     не в ту базу, и красным стало бы не то, что сломалось.
 
+    ⚠⚠ **Оба слоя и в том же порядке, что у `config.config`: `.env`, затем
+    `.env.local`.** Читался один `.env` поверх всего — и он молча затирал
+    `.env.local`, который `config.config` уже накатил на импорте. Пустой ключ в
+    `.env` (образец держит пароли пустыми, а настоящие кладёт в `.env.local`)
+    превращал пароль в пустую строку: сюита шла входить с `''` и падала
+    «Заполните пароль» при живой панели и верной учётке. Поймано на свежем
+    проекте TelegramAI; у соседей не проявлялось, потому что пароли у них лежат
+    в самом `.env`.
+
+    Пути — те же, что у `config.config` (корень проекта от модуля, а не обход
+    от рабочего каталога): два способа найти `.env` однажды нашли бы разные.
+
     Нет `python-dotenv` — тихо ничего: сюита, которой он не нужен, не обязана его
     ставить.
     """
     try:
         from dotenv import load_dotenv
+
+        from config.config import ENV_LOCAL_PATH, ENV_PATH
     except ImportError:
         return
 
-    load_dotenv(override=True)
+    load_dotenv(ENV_PATH, override=True)
+    load_dotenv(ENV_LOCAL_PATH, override=True)
 
 
 async def tests_db_after() -> None:
