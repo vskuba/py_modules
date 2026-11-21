@@ -34,9 +34,16 @@ DATA_MASK_TOKEN_RE = re.compile(
     r'|Bearer\s+[A-Za-z0-9._\-]{16,}|eyJ[A-Za-z0-9_\-]{9,}\.[A-Za-z0-9_\-]{9,}'
     r'\.[A-Za-z0-9._\-]{9,})|[Aa]uthorization[:=]\s*[\'"]?[Bb]earer\s+[A-Za-z0-9._\-]{16,})',
     re.IGNORECASE)
-DATA_MASK_SECRET_KEYS = ('card_cvv2', 'cvv2', 'cvv', 'cardExpireDate', 'card_expire_date',
+# ⚠ Сравнение с ключом дампа — без учёта регистра (`_DATA_MASK_SECRET_KEYS_LOWER`):
+# `cardExpireDate` лежал здесь в camelCase и против `key.lower()` не совпадал никогда.
+# OAuth-пары (`accessToken`/`refreshToken`) — ответ токен-эндпоинтов, их сеть
+# браузера пишет телом ответа (поймано на GraphQL-запросе токена платёжной страницы).
+DATA_MASK_SECRET_KEYS = ('card_cvv2', 'cvv2', 'cvv', 'cvc', 'cardExpireDate', 'card_expire_date',
                          'authorization', 'x-api-key', 'x-signature', 'x-api-key-test',
-                         'apikey', 'api_key', 'x-app-signature', 'x-idempotency-key')
+                         'apikey', 'api_key', 'x-app-signature', 'x-idempotency-key',
+                         'accessToken', 'access_token', 'refreshToken', 'refresh_token',
+                         'id_token', 'client_secret', 'password', 'secret')
+_DATA_MASK_SECRET_KEYS_LOWER = frozenset(key.lower() for key in DATA_MASK_SECRET_KEYS)
 
 # ── публичный API модуля ──
 
@@ -114,7 +121,7 @@ def data_mask_json(obj: 'dict | list | tuple') -> tuple:
         if isinstance(node, dict):
             out = {}
             for key, val in node.items():
-                if str(key).lower() in DATA_MASK_SECRET_KEYS and isinstance(val, str) and val:
+                if str(key).lower() in _DATA_MASK_SECRET_KEYS_LOWER and isinstance(val, str) and val:
                     out[key] = '*' * min(len(val), 6)
                 else:
                     out[key] = _walk(val)
