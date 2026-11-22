@@ -41,7 +41,7 @@ import time
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
     DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
 from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_new
-from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, \
+from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_turn_start_wait, \
     dsh_session_dialog, dsh_session_find, dsh_session_history, dsh_session_list, \
     dsh_session_prompt, dsh_session_title, dsh_session_turn_reply
 
@@ -53,6 +53,8 @@ DSH_BOARD_RETRY_POLL = 2.0
 DSH_BOARD_RESUME_TRIES = 2
 DSH_BOARD_RESUME_TEXT = ('Хост перезапустился посреди твоего круга, и он оборвался. Продолжай '
                          'задачу с того места, где остановился, и дай полный ответ.')
+# Сколько держать замок fanout после отправки: пока круг задачи не начнётся, с.
+DSH_BOARD_START_HOLD = 60
 # Сколько ждать, пока у хоста после перезапуска поднимутся службы, с.
 DSH_BOARD_STARTUP_WAIT = 120
 # Выжимка ответа: просьба к субагенту и пределы, которыми её режем, если он не послушал.
@@ -296,7 +298,7 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, robot
 
 
 def dsh_board_ask(session: str, text: str, wait: bool = False,
-                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, images: list = None, *,
+                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, images: list = None, gate=None, *,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Задача субагенту: промпт в карточку; с `wait` — дождаться конца круга и ответа.
 
@@ -309,6 +311,9 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
             карточки, и ответ потом — `dsh_session_answer_last`.
         timeout: потолок всего вызова, с — общий на засечку и ожидание ответа.
         images: пути к картинкам (скриншоты) — субагент видит их рядом с текстом.
+        gate: общий замок для нескольких задач разом (`fanout`): задача ждёт свободный
+            мотор и держит замок, пока её круг не начнётся, — две задачи не займут один
+            и тот же свободный мотор. Без него промпт уходит сразу.
 
     Returns:
         Текст ответа при `wait`, иначе пустая строка.
@@ -322,8 +327,17 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     deadline = time.time() + timeout
     mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
     # Промпт повторяем только на «служба ещё не поднялась» — тогда он точно не ушёл.
-    _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), timeout,
-             retry=(DshApiUnavailable,))
+    def send():
+        _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), timeout,
+                 retry=(DshApiUnavailable,))
+
+    if gate is None:
+        send()
+    else:
+        with gate:
+            dsh_board_motor_wait(max(0.0, deadline - time.time()), base=base)
+            send()
+            dsh_session_turn_start_wait(session, mark, DSH_BOARD_START_HOLD, base=base)
     if not wait:
         return ''
     asked = text
@@ -557,6 +571,30 @@ def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
     return (cut[:end + 1] if end > limit // 3 else cut).rstrip() + ' …'
 
 
+def dsh_board_motor_wait(timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
+                         base: str = DSH_API_ADDR_DEFAULT) -> None:
+    """Дождаться свободного мотора: занятых меньше, чем всего (`dsh_board_motors_busy`).
+
+    Работа руками (наши промпты) моторами доски не гейтится — без этой проверки десять
+    задач `fanout` разом ушли бы в модель, у которой слотов меньше, и встали бы в её
+    очередь, деля скорость. Хост, не ответивший вовремя, считается занятым.
+
+    Raises:
+        DshBoardError: мотор не освободился за `timeout`.
+    """
+    started = time.time()
+    while True:
+        try:
+            status = dsh_board_motors_busy(base=base)
+            if len(status['working']) < max(1, int(status['capacity'] or 0)):
+                return
+        except DshApiError:
+            pass
+        if time.time() - started > timeout:
+            raise DshBoardError(f'свободный мотор не появился за {int(timeout)} с')
+        time.sleep(DSH_BOARD_RETRY_POLL)
+
+
 def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
                      base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Раздать задачи субагентам разом и собрать ответы — в порядке задач.
@@ -565,13 +603,17 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
     заводится под каталог), с необязательными `images` — пути к картинкам — и `worktree: true`
     — задача правит код в своей копии репозитория (`dsh_worktree`), в результате путь и ветка; `archive: true` — убрать заведённую карточку в архив после
     ответа (после неудачи — не трогает: живой круг ещё можно дочитать). Задачи идут
-    разом; несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
+    разом, но не больше, чем свободных моторов: лишние ждут (`dsh_board_motor_wait`).
+    Несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
 
     Returns:
         `[{session, answer, error}]` — у удавшейся `error` пустой; одна сорвавшаяся
         задача остальных не роняет.
     """
     results = [None] * len(tasks)
+    # Общий замок задач: каждая ждёт свободный мотор — задач больше, чем моторов, не
+    # уходит в модель разом; лишние ждут, пока освободится мотор.
+    gate = threading.Lock()
 
     def run(index: int, task: dict) -> None:
         session = task.get('session') or ''
@@ -586,7 +628,7 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
                 session = dsh_board_session_new(cwd, task.get('title') or 'задача',
                                                 bool(task.get('fullAccess')), base=base)
             answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
-                                   images=task.get('images'), base=base)
+                                   images=task.get('images'), gate=gate, base=base)
             results[index] = {'session': session, 'answer': answer, 'error': '',
                               **({'worktree': tree['path'], 'branch': tree['branch']} if tree else {})}
         except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата

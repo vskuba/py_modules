@@ -206,6 +206,27 @@ def dsh_session_turn_reply(session: str, after: int, text: str, timeout: float =
         time.sleep(DSH_SESSION_POLL)
 
 
+def dsh_session_turn_start_wait(session: str, after: int, timeout: float = 60, *,
+                                base: str = DSH_API_ADDR_DEFAULT) -> bool:
+    """Дождаться в журнале начала круга (`turn/start`) новее засечки `after`.
+
+    Returns:
+        True — круг начался; False — не начался за `timeout` (промпт ждёт в очереди
+        карточки или хост занят).
+    """
+    deadline = time.time() + timeout
+    while True:
+        try:
+            events = dsh_session_history(session, base=base)
+        except (DshApiUnreachable, DshApiUnavailable):
+            events = []
+        if any(e.get('type') == 'turn/start' and e.get('seq', 0) > after for e in events):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(DSH_SESSION_POLL)
+
+
 def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float = 1800, *,
                            base: str = DSH_API_ADDR_DEFAULT):
     """Текст ответа на свой промпт (`dsh_session_turn_reply`); `None` — не дождались.
