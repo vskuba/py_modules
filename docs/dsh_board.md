@@ -3,7 +3,7 @@
 > Оркестратор на той же машине, что и хост harness'а (Claude Code), раздаёт работу его
 > агентам так же, как человек в браузере: заводит карточку под проект, шлёт промпт, ждёт
 > ответ. Повторяющаяся работа ложится на доску плагина `dsh-continuous-agent` и идёт
-> очередью и по расписанию сама, по четырём цепочкам модели разом. `dsh_/dsh_session.py` — карточки и их журнал,
+> очередью и по расписанию сама, на четырёх моторах модели разом. `dsh_/dsh_session.py` — карточки и их журнал,
 > `dsh_/dsh_board.py` — задачи, потолок, доска, `dsh_/dsh_board_cli.py` — команда.
 
 Требования: хост `dsh --profile web` на этой машине (транспорт — `docs/dsh_api.md`) и
@@ -35,8 +35,11 @@ results = dsh_board_fanout([
 # [{'session': …, 'answer': …, 'error': ''}, …] — в порядке задач
 ```
 
-Сорвавшаяся задача остальных не роняет — у неё заполнен `error`. `archive: true` убирает
-в архив карточку, которую `fanout` завёл сам; чужую (`session`) не трогает никогда.
+Сорвавшаяся задача остальных не роняет — у неё заполнен `error` (ловится любое
+исключение: у каждой задачи строка результата). `archive: true` убирает в архив карточку,
+которую `fanout` завёл сам, и только после ответа: сорвавшаяся могла оставить живой круг,
+и его ответ ещё можно дочитать (`dsh_session_answer_last`). Чужую (`session`) не трогает
+никогда.
 
 ## 3. Параллельность — моторы
 
@@ -50,7 +53,9 @@ dsh_board_motors_set('gx10-1', 'Qwen3.8-Flash-Next', 1)
 ```
 
 Наши промпты (`dsh_board_ask`, `fanout`) — работа руками: они идут сразу, мимо очереди
-доски, и держат первый ряд своей модели.
+доски, и занимают один мотор своей модели — первый свободный (раскладку по слотам ведёт
+плагин). Кто работает сейчас — `dsh_board_working()`: занятые моторы, у каждого `kind`
+`run` (промпт доски, `goal` — его название) или `hand` (работа руками), и подпись карточки.
 
 Карточки и промпты, заведённые этим слоем, помечаются как агентские (`robot`): форма
 доски рисует их с 🤖, чтобы отличать от заведённых человеком.
@@ -65,15 +70,29 @@ dsh_board_motors_set('gx10-1', 'Qwen3.8-Flash-Next', 1)
 ## 5. Команда
 
 ```bash
-PYTHONPATH=. python -m dsh_.dsh_board sessions
-PYTHONPATH=. python -m dsh_.dsh_board new ~/proj "логи" --ask "найди ошибки" --wait
-PYTHONPATH=. python -m dsh_.dsh_board ask <session> "прогони тесты" --wait
-PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # `-` — stdin
-PYTHONPATH=. python -m dsh_.dsh_board history <session> -n 5
-PYTHONPATH=. python -m dsh_.dsh_board board --session <session>
+# сессии и задачи
+PYTHONPATH=. python -m dsh_.dsh_board sessions [--all]          # живые карточки (--all — и без агента)
+PYTHONPATH=. python -m dsh_.dsh_board new ~/proj "логи" [--full-access] [--ask "…" --wait]
+PYTHONPATH=. python -m dsh_.dsh_board ask <session> "прогони тесты" --wait [--timeout 1800]
+PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # N задач разом
+PYTHONPATH=. python -m dsh_.dsh_board answer <session>           # последний ответ
+PYTHONPATH=. python -m dsh_.dsh_board history <session> -n 5     # промпты и ответы
+PYTHONPATH=. python -m dsh_.dsh_board cancel <session>           # прервать круг
+PYTHONPATH=. python -m dsh_.dsh_board archive <session>
+PYTHONPATH=. python -m dsh_.dsh_board working [--line]           # кто работает сейчас
+# доска
+PYTHONPATH=. python -m dsh_.dsh_board board [--session <session>]
 PYTHONPATH=. python -m dsh_.dsh_board add <session> "сверяй логи" --every 60
+PYTHONPATH=. python -m dsh_.dsh_board edit <goal> [--text …] [--status paused] [--position 1]
+PYTHONPATH=. python -m dsh_.dsh_board drop <goal>
 PYTHONPATH=. python -m dsh_.dsh_board motors gx10-2/Qwen3.8-Flash-Next 4
+PYTHONPATH=. python -m dsh_.dsh_board pause | resume              # рубильник доски
 ```
+
+Текст промпта у `ask`, `add`, `edit --text`, `new --ask` и файл `fanout` можно дать `-` —
+тогда он читается из stdin. `--json` (до или после подкоманды) — ответ JSON вместо текста,
+`--base host:port` — другой хост. Потолок ожидания ответа по умолчанию — 1800 с, общий на
+весь вызов.
 
 Проект ставит её своей командой одной строкой — claude-shell: `dsh-board`
 (`src/dsh/dsh_board.py` зовёт `dsh_board_cli_main`).
