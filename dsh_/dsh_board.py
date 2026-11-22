@@ -40,8 +40,8 @@ import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
     DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
-from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop
-from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_cursor, \
+from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_new
+from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, \
     dsh_session_dialog, dsh_session_find, dsh_session_history, dsh_session_list, \
     dsh_session_prompt, dsh_session_title, dsh_session_turn_reply
 
@@ -56,8 +56,9 @@ DSH_BOARD_RESUME_TEXT = ('Хост перезапустился посреди �
 # Сколько ждать, пока у хоста после перезапуска поднимутся службы, с.
 DSH_BOARD_STARTUP_WAIT = 120
 # Выжимка ответа: просьба к субагенту и пределы, которыми её режем, если он не послушал.
-DSH_BOARD_BRIEF_ASK = ('\n\nНачни ответ с блока «ИТОГ:» — 3–5 строк сути, затем пустая строка и '
-                       'подробности. Оркестратор читает только итог, подробности — по необходимости.')
+DSH_BOARD_BRIEF_ASK = ('\n\nФОРМАТ ОТВЕТА ОБЯЗАТЕЛЕН: первая строка ответа — «ИТОГ:», за ней 3–5 '
+                       'коротких строк сути (не длиннее 600 символов вместе), затем пустая строка и '
+                       'подробности. Никаких вступлений до «ИТОГ:». Оркестратор читает только итог.')
 DSH_BOARD_BRIEF_LINES = 5
 DSH_BOARD_BRIEF_CHARS = 700
 # Уборка: сколько дней тишины у агентской карточки, чтобы её убрать, и примета копии репо.
@@ -72,10 +73,12 @@ DSH_BOARD_VERIFY_ASK = (
     'Не пересказывай ответ — только вердикты.\n\n'
     '=== ЗАДАЧА ===\n{task}\n\n=== ОТВЕТ ===\n{answer}'
 )
+# Моторов у модели, которой их не назначали (как `MOTOR_COUNT_DEFAULT` плагина).
+DSH_BOARD_MOTORS_DEFAULT = 4
 # Сколько самых затратных карточек показывать в статистике.
 DSH_BOARD_STATS_TOP = 5
-# Отметки «ответ прочитан» по агентским карточкам: ключ карточки → seq журнала.
-DSH_BOARD_INBOX = 'dsh-board.inbox.json'
+# Отметки «ответ прочитан» по агентским карточкам: ключ карточки → число кругов.
+DSH_BOARD_INBOX = 'dsh-board.inbox-turns.json'
 # Кэш подписей карточек для `dsh_board_working` и сколько он живёт, с.
 DSH_BOARD_TITLES = 'dsh-board.titles.json'
 DSH_BOARD_TITLES_TTL = 600
@@ -123,6 +126,64 @@ def dsh_board_settings(patch: dict, *, base: str = DSH_API_ADDR_DEFAULT) -> None
     ⚠ `models`, `motors`, `executors` — списки целиком, не добавка: что не назвал, то снял.
     """
     dsh_api_post('continuous-agent.settings', patch, base=base, timeout=DSH_BOARD_HTTP_TIMEOUT)
+
+
+def dsh_board_model_of(session: str, *, base: str = DSH_API_ADDR_DEFAULT):
+    """Модель, в бокс которой класть промпт карточки, или None — назвать нечем.
+
+    Модель карточки (`sessionModel`) известна только после её первого круга: у свежей
+    карточки выбора ещё нет. Тогда берётся включённая модель доски, если она одна, — ту
+    же модель карточка и получит на первом круге. Промпт без модели лёг бы вне бокса
+    («неположенным») и не пошёл бы нигде.
+    """
+    state = dsh_board_state(session, base=base)
+    if state.get('sessionModel'):
+        return state['sessionModel']
+    models = state.get('models') or []
+    return models[0] if len(models) == 1 else None
+
+
+def dsh_board_working(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Кто из агентов сейчас работает и над чем — по занятым моторам доски.
+
+    Returns:
+        `[{session, title, kind, goal, motor, model, robot}]` — см. `dsh_board_motors_busy`.
+    """
+    return dsh_board_motors_busy(base=base)['working']
+
+
+def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Занятые моторы и сколько их всего: `{capacity, working}` — для «DSH 1/4».
+
+    Источник истины — хост: маршрут плагина `continuous-agent.working` отдаёт занятые
+    моторы с подписями и ёмкость (моторы включённых моделей) одним лёгким запросом.
+    Зовётся часто (статусная строка — раз в секунду). Плагин старше маршрута (404) или
+    ёмкости — список и ёмкость собираются здесь: `state` доски и подписи из кэша на диске
+    (`DSH_BOARD_TITLES`); тяжёлый `session/list` — только для незнакомых карточек.
+
+    Returns:
+        `{capacity, working: [{session, title, kind, goal, motor, model, robot}]}`:
+        `kind` — `run` (заход промпта доски) или `hand` (работа руками), `title` — подпись.
+    """
+    keys = ('session', 'title', 'kind', 'goal', 'motor', 'model', 'robot')
+    try:
+        answer = dsh_api_get('continuous-agent.working', base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
+        working = [{key: row.get(key) for key in keys} for row in answer.get('working') or []]
+        if 'capacity' in answer:
+            return {'capacity': answer['capacity'], 'working': working}
+        return {'capacity': _capacity(dsh_board_state(base=base)), 'working': working}
+    except DshApiError as error:
+        if 'HTTP 404' not in str(error):
+            raise
+    # Плагин старше маршрута `working`: собираем сами — доска и подписи из кэша.
+    state = dsh_board_state(base=base)
+    bricks = [brick for brick in state.get('chain') or [] if brick.get('kind') in ('run', 'hand')]
+    session_keys = [brick.get('session') or '' for brick in bricks]
+    titles = _titles_cached(session_keys, base) if bricks else {}
+    working = [{'session': key, 'title': titles.get(key, ''), 'kind': brick.get('kind'),
+                'goal': brick.get('name') or '', 'motor': brick.get('motor'), 'model': brick.get('model'),
+                'robot': bool(brick.get('robot'))} for key, brick in zip(session_keys, bricks)]
+    return {'capacity': _capacity(state), 'working': working}
 
 
 def dsh_board_model_of(session: str, *, base: str = DSH_API_ADDR_DEFAULT):
@@ -284,7 +345,7 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
                             f'последняя реплика: {dsh_board_brief(answer)}')
     # Ответ получен — во «входящих» его больше нет.
     with contextlib.suppress(DshApiError, OSError):
-        dsh_board_inbox_take(session, dsh_session_cursor(session, base=base))
+        dsh_board_inbox_take(session, dsh_board_turns(dsh_session_find(session, base=base)))
     return answer
 
 
@@ -292,30 +353,21 @@ def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Агентские карточки с ответами, которых оркестратор ещё не забрал.
 
     Ответ субагента остаётся в журнале его карточки, даже если сессия оркестратора,
-    отдавшая задачу, закрылась. Здесь — список таких: агентская карточка (`robots`
-    доски), не в архиве, круг не идёт, а журнал ушёл дальше отметки «прочитано»
-    (`dsh_board_inbox_take`, файл `DSH_BOARD_INBOX`).
+    отдавшая задачу, закрылась. Здесь — такие: агентская карточка (`robots` доски), не в
+    архиве, круг не идёт, а кругов (`sessionStats.turns`) больше, чем отмечено
+    прочитанным (`dsh_board_inbox_take`). Счёт по кругам, а не по журналу: служебные
+    записи после ответа (заголовок, метки) журнал сдвигают, а круг — нет.
 
     Returns:
-        `[{session, title, seq, brief}]` — `seq` отдавать в `dsh_board_inbox_take`.
+        `[{session, title, turns, brief}]` — `turns` отдавать в `dsh_board_inbox_take`;
+        `brief` — начало последнего ответа из `turnOutline` (без загрузки журнала).
     """
-    state = dsh_board_state(base=base)
-    robots = set(state.get('robots') or [])
-    archived = set(state.get('archived') or [])
-    taken = _inbox_read()
-    rows = []
-    for item in dsh_session_list(base=base):
-        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
-        if key not in robots or item.get('sessionId') in archived or item.get('running'):
-            continue
-        seq = int((item.get('projections') or {}).get('asOfSeq') or 0)
-        if seq <= taken.get(key, 0):
-            continue
-        answer = dsh_session_answer_last(item['sessionId'], taken.get(key, 0), base=base)
-        if answer:
-            rows.append({'session': key, 'title': dsh_session_title(item), 'seq': seq,
-                         'brief': dsh_board_brief(answer)})
-    return rows
+    return [row for row in _inbox_scan(base) if row is not None]
+
+
+def dsh_board_inbox_count(*, base: str = DSH_API_ADDR_DEFAULT) -> int:
+    """Сколько агентских карточек с непрочитанным — для статусной строки."""
+    return len(_inbox_scan(base))
 
 
 def dsh_board_resume(dry: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
@@ -400,7 +452,6 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
     state = dsh_board_state(base=base)
     robots = set(state.get('robots') or [])
     archived = set(state.get('archived') or [])
-    workspaces = {os.path.realpath(w.get('path') or ''): w.get('id') for w in state.get('workspaces') or []}
     edge = (time.time() - days * 86400) * 1000
     rows = []
     for item in dsh_session_list(base=base):
@@ -420,12 +471,24 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
             if worktree and not kept:
                 with contextlib.suppress(DshWorktreeError):
                     dsh_worktree_drop(worktree)
-                workspace = workspaces.get(os.path.realpath(worktree))
-                if workspace:
-                    with contextlib.suppress(DshApiError):
-                        dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace}}, base=base)
+                with contextlib.suppress(DshApiError):
+                    dsh_board_workspace_drop(worktree, base=base)
         rows.append({'session': key, 'title': dsh_session_title(item), 'worktree': worktree, 'kept': kept})
     return rows
+
+
+def dsh_board_workspace_drop(path: str, *, base: str = DSH_API_ADDR_DEFAULT) -> bool:
+    """Снять проект с панели хоста по его каталогу (файлы и сессии остаются).
+
+    Returns:
+        True — проект был и снят; False — такого проекта на панели нет.
+    """
+    real = os.path.realpath(path)
+    for workspace in dsh_board_state(base=base).get('workspaces') or []:
+        if os.path.realpath(workspace.get('path') or '') == real:
+            dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace['id']}}, base=base)
+            return True
+    return False
 
 
 def dsh_board_stats(all_sessions: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
@@ -461,13 +524,18 @@ def dsh_board_stats(all_sessions: bool = False, *, base: str = DSH_API_ADDR_DEFA
     return {'sessions': len(rows), **total, 'top': rows[:DSH_BOARD_STATS_TOP]}
 
 
-def dsh_board_inbox_take(session: str, seq: int) -> None:
-    """Отметить ответы карточки до записи журнала `seq` прочитанными."""
+def dsh_board_inbox_take(session: str, turns: int) -> None:
+    """Отметить ответы карточки до круга номер `turns` прочитанными."""
     key = re.sub(r'-g\d+$', '', session)
     taken = _inbox_read()
-    if seq > taken.get(key, 0):
-        taken[key] = seq
+    if turns > taken.get(key, 0):
+        taken[key] = turns
         _json_write(_home_path(DSH_BOARD_INBOX), taken)
+
+
+def dsh_board_turns(item: dict) -> int:
+    """Сколько кругов у карточки (`sessionStats.turns` из `session/list`)."""
+    return int((((item.get('projections') or {}).get('values') or {}).get('sessionStats') or {}).get('turns') or 0)
 
 
 def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
@@ -480,7 +548,13 @@ def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
     text = (answer or '').strip()
     match = re.search(r'(?im)^\W*итог\W*:?\s*(.+?)(?:\n\s*\n|\Z)', text, re.DOTALL)
     brief = match.group(1).strip() if match else '\n'.join(text.splitlines()[:DSH_BOARD_BRIEF_LINES])
-    return brief if len(brief) <= limit else brief[:limit - 1] + '…'
+    if len(brief) <= limit:
+        return brief
+    # Режем по концу последнего предложения до предела, а не посреди слова: обрубок
+    # «вердикт…» оркестратор не прочтёт, а неполный список предложений — прочтёт.
+    cut = brief[:limit - 1]
+    end = max(cut.rfind(mark) for mark in ('. ', '! ', '? ', '\n', '.\n'))
+    return (cut[:end + 1] if end > limit // 3 else cut).rstrip() + ' …'
 
 
 def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
@@ -488,7 +562,8 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
     """Раздать задачи субагентам разом и собрать ответы — в порядке задач.
 
     Задача — `{text, session}` (готовая карточка) или `{text, cwd, title}` (карточка
-    заводится под каталог), с необязательным `images` — пути к картинкам; `archive: true` — убрать заведённую карточку в архив после
+    заводится под каталог), с необязательными `images` — пути к картинкам — и `worktree: true`
+    — задача правит код в своей копии репозитория (`dsh_worktree`), в результате путь и ветка; `archive: true` — убрать заведённую карточку в архив после
     ответа (после неудачи — не трогает: живой круг ещё можно дочитать). Задачи идут
     разом; несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
 
@@ -500,19 +575,26 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
 
     def run(index: int, task: dict) -> None:
         session = task.get('session') or ''
+        tree = {}
         try:
             if not session:
-                session = dsh_board_session_new(task['cwd'], task.get('title') or 'задача',
+                cwd = task['cwd']
+                if task.get('worktree'):
+                    # Пишущей задаче — своя копия репо: соседи по fanout не затрут друг друга.
+                    tree = dsh_worktree_new(cwd, task.get('title') or 'задача')
+                    cwd = tree['path']
+                session = dsh_board_session_new(cwd, task.get('title') or 'задача',
                                                 bool(task.get('fullAccess')), base=base)
             answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
                                    images=task.get('images'), base=base)
-            results[index] = {'session': session, 'answer': answer, 'error': ''}
+            results[index] = {'session': session, 'answer': answer, 'error': '',
+                              **({'worktree': tree['path'], 'branch': tree['branch']} if tree else {})}
         except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
             results[index] = {'session': session, 'answer': '', 'error': f'{type(error).__name__}: {error}'}
             return
         # Архив — только после ответа: сорвавшаяся задача могла оставить живой круг, и
         # архив оборвал бы его, а ответ из журнала ещё можно добрать.
-        if task.get('archive') and session and not task.get('session'):
+        if task.get('archive') and session and not task.get('session') and not tree:
             with contextlib.suppress(DshApiError):
                 dsh_session_archive(session, base=base)
 
@@ -535,6 +617,16 @@ def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) ->
 
 # ── детали реализации ──
 
+def _capacity(state: dict) -> int:
+    """Моторы включённых моделей по настройкам доски (запасной путь для старого плагина)."""
+    motors = {(row.get('provider'), row.get('model')): row.get('motors') for row in state.get('motors') or []}
+    models = state.get('models') or []
+    if not models:
+        return DSH_BOARD_MOTORS_DEFAULT
+    return sum(int(motors.get((pair.get('provider'), pair.get('model'))) or DSH_BOARD_MOTORS_DEFAULT)
+               for pair in models)
+
+
 def _home_path(name: str) -> str:
     """Путь к файлу слоя в каталоге хоста (`DSH_HOME`, по умолчанию `~/.dsh`)."""
     return os.path.join(os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT), name)
@@ -546,6 +638,27 @@ def _json_write(path: str, value) -> None:
     with open(tmp, 'w', encoding='utf-8') as handle:
         json.dump(value, handle, ensure_ascii=False)
     os.replace(tmp, path)
+
+
+def _inbox_scan(base: str) -> list:
+    """Непрочитанные агентские карточки: `{session, title, turns, brief}` на каждую."""
+    state = dsh_board_state(base=base)
+    robots = set(state.get('robots') or [])
+    archived = set(state.get('archived') or [])
+    taken = _inbox_read()
+    rows = []
+    for item in dsh_session_list(base=base):
+        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
+        if key not in robots or item.get('sessionId') in archived or item.get('running'):
+            continue
+        turns = dsh_board_turns(item)
+        if turns <= taken.get(key, 0):
+            continue
+        outline = ((item.get('projections') or {}).get('values') or {}).get('turnOutline') or []
+        last = (outline[-1].get('response') if outline else '') or ''
+        rows.append({'session': key, 'title': dsh_session_title(item), 'turns': turns,
+                     'brief': dsh_board_brief(last)})
+    return rows
 
 
 def _inbox_read() -> dict:

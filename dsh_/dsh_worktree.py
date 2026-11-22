@@ -71,6 +71,37 @@ def dsh_worktree_dirty(path: str) -> bool:
     return bool(_git(path, 'status', '--porcelain', check=False).strip())
 
 
+def dsh_worktree_land(path: str, message: str) -> dict:
+    """Принять работу субагента: закоммитить её в его ветке и слить в основную копию.
+
+    Незакоммиченное в копии коммитится одним коммитом `message`; ветка сливается в
+    текущую ветку основной копии `merge --no-ff` (в истории видно, что это работа
+    субагента); копия снимается, ветка удаляется. Конфликт — `merge --abort`, копия и
+    ветка остаются: разбирать их — человеку или оркестратору.
+
+    Returns:
+        `{"branch", "merged"}` — ветка субагента и коммит слияния в основной копии.
+
+    Raises:
+        DshWorktreeError: в копии нечего сливать или слияние не прошло (уже откачено).
+    """
+    branch = _git(path, 'rev-parse', '--abbrev-ref', 'HEAD').strip()
+    if dsh_worktree_dirty(path):
+        _git(path, 'add', '-A')
+        _git(path, 'commit', '-q', '-m', message)
+    root = os.path.dirname(_git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip())
+    if not _git(root, 'log', '--oneline', f'HEAD..{branch}').strip():
+        raise DshWorktreeError(f'в ветке {branch} нет новых коммитов — сливать нечего')
+    merged = subprocess.run(['git', '-C', root, 'merge', '--no-ff', '--no-edit', branch],
+                            capture_output=True, text=True, timeout=DSH_WORKTREE_GIT_TIMEOUT)
+    if merged.returncode != 0:
+        _git(root, 'merge', '--abort', check=False)
+        raise DshWorktreeError(f'слияние {branch} не прошло, откачено: {merged.stdout.strip()[-300:]}')
+    dsh_worktree_drop(path)
+    _git(root, 'branch', '-d', branch, check=False)
+    return {'branch': branch, 'merged': _git(root, 'rev-parse', '--short', 'HEAD').strip()}
+
+
 def dsh_worktree_drop(path: str, force: bool = False) -> None:
     """Убрать копию. Ветка остаётся — её сливают или удаляют руками.
 

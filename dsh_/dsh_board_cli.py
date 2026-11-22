@@ -25,14 +25,15 @@ import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
-    dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_take, dsh_board_resume, \
+    dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_count, dsh_board_inbox_take, \
+    dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
     dsh_board_gc, dsh_board_stats, dsh_board_verify, \
-    dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_set, \
-    dsh_board_session_new, dsh_board_working, \
+    dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
+    dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
-    dsh_session_cancel, dsh_session_cursor, dsh_session_dialog, dsh_session_find
-from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_new
+    dsh_session_cancel, dsh_session_dialog, dsh_session_find
+from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_land, dsh_worktree_new
 
 
 def dsh_board_cli_main(argv: list = None, prog: str = 'dsh-board') -> int:
@@ -97,14 +98,19 @@ def _run(args) -> int:
         return _print(args, rows, _fanout_text)
 
     if command == 'working':
-        rows = dsh_board_working(base=base)
-        return _print(args, rows, _working_line if args.line else _working_text)
+        status = dsh_board_motors_busy(base=base)
+        if args.line:
+            return _print(args, status, _working_line)
+        return _print(args, status['working'], _working_text)
+
+    if command == 'inbox' and args.count:
+        return _print(args, dsh_board_inbox_count(base=base), str)
 
     if command == 'inbox':
         rows = dsh_board_inbox(base=base)
         if args.take:
             for row in rows:
-                dsh_board_inbox_take(row['session'], row['seq'])
+                dsh_board_inbox_take(row['session'], row['turns'])
         return _print(args, rows, _inbox_text)
 
     if command == 'diff':
@@ -113,6 +119,15 @@ def _run(args) -> int:
             raise ValueError(f'у карточки {args.session} нет каталога')
         return _print(args, {'session': args.session, 'cwd': cwd,
                              'diff': dsh_worktree_diff(cwd, args.stat)}, lambda v: v['diff'])
+
+    if command == 'land':
+        item = dsh_session_find(args.session, base=base)
+        message = args.message or f"dsh: {(item.get('projections') or {}).get('values', {}).get('title') or args.session}"
+        result = dsh_worktree_land(item.get('cwd') or '', message)
+        # Работа принята: карточка и проект её копии на панели больше не нужны.
+        dsh_session_archive(args.session, base=base)
+        dsh_board_workspace_drop(item.get('cwd') or '', base=base)
+        return _print(args, result, lambda v: f"ветка {v['branch']} слита: {v['merged']}; копия и карточка убраны")
 
     if command == 'drop-worktree':
         cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
@@ -143,7 +158,7 @@ def _run(args) -> int:
 
     if command == 'answer':
         answer = dsh_session_answer_last(args.session, base=base)
-        dsh_board_inbox_take(args.session, dsh_session_cursor(args.session, base=base))
+        dsh_board_inbox_take(args.session, dsh_board_turns(dsh_session_find(args.session, base=base)))
         return _print(args, {'session': args.session, 'answer': answer}, lambda v: v['answer'])
 
     if command == 'history':
@@ -249,6 +264,9 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     diff = command('diff', 'что субагент поменял в своей копии репозитория')
     diff.add_argument('session')
     diff.add_argument('--stat', action='store_true', help='только сводка по файлам')
+    land = command('land', 'принять работу субагента: коммит в его ветке, слияние в основную копию, уборка')
+    land.add_argument('session')
+    land.add_argument('--message', default=None, help='сообщение коммита незакоммиченного (по умолчанию «dsh: <имя>»)')
     drop_tree = command('drop-worktree', 'убрать копию репозитория карточки (ветка остаётся)')
     drop_tree.add_argument('session')
     drop_tree.add_argument('--force', action='store_true', help='и с незакоммиченными правками')
@@ -263,8 +281,9 @@ def _parser(prog: str) -> argparse.ArgumentParser:
         '--all', action='store_true', help='все карточки хоста, а не только агентские')
     command('revive', 'продолжить агентские круги, оборванные перезапуском хоста').add_argument(
         '--dry', action='store_true', help='только показать')
-    command('inbox', 'агентские карточки с непрочитанными ответами').add_argument(
-        '--take', action='store_true', help='отметить показанное прочитанным')
+    inbox = command('inbox', 'агентские карточки с непрочитанными ответами')
+    inbox.add_argument('--take', action='store_true', help='отметить показанное прочитанным')
+    inbox.add_argument('--count', action='store_true', help='только число — для статусной строки')
 
     history = command('history', 'промпты и ответы карточки')
     history.add_argument('session')
@@ -372,12 +391,14 @@ def _working_text(rows: list) -> str:
                      f"{'  — ' + row['goal'] if row['goal'] else '  — работа руками'}" for row in rows)
 
 
-def _working_line(rows: list) -> str:
-    """`DSH 2: ревью dsh_board · Часовая сверка…` — пусто, если никто не работает."""
+def _working_line(status: dict) -> str:
+    """`DSH 0/4` в простое, `DSH 2/4: ревью dsh_board · Часовая сверка…` в работе."""
+    rows = status['working']
+    head = f"DSH {len(rows)}/{status['capacity']}"
     if not rows:
-        return ''
+        return head
     parts = [_short(row['goal'] or row['title'] or row['session'], 28) for row in rows]
-    return f"DSH {len(rows)}: {' · '.join(parts)}"
+    return f"{head}: {' · '.join(parts)}"
 
 
 def _short(text: str, limit: int) -> str:
