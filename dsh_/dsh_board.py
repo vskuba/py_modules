@@ -73,10 +73,11 @@ DSH_BOARD_WORKTREE_TEST_ASK = (
     'код основной выкладки, не твой: проверять правку на нём бессмысленно. Свой сервер над '
     'копией и тесты против него — одной командой (сервер поднимется и снимется сам, '
     'параллельно с соседями можно):\n'
-    '  PYTHONPATH={root}/py_modules {python} -m project_.project_worktree test '
+    '  PYTHONPATH={layer} {python} -m project_.project_worktree test '
     'tests/test_<что_правил>.py --worktree {path}\n'
     'Гоняй файлы, которые касаются твоей правки, и новые тесты, если писал. Код возврата 0 — '
-    'зелено. В ответе — что прогнал и сколько прошло; не прогнал — скажи почему.')
+    'зелено. Общий сервер задачи (:8013, task_server.sh, project_worktree up/down) НЕ трогай: '
+    'на нём работает QA конвейера. В ответе — что прогнал и сколько прошло; не прогнал — скажи почему.')
 DSH_BOARD_BRIEF_CHARS = 700
 # Уборка: сколько дней тишины у агентской карточки, чтобы её убрать, и примета копии репо.
 DSH_BOARD_GC_DAYS = 1
@@ -728,11 +729,15 @@ def dsh_board_worktree_test_ask(tree: dict) -> str:
 
     Пусто, если в проекте нет общего слоя с `project_worktree` — подсказывать нечего.
     """
-    root = tree.get('root') or ''
-    if not os.path.isfile(os.path.join(root, 'py_modules', 'project_', 'project_worktree.py')):
+    # ⚠ Слой — тот, откуда загружен сам dsh_board, а не `py_modules` проекта: чекаут проекта
+    # бывает старше, и команды `test` в нём нет — субагент тогда собирал круг руками на
+    # общем сервере задачи (:8013), который делит с QA конвейера.
+    layer = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isfile(os.path.join(layer, 'project_', 'project_worktree.py')):
         return ''
+    root = tree.get('root') or ''
     venv = os.path.join(root, '.venv', 'bin', 'python3')
-    return DSH_BOARD_WORKTREE_TEST_ASK.format(path=tree['path'], root=root,
+    return DSH_BOARD_WORKTREE_TEST_ASK.format(path=tree['path'], layer=layer,
                                               python=venv if os.path.exists(venv) else 'python3')
 
 
