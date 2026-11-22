@@ -41,12 +41,17 @@ import time
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
     DshApiUnavailable, DshApiUnreachable, dsh_api_get, dsh_api_post
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_cursor, \
-    dsh_session_list, dsh_session_prompt, dsh_session_reply_wait, dsh_session_title
+    dsh_session_history, dsh_session_list, dsh_session_prompt, dsh_session_title, \
+    dsh_session_turn_reply
 
 # Потолок ожидания ответа субагента по умолчанию, с.
 DSH_BOARD_WAIT_TIMEOUT = 1800
 # Шаг, с которым переспрашивать хост, не ответивший вовремя.
 DSH_BOARD_RETRY_POLL = 2.0
+# Сколько раз продолжать круг, оборванный перезапуском хоста, и чем.
+DSH_BOARD_RESUME_TRIES = 2
+DSH_BOARD_RESUME_TEXT = ('Хост перезапустился посреди твоего круга, и он оборвался. Продолжай '
+                         'задачу с того места, где остановился, и дай полный ответ.')
 # Сколько ждать, пока у хоста после перезапуска поднимутся службы, с.
 DSH_BOARD_STARTUP_WAIT = 120
 # Выжимка ответа: просьба к субагенту и пределы, которыми её режем, если он не послушал.
@@ -54,6 +59,8 @@ DSH_BOARD_BRIEF_ASK = ('\n\nНачни ответ с блока «ИТОГ:» �
                        'подробности. Оркестратор читает только итог, подробности — по необходимости.')
 DSH_BOARD_BRIEF_LINES = 5
 DSH_BOARD_BRIEF_CHARS = 700
+# Сколько самых затратных карточек показывать в статистике.
+DSH_BOARD_STATS_TOP = 5
 # Отметки «ответ прочитан» по агентским карточкам: ключ карточки → seq журнала.
 DSH_BOARD_INBOX = 'dsh-board.inbox.json'
 # Кэш подписей карточек для `dsh_board_working` и сколько он живёт, с.
@@ -219,8 +226,9 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Задача субагенту: промпт в карточку; с `wait` — дождаться конца круга и ответа.
 
-    Ответ — на **свой** промпт (`dsh_session_reply_wait`), а не первый конец круга после
-    отправки: карточка могла быть занята чужим кругом.
+    Ответ — на **свой** промпт (`dsh_session_turn_reply`), а не первый конец круга после
+    отправки: карточка могла быть занята чужим кругом. Круг, оборванный перезапуском хоста
+    (`turn/end` с причиной `interrupted`), продолжается сам — до `DSH_BOARD_RESUME_TRIES` раз.
 
     Args:
         wait: ждать конца круга и вернуть ответ; без него промпт встаёт в очередь
@@ -244,10 +252,23 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
              retry=(DshApiUnavailable,))
     if not wait:
         return ''
-    answer = dsh_session_reply_wait(session, mark, text, max(0.0, deadline - time.time()), base=base)
-    if answer is None:
-        raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
-                            f'dsh-board inbox')
+    asked = text
+    for resumed in range(DSH_BOARD_RESUME_TRIES + 1):
+        reply = dsh_session_turn_reply(session, mark, asked, max(0.0, deadline - time.time()), base=base)
+        if reply is None:
+            raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
+                                f'dsh-board inbox')
+        if reply['reason'] != 'interrupted' or resumed == DSH_BOARD_RESUME_TRIES:
+            break
+        # Хост перезапустился посреди круга и закрыл его: промежуточная реплика — не
+        # ответ. Просим продолжить с того же места, и ждём уже конца нового круга.
+        mark, asked = reply['seq'], DSH_BOARD_RESUME_TEXT
+        _patient(lambda: dsh_session_prompt(session, asked, base=base), DSH_BOARD_STARTUP_WAIT,
+                 retry=(DshApiUnavailable,))
+    answer = reply['text']
+    if reply['reason'] == 'interrupted':
+        raise DshBoardError(f'круг в {session} обрывался {DSH_BOARD_RESUME_TRIES + 1} раза — '
+                            f'последняя реплика: {dsh_board_brief(answer)}')
     # Ответ получен — во «входящих» его больше нет.
     with contextlib.suppress(DshApiError, OSError):
         dsh_board_inbox_take(session, dsh_session_cursor(session, base=base))
@@ -282,6 +303,72 @@ def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
             rows.append({'session': key, 'title': dsh_session_title(item), 'seq': seq,
                          'brief': dsh_board_brief(answer)})
     return rows
+
+
+def dsh_board_resume(dry: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Продолжить агентские круги, оборванные перезапуском хоста, — у карточек, которых никто не ждёт.
+
+    Перезапуск хоста закрывает идущий круг записью `turn/end` с причиной `interrupted`.
+    Карточку, которую ждёт `dsh_board_ask`, он продолжит сам; здесь — остальные: агентская
+    карточка, не в архиве, круг не идёт, и последний конец круга в журнале — оборванный.
+
+    Args:
+        dry: только показать, ничего не отправлять.
+
+    Returns:
+        `[{session, title}]` — продолженные (или найденные, при `dry`).
+    """
+    state = dsh_board_state(base=base)
+    robots = set(state.get('robots') or [])
+    archived = set(state.get('archived') or [])
+    rows = []
+    for item in dsh_session_list(base=base):
+        session = item.get('sessionId') or ''
+        key = re.sub(r'-g\d+$', '', session)
+        if key not in robots or session in archived or item.get('running'):
+            continue
+        ends = [event for event in dsh_session_history(session, 2, base=base)
+                if event.get('type') == 'turn/end']
+        reason = (((ends[-1].get('data') or {}).get('reason')) or {}).get('kind') if ends else ''
+        if reason != 'interrupted':
+            continue
+        if not dry:
+            dsh_session_prompt(session, DSH_BOARD_RESUME_TEXT, base=base)
+        rows.append({'session': key, 'title': dsh_session_title(item)})
+    return rows
+
+
+def dsh_board_stats(all_sessions: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Сколько токенов отработали субагенты — работа, которую иначе сделал бы оркестратор.
+
+    Считает проекцию `tokenUsage`, которую хост держит у каждой карточки: входные без
+    кэша, выходные, чтение и запись кэша. По умолчанию — только агентские карточки
+    (`robots` доски, архивные тоже: работа уже сделана).
+
+    Args:
+        all_sessions: считать все карточки хоста, а не только агентские.
+
+    Returns:
+        `{sessions, uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+        top: [{session, title, tokens}]}` — `top` по убыванию входных+выходных.
+    """
+    robots = set(dsh_board_state(base=base).get('robots') or [])
+    keys = ('uncachedInputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens')
+    total = dict.fromkeys(keys, 0)
+    rows = []
+    for item in dsh_session_list(base=base):
+        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
+        if not all_sessions and key not in robots:
+            continue
+        usage = ((item.get('projections') or {}).get('values') or {}).get('tokenUsage') or {}
+        if not usage:
+            continue
+        for name in keys:
+            total[name] += int(usage.get(name) or 0)
+        rows.append({'session': key, 'title': dsh_session_title(item),
+                     'tokens': int(usage.get('uncachedInputTokens') or 0) + int(usage.get('outputTokens') or 0)})
+    rows.sort(key=lambda row: row['tokens'], reverse=True)
+    return {'sessions': len(rows), **total, 'top': rows[:DSH_BOARD_STATS_TOP]}
 
 
 def dsh_board_inbox_take(session: str, seq: int) -> None:

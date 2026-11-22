@@ -160,31 +160,28 @@ def dsh_session_answer_last(session: str, after: int = 0, *,
     return ''
 
 
-def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float = 1800, *,
+def dsh_session_turn_reply(session: str, after: int, text: str, timeout: float = 1800, *,
                            base: str = DSH_API_ADDR_DEFAULT):
-    """Дождаться ответа карточки на **свой** промпт и вернуть его текст.
+    """Дождаться конца круга на **свой** промпт: текст ответа и почему круг кончился.
 
     Ответ привязан к своему промпту, а не к первому концу круга после засечки: карточка
     могла быть занята чужим кругом (работа руками, заход доски, соседняя задача того же
-    `fanout`), и первым после засечки лёг бы его `turn/end` — чужой ответ выдался бы за
-    наш, а наш потерялся. Поэтому: в журнале ищется свой `user/message` — новее засечки
-    `after` и с тем же текстом; затем `turn/end` после него; ответ — последнее сообщение
-    агента между ними, а не текущий хвост (следующий круг мог уже кончиться).
+    `fanout`), и первым после засечки лёг бы его `turn/end`. Поэтому: в журнале ищется
+    свой `user/message` — новее засечки `after` и с тем же текстом; затем `turn/end`
+    после него; ответ — последнее сообщение агента между ними, а не текущий хвост.
+
+    ⚠ Перезапуск хоста закрывает идущий круг записью `turn/end` с причиной
+    `interrupted` — промежуточная реплика («ищу…») тогда не ответ. Причину отдаём наверх:
+    решать, продолжать ли круг, — вызывающему (`dsh_board_ask` продолжает сам).
 
     Переспрашиваются «хост не ответил» и «служба ещё не поднялась»; прочие ошибки —
-    нет такой карточки, 401, отказ метода — уходят наверх сразу, ожиданием их не исправить.
+    нет такой карточки, 401, отказ метода — уходят наверх сразу.
 
-    ⚠ Два одинаковых промпта в одну карточку подряд неразличимы по тексту: оба вызова
-    найдут первый. Разные задачи в одну карточку — различимы.
-
-    Args:
-        after: засечка журнала до отправки (`dsh_session_cursor`).
-        text: текст отправленного промпта.
-        timeout: потолок ожидания, с.
+    ⚠ Два одинаковых промпта в одну карточку подряд неразличимы по тексту.
 
     Returns:
-        Текст ответа (пустая строка — круг кончился без текста), либо `None` — не
-        дождались за `timeout`.
+        `{"text", "reason", "seq"}` — `reason` из `turn/end` (`completed`, `interrupted`,
+        …), `seq` — его номер в журнале; `None` — не дождались за `timeout`.
     """
     deadline = time.time() + timeout
     asked = ' '.join(str(text).split())
@@ -198,13 +195,26 @@ def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float =
             mine = next((event.get('seq', 0) for event in events
                          if event.get('seq', 0) > after and _is_prompt(event, asked)), 0)
         if mine:
-            end = next((event.get('seq', 0) for event in events
-                        if event.get('type') == 'turn/end' and event.get('seq', 0) > mine), 0)
-            if end:
-                return _reply_between(events, mine, end)
+            end = next((event for event in events
+                        if event.get('type') == 'turn/end' and event.get('seq', 0) > mine), None)
+            if end is not None:
+                reason = (((end.get('data') or {}).get('reason')) or {}).get('kind') or 'completed'
+                return {'text': _reply_between(events, mine, end.get('seq', 0)), 'reason': reason,
+                        'seq': end.get('seq', 0)}
         if time.time() >= deadline:
             return None
         time.sleep(DSH_SESSION_POLL)
+
+
+def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float = 1800, *,
+                           base: str = DSH_API_ADDR_DEFAULT):
+    """Текст ответа на свой промпт (`dsh_session_turn_reply`); `None` — не дождались.
+
+    Причину конца круга не отдаёт — кому важен оборванный круг, тот зовёт
+    `dsh_session_turn_reply`.
+    """
+    reply = dsh_session_turn_reply(session, after, text, timeout, base=base)
+    return None if reply is None else reply['text']
 
 
 def dsh_session_message_text(message: dict) -> str:

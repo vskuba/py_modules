@@ -25,12 +25,14 @@ import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
-    dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_take, \
+    dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_take, dsh_board_resume, \
+    dsh_board_stats, \
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_set, \
     dsh_board_session_new, dsh_board_working, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
-    dsh_session_cancel, dsh_session_cursor, dsh_session_dialog
+    dsh_session_cancel, dsh_session_cursor, dsh_session_dialog, dsh_session_find
+from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_new
 
 
 def dsh_board_cli_main(argv: list = None, prog: str = 'dsh-board') -> int:
@@ -57,7 +59,12 @@ def _run(args) -> int:
         return _print(args, dsh_board_sessions(args.all, base=base), _sessions_text)
 
     if command == 'new':
-        session = dsh_board_session_new(args.cwd, args.title, args.full_access, base=base)
+        cwd = args.cwd
+        if args.worktree:
+            tree = dsh_worktree_new(args.cwd, args.title)
+            cwd = tree['path']
+            print(f"копия репозитория: {tree['path']} (ветка {tree['branch']})", file=sys.stderr)
+        session = dsh_board_session_new(cwd, args.title, args.full_access, base=base)
         if args.ask is None:
             return _print(args, {'session': session}, lambda v: v['session'])
         answer = dsh_board_ask(session, _asked(args, args.ask), args.wait, args.timeout, args.image,
@@ -99,6 +106,27 @@ def _run(args) -> int:
             for row in rows:
                 dsh_board_inbox_take(row['session'], row['seq'])
         return _print(args, rows, _inbox_text)
+
+    if command == 'diff':
+        cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
+        if not cwd:
+            raise ValueError(f'у карточки {args.session} нет каталога')
+        return _print(args, {'session': args.session, 'cwd': cwd,
+                             'diff': dsh_worktree_diff(cwd, args.stat)}, lambda v: v['diff'])
+
+    if command == 'drop-worktree':
+        cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
+        dsh_worktree_drop(cwd, args.force)
+        return _print(args, {'removed': cwd}, lambda v: f"копия убрана: {v['removed']}")
+
+    if command == 'stats':
+        return _print(args, dsh_board_stats(args.all, base=base), _stats_text)
+
+    if command == 'revive':
+        rows = dsh_board_resume(args.dry, base=base)
+        verb = 'оборван' if args.dry else 'продолжен'
+        return _print(args, rows, lambda v: '\n'.join(f"🤖 {r['title'] or r['session']} — {verb}" for r in v)
+                      or 'оборванных агентских кругов нет')
 
     if command == 'answer':
         answer = dsh_session_answer_last(args.session, base=base)
@@ -185,6 +213,8 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     new.add_argument('cwd')
     new.add_argument('title')
     new.add_argument('--full-access', action='store_true', help='полный доступ карточке')
+    new.add_argument('--worktree', action='store_true',
+                     help='своя копия репозитория (git worktree) на своей ветке — для задач с правкой кода')
     new.add_argument('--ask', default=None, help='сразу отправить промпт (`-` — stdin)')
     _wait_args(new)
 
@@ -203,6 +233,16 @@ def _parser(prog: str) -> argparse.ArgumentParser:
         '--line', action='store_true', help='одной строкой — для статусной строки')
 
     command('answer', 'последний ответ карточки (и отметить прочитанным)').add_argument('session')
+    diff = command('diff', 'что субагент поменял в своей копии репозитория')
+    diff.add_argument('session')
+    diff.add_argument('--stat', action='store_true', help='только сводка по файлам')
+    drop_tree = command('drop-worktree', 'убрать копию репозитория карточки (ветка остаётся)')
+    drop_tree.add_argument('session')
+    drop_tree.add_argument('--force', action='store_true', help='и с незакоммиченными правками')
+    command('stats', 'сколько токенов отработали субагенты').add_argument(
+        '--all', action='store_true', help='все карточки хоста, а не только агентские')
+    command('revive', 'продолжить агентские круги, оборванные перезапуском хоста').add_argument(
+        '--dry', action='store_true', help='только показать')
     command('inbox', 'агентские карточки с непрочитанными ответами').add_argument(
         '--take', action='store_true', help='отметить показанное прочитанным')
 
@@ -336,6 +376,17 @@ def _fanout_text(rows: list) -> str:
         else:
             blocks.append(f"{head}\n{row['answer']}")
     return '\n\n'.join(blocks)
+
+
+def _stats_text(stats: dict) -> str:
+    def k(value):
+        return f'{value / 1000:,.0f}k'.replace(',', ' ')
+    lines = [f"агентских карточек: {stats['sessions']}",
+             f"входные без кэша: {k(stats['uncachedInputTokens'])} · выходные: {k(stats['outputTokens'])} · "
+             f"чтение кэша: {k(stats['cacheReadTokens'])} · запись кэша: {k(stats['cacheWriteTokens'])}",
+             'самые затратные:']
+    lines += [f"  {k(row['tokens'])}  {row['title'] or row['session']}" for row in stats['top']]
+    return '\n'.join(lines)
 
 
 def _inbox_text(rows: list) -> str:
