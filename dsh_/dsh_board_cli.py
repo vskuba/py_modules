@@ -31,6 +31,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
+from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
@@ -85,18 +86,23 @@ def _run(args) -> int:
         tasks = json.loads(raw)
         if not isinstance(tasks, list):
             raise ValueError('fanout ждёт JSON-список задач')
-        if args.out_dir:
-            tasks = [{**task, 'text': task['text'] + DSH_BOARD_BRIEF_ASK} for task in tasks]
-        rows = dsh_board_fanout(tasks, args.timeout, base=base)
-        if args.out_dir:
-            os.makedirs(args.out_dir, exist_ok=True)
-            for index, row in enumerate(rows, 1):
-                path = os.path.join(args.out_dir, f'{index}.md')
-                with open(path, 'w', encoding='utf-8') as handle:
-                    handle.write(row['answer'] or row['error'])
-                row.update(out=path, brief=dsh_board_brief(row['answer']))
-                row.pop('answer')
+        if not args.out_dir:
+            return _print(args, dsh_board_fanout(tasks, args.timeout, base=base), _fanout_text)
+        tasks = [{**task, 'text': task['text'] + DSH_BOARD_BRIEF_ASK} for task in tasks]
+        # Журнал раздачи на диске — карточка сразу, ответ сразу: оборванный fanout
+        # дособирается `collect`, а не теряет готовое.
+        rows = dsh_board_fanout(
+            tasks, args.timeout,
+            on_start=lambda i, row: dsh_fanout_log_start(args.out_dir, i, row, tasks[i].get('title') or ''),
+            on_done=lambda i, row: dsh_fanout_log_done(args.out_dir, i, row), base=base)
+        for index, row in enumerate(rows):
+            row.update(out=os.path.join(args.out_dir, f'{index + 1}.md'), brief=dsh_board_brief(row['answer']))
+            row.pop('answer')
         return _print(args, rows, _fanout_text)
+
+    if command == 'collect':
+        rows = dsh_fanout_log_collect(args.out_dir, args.timeout, base=base)
+        return _print(args, rows, _collect_text)
 
     if command == 'working':
         status = dsh_board_motors_busy(base=base)
@@ -270,6 +276,10 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     fanout.add_argument('--out-dir', default=None, metavar='КАТАЛОГ',
                         help='полные ответы — в КАТАЛОГ/N.md, в вывод — только итоги')
 
+    collect = command('collect', 'дособрать ответы оборванного fanout по его журналу')
+    collect.add_argument('out_dir', metavar='КАТАЛОГ', help='тот же --out-dir, что был у fanout')
+    collect.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
+
     working = command('working', 'кто из агентов работает сейчас и над чем')
     working.add_argument('--line', action='store_true', help='одной строкой — для статусной строки')
     working.add_argument('--session', default='', metavar='ID',
@@ -420,6 +430,26 @@ def _working_line(status: dict) -> str:
         return head
     parts = [_short(row['goal'] or row['title'] or row['session'], 28) for row in rows]
     return f"{head}: {' · '.join(parts)}"
+
+
+def _collect_text(rows: list) -> str:
+    if not rows:
+        return 'журнала раздачи нет'
+    lines = []
+    for index, row in enumerate(rows, 1):
+        mark = {'done': '✓', 'error': '✗', 'running': '…'}.get(row.get('state'), '?')
+        lines.append(f"{mark} #{index} {row.get('title') or row.get('session') or '—'}"
+                     + (f"\n{dsh_board_brief(_read(row['out']))}\n(полный ответ: {row['out']})"
+                        if row.get('state') == 'done' and row.get('out') else ''))
+    return '\n'.join(lines)
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return handle.read()
+    except OSError:
+        return ''
 
 
 def _saving_text(rows: list) -> str:

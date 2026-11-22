@@ -564,7 +564,8 @@ def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
     длиннее `limit` символов.
     """
     text = (answer or '').strip()
-    match = re.search(r'(?im)^\W*итог\W*:?\s*(.+?)(?:\n\s*\n|\Z)', text, re.DOTALL)
+    # После «ИТОГ» — только разметка (`**`, `:`), не первый знак самого итога (`код`).
+    match = re.search(r'(?im)^\W*итог[*_]*\s*:?[*_]*[ \t]*(.+?)(?:\n\s*\n|\Z)', text, re.DOTALL)
     brief = match.group(1).strip() if match else '\n'.join(text.splitlines()[:DSH_BOARD_BRIEF_LINES])
     if len(brief) <= limit:
         return brief
@@ -599,7 +600,7 @@ def dsh_board_motor_wait(timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
         time.sleep(DSH_BOARD_RETRY_POLL)
 
 
-def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
+def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_start=None, on_done=None, *,
                      base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Раздать задачи субагентам разом и собрать ответы — в порядке задач.
 
@@ -610,11 +611,22 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
     разом, но не больше, чем свободных моторов: лишние ждут (`dsh_board_motor_wait`).
     Несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
 
+    Args:
+        on_start: `(index, row)` — задача получила карточку (`row`: session, worktree,
+            branch); зовётся до промпта, чтобы оборванный `fanout` можно было дособрать.
+        on_done: `(index, row)` — задача кончилась; зовётся сразу, а не после всех.
+            Сбой обоих колбэков задачу не роняет.
+
     Returns:
         `[{session, answer, error}]` — у удавшейся `error` пустой; одна сорвавшаяся
         задача остальных не роняет.
     """
     results = [None] * len(tasks)
+
+    def tell(callback, index, row):
+        if callback:
+            with contextlib.suppress(Exception):
+                callback(index, row)
     # Общий замок задач: каждая ждёт свободный мотор — задач больше, чем моторов, не
     # уходит в модель разом; лишние ждут, пока освободится мотор.
     gate = threading.Lock()
@@ -631,13 +643,17 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
                     cwd = tree['path']
                 session = dsh_board_session_new(cwd, task.get('title') or 'задача',
                                                 bool(task.get('fullAccess', True)), base=base)
+            tell(on_start, index, {'session': session, **({'worktree': tree['path'], 'branch': tree['branch']}
+                                                         if tree else {})})
             answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
                                    images=task.get('images'), gate=gate, base=base)
             results[index] = {'session': session, 'answer': answer, 'error': '',
                               **({'worktree': tree['path'], 'branch': tree['branch']} if tree else {})}
         except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
             results[index] = {'session': session, 'answer': '', 'error': f'{type(error).__name__}: {error}'}
+            tell(on_done, index, results[index])
             return
+        tell(on_done, index, results[index])
         # Архив — только после ответа: сорвавшаяся задача могла оставить живой круг, и
         # архив оборвал бы его, а ответ из журнала ещё можно добрать.
         if task.get('archive') and session and not task.get('session') and not tree:
