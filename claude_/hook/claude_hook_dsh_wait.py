@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from claude_.hook.claude_hook import claude_hook_stop_run  # noqa: E402
+from dsh_.dsh_board import dsh_board_waited  # noqa: E402
 from dsh_.dsh_wait import dsh_wait_pending, dsh_wait_waiter_alive  # noqa: E402
 
 CLAUDE_HOOK_DSH_WAIT_TEXT = (
@@ -32,7 +33,8 @@ def claude_hook_dsh_wait_check(data: dict) -> str:
     owner = data.get('session_id') or ''
     if not owner:
         return ''
-    pending = dsh_wait_pending(owner)
+    # Ответ ждёт живой процесс (`ask --wait`, `fanout` в фоне) — он и разбудит, когда выйдет.
+    pending = [key for key in dsh_wait_pending(owner) if key not in dsh_board_waited()]
     if not pending or dsh_wait_waiter_alive(owner):
         return ''
     out = os.path.join(os.environ.get('TMPDIR') or '/tmp', f'dsh-wait-{owner[:8]}')

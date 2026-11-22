@@ -398,7 +398,7 @@ def dsh_board_resume(dry: bool = False, recent: float = None, *, base: str = DSH
     robots = set(state.get('robots') or [])
     archived = set(state.get('archived') or [])
     edge = (time.time() - recent) * 1000 if recent else 0
-    waited = _waited()
+    waited = dsh_board_waited()
     revived = _json_read(_home_path(DSH_BOARD_REVIVED)) or {}
     rows = []
     for item in dsh_session_list(base=base):
@@ -747,6 +747,12 @@ def dsh_board_worktree_test_ask(tree: dict) -> str:
                                               python=venv if os.path.exists(venv) else 'python3')
 
 
+def dsh_board_waited() -> set:
+    """Карточки, ответ которых прямо сейчас ждёт живой процесс (`ask --wait`, `fanout`)."""
+    rows = _json_read(_home_path(DSH_BOARD_WAITING)) or {}
+    return {key for key, pid in rows.items() if _pid_alive(pid)}
+
+
 def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Карточка, у которой живёт цель доски: от её имени цель и правят."""
     for goal in dsh_board_state(base=base).get('goals', []):
@@ -785,12 +791,6 @@ def _waiting_edit(change) -> None:
         rows = _json_read(path) or {}
         change(rows)
         _json_write(path, rows)
-
-
-def _waited() -> set:
-    """Карточки, ответ которых ждёт живой процесс."""
-    rows = _json_read(_home_path(DSH_BOARD_WAITING)) or {}
-    return {key for key, pid in rows.items() if _pid_alive(pid)}
 
 
 def _pid_alive(pid) -> bool:
