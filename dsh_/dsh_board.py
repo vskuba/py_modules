@@ -65,6 +65,17 @@ DSH_BOARD_BRIEF_ASK = ('\n\nФОРМАТ ОТВЕТА ОБЯЗАТЕЛЕН: пе
                        'коротких строк сути (не длиннее 600 символов вместе), затем пустая строка и '
                        'подробности. Никаких вступлений до «ИТОГ:». Оркестратор читает только итог.')
 DSH_BOARD_BRIEF_LINES = 5
+# Пишущей задаче в своей копии — как прогнать тесты именно на её коде: свой одноразовый
+# сервер над копией (`project_worktree_test`), не общий стенд с кодом основной выкладки.
+DSH_BOARD_WORKTREE_TEST_ASK = (
+    '\n\nТЕСТЫ НА ТВОЁМ КОДЕ. Твоя копия репозитория — {path}. Общий стенд (:8011) крутит '
+    'код основной выкладки, не твой: проверять правку на нём бессмысленно. Свой сервер над '
+    'копией и тесты против него — одной командой (сервер поднимется и снимется сам, '
+    'параллельно с соседями можно):\n'
+    '  PYTHONPATH={root}/py_modules {python} -m project_.project_worktree test '
+    'tests/test_<что_правил>.py --worktree {path}\n'
+    'Гоняй файлы, которые касаются твоей правки, и новые тесты, если писал. Код возврата 0 — '
+    'зелено. В ответе — что прогнал и сколько прошло; не прогнал — скажи почему.')
 DSH_BOARD_BRIEF_CHARS = 700
 # Уборка: сколько дней тишины у агентской карточки, чтобы её убрать, и примета копии репо.
 DSH_BOARD_GC_DAYS = 1
@@ -641,6 +652,7 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
                     # Пишущей задаче — своя копия репо: соседи по fanout не затрут друг друга.
                     tree = dsh_worktree_new(cwd, task.get('title') or 'задача')
                     cwd = tree['path']
+                    task = {**task, 'text': task['text'] + dsh_board_worktree_test_ask(tree)}
                 session = dsh_board_session_new(cwd, task.get('title') or 'задача',
                                                 bool(task.get('fullAccess', True)), base=base)
             tell(on_start, index, {'session': session, **({'worktree': tree['path'], 'branch': tree['branch']}
@@ -667,6 +679,19 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
     for thread in threads:
         thread.join()
     return results
+
+
+def dsh_board_worktree_test_ask(tree: dict) -> str:
+    """Строка к промпту пишущей задачи: как прогнать тесты на коде своей копии.
+
+    Пусто, если в проекте нет общего слоя с `project_worktree` — подсказывать нечего.
+    """
+    root = tree.get('root') or ''
+    if not os.path.isfile(os.path.join(root, 'py_modules', 'project_', 'project_worktree.py')):
+        return ''
+    venv = os.path.join(root, '.venv', 'bin', 'python3')
+    return DSH_BOARD_WORKTREE_TEST_ASK.format(path=tree['path'], root=root,
+                                              python=venv if os.path.exists(venv) else 'python3')
 
 
 def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) -> str:

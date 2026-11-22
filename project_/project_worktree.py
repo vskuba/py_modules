@@ -12,13 +12,24 @@ have been fully subnetted» на машине, где мостовых сете�
 выкладки (compose помнит проект от своего каталога — сеть берётся готовая),
 передать переменной путь каталога задачи, дождаться `/health`, вернуть base url
 для сюит. На выходе — снять сервис, пока каталог не удалён.
+
+Второй путь — `project_worktree_test`: **одноразовый** сервер на свою копию и прогон
+тестов против него. Сервис задачи один на машину (QA конвейера), а параллельных
+копий бывает несколько (`dsh-board fanout --worktree`) — им нужен каждому свой.
+
+```bash
+python -m project_.project_worktree test tests/test_x.py --worktree <копия>
+```
 """
 import argparse
 import asyncio
 import json
 import os
+import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 
 from pathlib import Path
 
@@ -92,7 +103,170 @@ def project_worktree_down(service: str = 'uvicorn_task') -> str:
     return f'сервис {name} снят'
 
 
+def project_worktree_test(targets: list, worktree: str = '', service: str = 'uvicorn_task',
+                          pytest_args: list = None, timeout: float = 120,
+                          test_timeout: float = 1800) -> dict:
+    """Прогнать тесты на коде своей копии репо: свой одноразовый сервер, сюита против него, уборка.
+
+    Сервер — контейнер того же образа, что `service` в compose основной выкладки, с той
+    же сетью, переменными и командой, но с копией вместо `/app`, на свободном порту
+    петли и со своим именем: параллельные копии не мешают ни друг другу, ни общему
+    серверу задачи. Сюита идёт с хоста интерпретатором основной выкладки
+    (`.venv`), `BASE_URL` — на этот сервер; контейнер снимается в любом исходе.
+
+    Args:
+        targets: что гонять — файлы/каталоги тестов относительно копии.
+        worktree: каталог копии; пусто — текущий.
+        service: compose-сервис, чьё описание берётся за образец.
+        pytest_args: добавочные флаги pytest (`['-k', 'x']`).
+        timeout: секунд на подъём сервера; test_timeout — на саму сюиту.
+
+    Returns:
+        `{code, output, base}` — код возврата pytest (0 — зелено), хвост вывода, адрес.
+
+    ⚠ База общая с основным стендом: тесты, как и всегда, заводят и чистят свои
+    данные сами. ⚠ Секреты `.env` идут в контейнер файлом 600, не аргументами
+    `docker run`: командная строка видна в `ps`.
+    """
+    wt = Path(worktree or Path.cwd()).resolve()
+    root = _main_of(wt)
+    _ensure_links(wt, root, PROJECT_WORKTREE_LINKS)
+    spec, network = _service_spec(root, service, wt)
+    name = f'{service}-{secrets.token_hex(3)}'
+    shared = _empty_submodules(wt, root)
+    _run_container(name, spec, network, wt, shared)
+    try:
+        try:
+            base = asyncio.run(_alive(_published(name), timeout=timeout))
+        except (TimeoutError, ValueError) as error:
+            logs = subprocess.run(['docker', 'logs', '--tail', '25', name], capture_output=True,
+                                  text=True, timeout=20)
+            raise TimeoutError(f'{error}\nжурнал контейнера:\n{(logs.stdout + logs.stderr)[-3000:]}') from error
+        env = {**os.environ, 'BASE_URL': base}
+        shim = tempfile.mkdtemp(prefix='worktree-shim-')
+        env['PYTHONPATH'] = _host_pythonpath(spec, root, shared, shim, env.get('PYTHONPATH', ''))
+        python = str(root / '.venv' / 'bin' / 'python3')
+        done = subprocess.run([python, '-m', 'pytest', *targets, '-q', *(pytest_args or [])],
+                              cwd=str(wt), env=env, capture_output=True, text=True, timeout=test_timeout)
+        output = (done.stdout + done.stderr)[-6000:]
+        return {'code': done.returncode, 'output': output, 'base': base}
+    finally:
+        _give_back(name, shared)
+        subprocess.run(['docker', 'rm', '-f', name], capture_output=True, timeout=60)
+        if 'shim' in locals():
+            shutil.rmtree(shim, ignore_errors=True)
+
+
 # ── детали реализации ──
+
+def _service_spec(root: Path, service: str, worktree: Path) -> tuple:
+    """Описание сервиса из `docker compose config` основной выкладки и имя его сети."""
+    env = {**os.environ, PROJECT_WORKTREE_DIR_VAR: str(worktree)}
+    done = subprocess.run(['docker', 'compose', '--profile', '*', 'config', '--format', 'json'],
+                          cwd=str(root), env=env, capture_output=True, text=True, timeout=60)
+    config = json.loads(done.stdout or '{}')
+    spec = (config.get('services') or {}).get(service)
+    if not spec:
+        raise ValueError(f'сервиса {service!r} нет в compose основной выкладки {root}')
+    nets = list((spec.get('networks') or {}).keys())
+    network = ((config.get('networks') or {}).get(nets[0]) or {}).get('name') if nets else None
+    return spec, network
+
+
+def _empty_submodules(worktree: Path, root: Path) -> list:
+    """Подмодули (`.gitmodules`), пустые в копии — `git worktree add` их не заводит, — но живые в основной.
+
+    ⚠ Не ссылкой в копии: git увидит подмену каталога, копия станет «грязной» — её не
+    снимет уборка и унесёт в коммит `land`. Подаются монтированием и `PYTHONPATH`.
+    """
+    names = project_git(root, 'config', '--file', '.gitmodules', '--get-regexp', r'\.path$') or ''
+    paths = [line.split(maxsplit=1)[1] for line in names.splitlines() if ' ' in line]
+    rows = []
+    for one in dict.fromkeys([*paths, *PROJECT_WORKTREE_LINKS]):
+        here, there = worktree / one, root / one
+        if here.is_dir() and not here.is_symlink() and not any(here.iterdir()) and there.is_dir():
+            rows.append(one)
+    return rows
+
+
+def _host_pythonpath(spec: dict, root: Path, shared: list, shim: str, inherited: str) -> str:
+    """`PYTHONPATH` сюиты на хосте — та же раскладка, что у приложения в контейнере.
+
+    Подмодули, пустые в копии, подкладываются ссылками во временную папку `shim`: пакет
+    (`dashboard.src…`) находится через неё, а копия не трогается. Записи `PYTHONPATH`
+    контейнера вида `/app/<подмодуль>` (`/app/py_modules`) — каталог основной выкладки.
+    ⚠ Не корень подмодуля целиком: у `dashboard` внутри свой `src`, и он перекрыл бы
+    `src` проекта — `No module named 'src.ai'`.
+    """
+    for one in shared:
+        os.symlink(root / one, os.path.join(shim, one))
+    rows = [shim]
+    for entry in _container_pythonpath(spec).split(':'):
+        name = entry[len('/app/'):] if entry.startswith('/app/') else ''
+        if name in shared:
+            rows.append(str(root / name))
+    return os.pathsep.join([*rows, inherited]).rstrip(os.pathsep)
+
+
+def _container_pythonpath(spec: dict) -> str:
+    """`PYTHONPATH` приложения: из описания сервиса, а нет там — из самого образа."""
+    value = (spec.get('environment') or {}).get('PYTHONPATH')
+    if value:
+        return str(value)
+    done = subprocess.run(['docker', 'image', 'inspect', spec.get('image') or '', '--format',
+                           '{{range .Config.Env}}{{println .}}{{end}}'],
+                          capture_output=True, text=True, timeout=30)
+    for line in (done.stdout or '').splitlines():
+        if line.startswith('PYTHONPATH='):
+            return line.split('=', 1)[1]
+    return ''
+
+
+def _give_back(name: str, shared: list) -> None:
+    """Вернуть хозяину копии то, что контейнер (root) в ней создал: журналы `data/log` и пр.
+
+    ⚠ Иначе `git worktree remove` падает на «Permission denied», и уборка копий встаёт.
+    Подмодули основной выкладки, смонтированные в `/app`, не трогаются.
+    """
+    skip = ' '.join(f"-path /app/{one} -prune -o" for one in shared)
+    script = f"find /app -xdev {skip} -user 0 -print0 | xargs -0 -r chown {os.getuid()}:{os.getgid()}"
+    subprocess.run(['docker', 'exec', name, 'sh', '-c', script], capture_output=True, timeout=120)
+
+
+def _run_container(name: str, spec: dict, network: str, worktree: Path, shared: list = ()) -> None:
+    """`docker run -d` по описанию сервиса: копия в `/app`, порт петли — свободный."""
+    cmd = ['docker', 'run', '-d', '--name', name, '-p', '127.0.0.1::8000']
+    if network:
+        cmd += ['--network', network]
+    for volume in spec.get('volumes') or []:
+        source = str(worktree) if volume.get('target') == '/app' else volume.get('source')
+        cmd += ['-v', f"{source}:{volume['target']}"]
+    root = _main_of(worktree)
+    for one in shared:
+        cmd += ['-v', f'{root / one}:/app/{one}']
+    for host in spec.get('extra_hosts') or []:
+        cmd += ['--add-host', host.replace('=', ':', 1)]
+    with tempfile.NamedTemporaryFile('w', suffix='.env', delete=False) as handle:
+        os.chmod(handle.name, 0o600)
+        for key, value in (spec.get('environment') or {}).items():
+            if value is not None and '\n' not in str(value):
+                handle.write(f'{key}={value}\n')
+    try:
+        command = spec.get('command') or []
+        subprocess.run(cmd + ['--env-file', handle.name, spec['image'], *command],
+                       check=True, capture_output=True, text=True, timeout=120)
+    finally:
+        os.unlink(handle.name)
+
+
+def _published(name: str) -> str:
+    """Адрес контейнера на петле по его опубликованному порту 8000."""
+    done = subprocess.run(['docker', 'port', name, '8000/tcp'], capture_output=True, text=True, timeout=20)
+    line = (done.stdout or '').splitlines()[0] if done.stdout else ''
+    if not line:
+        raise ValueError(f'контейнер {name} без опубликованного порта')
+    return f'http://127.0.0.1:{line.rsplit(":", 1)[-1]}'
+
 
 def _main_of(checkout: Path) -> Path:
     """Корень основной выкладки для этого checkout — родитель общего `.git`.
@@ -187,9 +361,11 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(
         description='Панель задачи над worktree: поднять и дождаться '
                     'здоровья, снять.')
-    ap.add_argument('command', choices=['up', 'down'],
+    ap.add_argument('command', choices=['up', 'down', 'test'],
                     help='up — поднять над каталогом и вернуть base url; '
-                         'down — снять сервис')
+                         'down — снять сервис; test — свой сервер и тесты на нём')
+    ap.add_argument('targets', nargs='*', help='test: файлы или каталоги тестов')
+    ap.add_argument('-k', default='', help='test: фильтр pytest -k')
     ap.add_argument('--worktree', default='', help='каталог задачи; пусто — '
                     'текущий')
     ap.add_argument('--service', default='uvicorn_task',
@@ -197,6 +373,11 @@ if __name__ == '__main__':
     ap.add_argument('--timeout', type=float, default=120, help='секунды')
     ns = ap.parse_args()
     try:
+        if ns.command == 'test':
+            result = project_worktree_test(ns.targets or ['tests'], ns.worktree, ns.service,
+                                           ['-k', ns.k] if ns.k else None, timeout=ns.timeout)
+            print(result['output'])
+            raise SystemExit(result['code'])
         if ns.command == 'up':
             print(asyncio.run(project_worktree_up(
                 ns.worktree, ns.service, timeout=ns.timeout)))

@@ -30,7 +30,8 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_gc, dsh_board_stats, dsh_board_verify, \
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
-    dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
+    dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool, \
+    dsh_board_worktree_test_ask
 from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
@@ -70,7 +71,8 @@ def _run(args) -> int:
         session = dsh_board_session_new(cwd, args.title, args.full_access, base=base)
         if args.ask is None:
             return _print(args, {'session': session}, lambda v: v['session'])
-        answer = dsh_board_ask(session, _asked(args, args.ask), args.wait, args.timeout, args.image,
+        asked = _asked(args, args.ask) + (dsh_board_worktree_test_ask(tree) if args.worktree else '')
+        answer = dsh_board_ask(session, asked, args.wait, args.timeout, args.image,
                                base=base)
         return _print(args, _answer_row(args, session, answer),
                       lambda v: f"{v['session']}\n{_answer_text(v)}".rstrip())
