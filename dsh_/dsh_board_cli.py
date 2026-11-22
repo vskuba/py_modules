@@ -24,7 +24,8 @@ import sys
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
-from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
+from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_auto, \
+    dsh_board_revive_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
     dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_count, dsh_board_inbox_take, \
     dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
     dsh_board_gc, dsh_board_stats, dsh_board_verify, \
@@ -169,7 +170,7 @@ def _run(args) -> int:
         return _print(args, rows + [dsh_saving_report(account_of=owner, base=base)], _saving_text)
 
     if command == 'revive':
-        rows = dsh_board_resume(args.dry, base=base)
+        rows = dsh_board_revive_auto(base=base) if args.auto else dsh_board_resume(args.dry, base=base)
         verb = 'оборван' if args.dry else 'продолжен'
         return _print(args, rows, lambda v: '\n'.join(f"🤖 {r['title'] or r['session']} — {verb}" for r in v)
                       or 'оборванных агентских кругов нет')
@@ -310,8 +311,10 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     verify.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
     command('stats', 'сколько токенов отработали субагенты').add_argument(
         '--all', action='store_true', help='все карточки хоста, а не только агентские')
-    command('revive', 'продолжить агентские круги, оборванные перезапуском хоста').add_argument(
-        '--dry', action='store_true', help='только показать')
+    revive = command('revive', 'продолжить агентские круги, оборванные перезапуском хоста')
+    revive.add_argument('--dry', action='store_true', help='только показать')
+    revive.add_argument('--auto', action='store_true',
+                        help='свежие обрывы, не чаще раза в 2 минуты — для статусной строки')
     inbox = command('inbox', 'агентские карточки с непрочитанными ответами')
     inbox.add_argument('--take', action='store_true', help='отметить показанное прочитанным')
     inbox.add_argument('--count', action='store_true', help='только число — для статусной строки')

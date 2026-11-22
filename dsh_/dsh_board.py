@@ -32,6 +32,7 @@ answers = dsh_board_fanout([{'cwd': '/p/a', 'title': 'a', 'text': '…'},
 ```
 """
 import contextlib
+import fcntl
 import json
 import os
 import re
@@ -82,6 +83,12 @@ DSH_BOARD_GC_DAYS = 1
 # Как часто уборка зовётся сама (статусная строка) и где метка последнего раза.
 DSH_BOARD_GC_EVERY = 3600
 DSH_BOARD_GC_STAMP = 'dsh-board.gc-stamp.json'
+# Автопродолжение оборванных кругов: как часто, какие свежие, что уже продолжено, кого ждут.
+DSH_BOARD_REVIVE_EVERY = 120
+DSH_BOARD_REVIVE_RECENT = 1800
+DSH_BOARD_REVIVE_STAMP = 'dsh-board.revive-stamp.json'
+DSH_BOARD_REVIVED = 'dsh-board.revived.json'
+DSH_BOARD_WAITING = 'dsh-board.waiting.json'
 DSH_BOARD_WORKTREE_MARK = '/.claude/worktrees/dsh-'
 # Задание проверяющему субагенту.
 DSH_BOARD_VERIFY_ASK = (
@@ -316,18 +323,20 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     if not wait:
         return ''
     asked = text
-    for resumed in range(DSH_BOARD_RESUME_TRIES + 1):
-        reply = dsh_session_turn_reply(session, mark, asked, max(0.0, deadline - time.time()), base=base)
-        if reply is None:
-            raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
-                                f'dsh-board inbox')
-        if reply['reason'] != 'interrupted' or resumed == DSH_BOARD_RESUME_TRIES:
-            break
-        # Хост перезапустился посреди круга и закрыл его: промежуточная реплика — не
-        # ответ. Просим продолжить с того же места, и ждём уже конца нового круга.
-        mark, asked = reply['seq'], DSH_BOARD_RESUME_TEXT
-        _patient(lambda: dsh_session_prompt(session, asked, base=base), DSH_BOARD_STARTUP_WAIT,
-                 retry=(DshApiUnavailable,))
+    # Пока ждём — карточка помечена: обрыв продолжаем здесь, `revive --auto` её не трогает.
+    with _waiting(session):
+        for resumed in range(DSH_BOARD_RESUME_TRIES + 1):
+            reply = dsh_session_turn_reply(session, mark, asked, max(0.0, deadline - time.time()), base=base)
+            if reply is None:
+                raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
+                                    f'dsh-board inbox')
+            if reply['reason'] != 'interrupted' or resumed == DSH_BOARD_RESUME_TRIES:
+                break
+            # Хост перезапустился посреди круга и закрыл его: промежуточная реплика — не
+            # ответ. Просим продолжить с того же места, и ждём уже конца нового круга.
+            mark, asked = reply['seq'], DSH_BOARD_RESUME_TEXT
+            _patient(lambda: dsh_session_prompt(session, asked, base=base), DSH_BOARD_STARTUP_WAIT,
+                     retry=(DshApiUnavailable,))
     answer = reply['text']
     if reply['reason'] == 'interrupted':
         raise DshBoardError(f'круг в {session} обрывался {DSH_BOARD_RESUME_TRIES + 1} раза — '
@@ -359,15 +368,21 @@ def dsh_board_inbox_count(*, base: str = DSH_API_ADDR_DEFAULT) -> int:
     return len(_inbox_scan(base))
 
 
-def dsh_board_resume(dry: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+def dsh_board_resume(dry: bool = False, recent: float = None, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Продолжить агентские круги, оборванные перезапуском хоста, — у карточек, которых никто не ждёт.
 
     Перезапуск хоста закрывает идущий круг записью `turn/end` с причиной `interrupted`.
     Карточку, которую ждёт `dsh_board_ask`, он продолжит сам; здесь — остальные: агентская
     карточка, не в архиве, круг не идёт, и последний конец круга в журнале — оборванный.
 
+    Каждый обрыв продолжается **один раз**: номер его `turn/end` запоминается
+    (`DSH_BOARD_REVIVED`), второй вызов его не тронет. Карточку, которую сейчас ждёт
+    `dsh_board_ask` (`_waiting`), пропускаем — он продолжит её сам, иначе ушло бы два промпта.
+
     Args:
         dry: только показать, ничего не отправлять.
+        recent: только карточки, обновлявшиеся за столько секунд: давний обрыв могли
+            бросить сознательно. None — все.
 
     Returns:
         `[{session, title}]` — продолженные (или найденные, при `dry`).
@@ -375,21 +390,48 @@ def dsh_board_resume(dry: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> 
     state = dsh_board_state(base=base)
     robots = set(state.get('robots') or [])
     archived = set(state.get('archived') or [])
+    edge = (time.time() - recent) * 1000 if recent else 0
+    waited = _waited()
+    revived = _json_read(_home_path(DSH_BOARD_REVIVED)) or {}
     rows = []
     for item in dsh_session_list(base=base):
         session = item.get('sessionId') or ''
         key = re.sub(r'-g\d+$', '', session)
-        if key not in robots or session in archived or item.get('running'):
+        if key not in robots or session in archived or item.get('running') or key in waited:
+            continue
+        if (item.get('updatedAt') or 0) < edge:
             continue
         ends = [event for event in dsh_session_history(session, 2, base=base)
                 if event.get('type') == 'turn/end']
         reason = (((ends[-1].get('data') or {}).get('reason')) or {}).get('kind') if ends else ''
-        if reason != 'interrupted':
+        if reason != 'interrupted' or revived.get(key) == ends[-1].get('seq'):
             continue
         if not dry:
             dsh_session_prompt(session, DSH_BOARD_RESUME_TEXT, base=base)
+            revived[key] = ends[-1].get('seq')
+            _json_write(_home_path(DSH_BOARD_REVIVED), revived)
         rows.append({'session': key, 'title': dsh_session_title(item)})
     return rows
+
+
+def dsh_board_revive_auto(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Продолжить свежие обрывы сами — раз в `DSH_BOARD_REVIVE_EVERY` секунд на машину.
+
+    Зовёт статусная строка: после перезапуска хоста агентские круги поднимаются без
+    человека. Смотрятся только карточки, обновлявшиеся за `DSH_BOARD_REVIVE_RECENT`, —
+    обычно их ноль, и вызов почти ничего не стоит. Сбой не роняет зовущего.
+    """
+    stamp = _home_path(DSH_BOARD_REVIVE_STAMP)
+    try:
+        if time.time() - os.path.getmtime(stamp) < DSH_BOARD_REVIVE_EVERY:
+            return []
+    except OSError:
+        pass
+    _json_write(stamp, {'at': time.time()})
+    try:
+        return dsh_board_resume(recent=DSH_BOARD_REVIVE_RECENT, base=base)
+    except (DshApiError, DshBoardError, OSError):
+        return []
 
 
 def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
@@ -711,6 +753,51 @@ def _merged(path: str) -> bool:
         return False
 
 
+@contextlib.contextmanager
+def _waiting(session: str):
+    """Пометка «эту карточку ждёт процесс N» на время ожидания ответа."""
+    key = re.sub(r'-g\d+$', '', session)
+    with contextlib.suppress(OSError):
+        _waiting_edit(lambda rows: rows.__setitem__(key, os.getpid()))
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            _waiting_edit(lambda rows: rows.pop(key) if rows.get(key) == os.getpid() else None)
+
+
+def _waiting_edit(change) -> None:
+    """Правка списка ждущих под файловым замком: его пишут потоки fanout и чужие процессы."""
+    path = _home_path(DSH_BOARD_WAITING)
+    with open(path + '.lock', 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rows = _json_read(path) or {}
+        change(rows)
+        _json_write(path, rows)
+
+
+def _waited() -> set:
+    """Карточки, ответ которых ждёт живой процесс."""
+    rows = _json_read(_home_path(DSH_BOARD_WAITING)) or {}
+    return {key for key, pid in rows.items() if _pid_alive(pid)}
+
+
+def _pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _json_read(path: str):
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
 def _capacity(state: dict) -> int:
     """Моторы включённых моделей по настройкам доски (запасной путь для старого плагина)."""
     motors = {(row.get('provider'), row.get('model')): row.get('motors') for row in state.get('motors') or []}
@@ -728,7 +815,7 @@ def _home_path(name: str) -> str:
 
 def _json_write(path: str, value) -> None:
     """Записать JSON целиком через временный файл: читающий не увидит полфайла."""
-    tmp = path + '.tmp'
+    tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'   # писателей бывает несколько разом
     with open(tmp, 'w', encoding='utf-8') as handle:
         json.dump(value, handle, ensure_ascii=False)
     os.replace(tmp, path)
