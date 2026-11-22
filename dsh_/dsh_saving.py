@@ -45,7 +45,10 @@ DSH_SAVING_CALIBRATION_FILE = '~/.cache/dsh-saving.calibration.json'
 DSH_SAVING_CALIBRATION_TTL = 300
 DSH_SAVING_REPORT_FILE = '~/.cache/dsh-saving.report.json'
 DSH_SAVING_REPORT_TTL = 60
-DSH_SAVING_MIN_PCT = 3
+# Меньше — калибровка шумная (процент целый, окно свежее), берётся прошлая того же аккаунта.
+DSH_SAVING_MIN_PCT = 10
+# Точка отсчёта метки: экономия сессии на начало текущего 5-часового окна её аккаунта.
+DSH_SAVING_BASELINE_FILE = '~/.cache/dsh-saving.baseline.json'
 DSH_SAVING_TRANSCRIPTS = '~/.claude/projects/**/*.jsonl'
 # Чей субагент: сессия Claude Code, из которой завели карточку (в каталоге хоста DSH).
 DSH_SAVING_OWNERS = 'dsh-board.owners.json'
@@ -171,7 +174,13 @@ def dsh_saving_report(owner: str = None, account_of: str = None, *,
 
 
 def dsh_saving_badge(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> str:
-    """Метка «(-5%)» для статусной строки — экономия сессии Claude в процентах 5-часового окна.
+    """Метка «(-5%)» для статусной строки — сколько субагенты сберегли **в текущем** 5-часовом окне.
+
+    Считается прирост экономии от начала окна (`dsh_saving_refresh` запоминает точку
+    отсчёта при смене окна или аккаунта), делённый на цену процента этого же окна.
+    ⚠ Не вся накопленная экономия: за день она легко «больше 100%» одного окна, и после
+    `/login` на другой аккаунт делилась бы на чужую цену процента (было «-212%»).
+    Калибровка из прошлого окна — метка с `~`.
 
     Ответ кэшируется на `DSH_SAVING_REPORT_TTL` секунд по сессии: статусная строка зовёт
     каждую секунду. Экономии нет или калибровки нет — пустая строка.
@@ -187,15 +196,35 @@ def dsh_saving_badge(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> str:
         # непрерывным потоком тяжёлых запросов. Ответ строки — прошлое значение.
         _report_store(owner, {**row, 'at': time.time()})
         _report_spawn(owner, base)
-    pct = row.get('five_hour_pct')
-    if not pct:
+    pct = row.get('window_pct')
+    if not pct or pct < 0.05:
         return ''
-    return f"(-{pct:.0f}%)" if pct >= 1 else f"(-{pct:.1f}%)"
+    mark = '~' if row.get('stale') else ''
+    return f"(-{mark}{pct:.0f}%)" if pct >= 1 else f"(-{mark}{pct:.1f}%)"
 
 
 def dsh_saving_refresh(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
-    """Пересчитать экономию сессии и положить в кэш метки — фоновая половина `badge`."""
+    """Пересчитать экономию сессии и положить в кэш метки — фоновая половина `badge`.
+
+    Окно — аккаунт и сброс 5-часового окна из снимка сессии; новое окно — новая точка
+    отсчёта (экономия на этот момент), метка считает прирост от неё.
+    """
     row = {**dsh_saving_report(owner, base=base), 'at': time.time()}
+    limits = ((_snapshots().get(owner) or {}).get('rate_limits') or {})
+    window = f"{(limits.get('seven_day') or {}).get('resets_at')}/{(limits.get('five_hour') or {}).get('resets_at')}"
+    path = os.path.expanduser(DSH_SAVING_BASELINE_FILE)
+    baselines = _json_read(path) or {}
+    mark = baselines.get(owner) or {}
+    if mark.get('window') != window:
+        mark = {'window': window, 'saved': row['saved'], 'at': time.time()}
+        baselines[owner] = mark
+        _json_write(path, {key: value for key, value in baselines.items()
+                           if time.time() - float(value.get('at') or 0) < 7 * 86400})
+    calibration = dsh_saving_calibrate(owner).get('five_hour') or {}
+    per_pct = calibration.get('per_pct')
+    gained = max(0, row['saved'] - int(mark.get('saved') or 0))
+    row.update(window_saved=gained, stale=bool(calibration.get('stale')),
+               window_pct=round(gained / per_pct, 1) if per_pct else None)
     _report_store(owner, row)
     return row
 
