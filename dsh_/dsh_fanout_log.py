@@ -13,6 +13,7 @@ dsh-board collect out/                          # дособрать то, чт�
 ⚠ Ожидание в `collect` — по лёгкому маршруту `working` (кто занят), журнал карточки
 читается один раз, в конце: тяжёлые вызовы в цикле однажды уже уложили хост.
 """
+import contextlib
 import json
 import os
 import threading
@@ -60,8 +61,8 @@ def dsh_fanout_log_collect(out_dir: str, timeout: float = 3600, *,
     Returns:
         Строки журнала после сбора; у недождавшихся `state` остаётся `running`.
     """
-    from dsh_.dsh_board import dsh_board_working  # ленивый: dsh_board зовёт этот модуль
-    from dsh_.dsh_session import dsh_session_answer_last
+    from dsh_.dsh_board import dsh_board_inbox_take, dsh_board_turns, dsh_board_working  # ленивый: dsh_board зовёт этот модуль
+    from dsh_.dsh_session import dsh_session_answer_last, dsh_session_find
     deadline = time.time() + timeout
     while True:
         rows = dsh_fanout_log_read(out_dir)
@@ -78,6 +79,10 @@ def dsh_fanout_log_collect(out_dir: str, timeout: float = 3600, *,
                 except DshApiError as failure:
                     answer, error = '', f'{type(failure).__name__}: {failure}'
                 dsh_fanout_log_done(out_dir, index, {**row, 'answer': answer, 'error': error})
+                if answer:
+                    # Ответ забран в файл — во «входящих» его больше нет, как после `ask`.
+                    with contextlib.suppress(DshApiError, OSError):
+                        dsh_board_inbox_take(session, dsh_board_turns(dsh_session_find(session, base=base)))
         if not (pending & busy) or time.time() >= deadline:
             return dsh_fanout_log_read(out_dir)
         time.sleep(DSH_FANOUT_LOG_POLL)
