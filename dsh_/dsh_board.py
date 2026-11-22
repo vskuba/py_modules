@@ -33,14 +33,14 @@ answers = dsh_board_fanout([{'cwd': '/p/a', 'title': 'a', 'text': '…'},
 """
 import contextlib
 import os
+import re
 import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnreachable, \
     dsh_api_get, dsh_api_post
-from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
-    dsh_session_cursor, dsh_session_list, dsh_session_prompt, dsh_session_title, \
-    dsh_session_turn_wait
+from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_list, \
+    dsh_session_prompt, dsh_session_reply_wait, dsh_session_title
 
 # Потолок ожидания ответа субагента по умолчанию, с.
 DSH_BOARD_WAIT_TIMEOUT = 1800
@@ -107,6 +107,28 @@ def dsh_board_model_of(session: str, *, base: str = DSH_API_ADDR_DEFAULT):
     return models[0] if len(models) == 1 else None
 
 
+def dsh_board_working(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Кто из агентов сейчас работает и над чем — по занятым моторам доски.
+
+    Returns:
+        `[{session, title, kind, goal, motor, model}]`: `kind` — `run` (заход промпта
+        доски, `goal` — его название) или `hand` (работа руками: человек или
+        оркестратор гонит сессию сам, `goal` пуст); `title` — подпись карточки.
+    """
+    state = dsh_board_state(base=base)
+    working = [brick for brick in state.get('chain') or [] if brick.get('kind') in ('run', 'hand')]
+    if not working:
+        return []
+    # Доска называет карточку основанием id, без суффикса поколения (`…-g2`).
+    titles = {}
+    for item in dsh_session_list(base=base):
+        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
+        titles.setdefault(key, dsh_session_title(item))
+    return [{'session': brick.get('session') or '', 'title': titles.get(brick.get('session') or '', ''),
+             'kind': brick.get('kind'), 'goal': brick.get('name') or '', 'motor': brick.get('motor'),
+             'model': brick.get('model')} for brick in working]
+
+
 def dsh_board_motors_set(provider: str, model: str, count: int, *,
                          base: str = DSH_API_ADDR_DEFAULT) -> None:
     """Сколько моторов (параллельных цепочек) у модели: от 1 до 4, по умолчанию 4.
@@ -144,17 +166,26 @@ def dsh_board_sessions(include_idle: bool = False, *,
     return rows
 
 
-def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, *,
+def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, robot: bool = True, *,
                           base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Завести карточку под каталог — как «＋ сессия» доски: preset и модель хоста.
 
+    Args:
+        robot: карточку заводит агент, а не человек — форма доски пометит её 🤖.
+            Этот слой зовут оркестраторы, поэтому по умолчанию True.
+
     Returns:
         id новой сессии.
+
+    Raises:
+        DshBoardError: ручка ответила без id сессии.
     """
     answer = dsh_api_post('continuous-agent.session',
                           {'workspace': os.path.realpath(os.path.expanduser(cwd)),
-                           'title': title, 'fullAccess': full_access},
+                           'title': title, 'fullAccess': full_access, 'robot': robot},
                           base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
+    if not answer.get('session'):
+        raise DshBoardError(f'карточка не заведена: ручка ответила {str(answer)[:200]}')
     return answer['session']
 
 
@@ -163,10 +194,13 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Задача субагенту: промпт в карточку; с `wait` — дождаться конца круга и ответа.
 
+    Ответ — на **свой** промпт (`dsh_session_reply_wait`), а не первый конец круга после
+    отправки: карточка могла быть занята чужим кругом.
+
     Args:
         wait: ждать конца круга и вернуть ответ; без него промпт встаёт в очередь
             карточки, и ответ потом — `dsh_session_answer_last`.
-        timeout: потолок ожидания конца круга, с.
+        timeout: потолок всего вызова, с — общий на засечку и ожидание ответа.
 
     Returns:
         Текст ответа при `wait`, иначе пустая строка.
@@ -177,14 +211,16 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     # Засечку можно спрашивать сколько угодно раз — хост, занятый первые секунды после
     # заведения карточки, не повод ронять задачу. Сам промпт вслепую не повторяем:
     # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
+    deadline = time.time() + timeout
     mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
     dsh_session_prompt(session, text, base=base)
     if not wait:
         return ''
-    if not dsh_session_turn_wait(session, mark, 'turn/end', timeout, base=base):
+    answer = dsh_session_reply_wait(session, mark, text, max(0.0, deadline - time.time()), base=base)
+    if answer is None:
         raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
                             f'dsh_session_answer_last')
-    return dsh_session_answer_last(session, mark, base=base)
+    return answer
 
 
 def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
@@ -193,7 +229,8 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
 
     Задача — `{text, session}` (готовая карточка) или `{text, cwd, title}` (карточка
     заводится под каталог); `archive: true` — убрать заведённую карточку в архив после
-    ответа. Задачи идут разом — каждая в своей карточке.
+    ответа (после неудачи — не трогает: живой круг ещё можно дочитать). Задачи идут
+    разом; несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
 
     Returns:
         `[{session, answer, error}]` — у удавшейся `error` пустой; одна сорвавшаяся
@@ -209,8 +246,11 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
                                                 bool(task.get('fullAccess')), base=base)
             answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout, base=base)
             results[index] = {'session': session, 'answer': answer, 'error': ''}
-        except (DshApiError, DshBoardError, KeyError) as error:
-            results[index] = {'session': session, 'answer': '', 'error': str(error)}
+        except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
+            results[index] = {'session': session, 'answer': '', 'error': f'{type(error).__name__}: {error}'}
+            return
+        # Архив — только после ответа: сорвавшаяся задача могла оставить живой круг, и
+        # архив оборвал бы его, а ответ из журнала ещё можно добрать.
         if task.get('archive') and session and not task.get('session'):
             with contextlib.suppress(DshApiError):
                 dsh_session_archive(session, base=base)

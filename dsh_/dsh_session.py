@@ -18,11 +18,15 @@
 import time
 import uuid
 
-from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, dsh_api_call
+from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnreachable, dsh_api_call
 
 # Сколько записей журнала брать на одну видимую реплику: между промптом и ответом лежат
 # шаги инструментов и служебные вставки хоста, а окно хост режет по сообщениям.
 DSH_SESSION_SPAN = 8
+
+# Окно журнала при ожидании ответа: свой промпт должен в него попадать и в долгом
+# круге с десятками шагов инструментов.
+DSH_SESSION_REPLY_SPAN = 40
 
 # Шаг опроса журнала в ожидании конца круга.
 DSH_SESSION_POLL = 2.0
@@ -102,8 +106,15 @@ def dsh_session_history(session: str, messages: int = DSH_SESSION_SPAN, *,
 
 
 def dsh_session_cursor(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> int:
-    """Засечка журнала карточки (`projections.asOfSeq`); 0 — журнала ещё нет."""
+    """Засечка журнала карточки (`projections.asOfSeq`); 0 — журнала ещё нет.
+
+    Raises:
+        DshApiError: `session/not-found` — такой карточки нет: опечатка в id не должна
+            оборачиваться получасом ожидания пустого журнала.
+    """
     item = dsh_session_find(session, base=base)
+    if not item:
+        raise DshApiError(f'session/not-found: {session}')
     return int((item.get('projections') or {}).get('asOfSeq') or 0)
 
 
@@ -117,6 +128,8 @@ def dsh_session_dialog(session: str, count: int = 10, *,
     Returns:
         `[{"role": "user"|"assistant", "time", "seq", "text"}]` по возрастанию.
     """
+    if count <= 0:
+        return []
     rows = []
     for event in dsh_session_history(session, count * DSH_SESSION_SPAN, base=base):
         row = _dialog_row(event)
@@ -137,27 +150,51 @@ def dsh_session_answer_last(session: str, after: int = 0, *,
     return ''
 
 
-def dsh_session_turn_wait(session: str, after: int, kind: str = 'turn/end',
-                          timeout: float = 1800, *, base: str = DSH_API_ADDR_DEFAULT) -> bool:
-    """Дождаться в журнале карточки события `kind` новее засечки `after`.
+def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float = 1800, *,
+                           base: str = DSH_API_ADDR_DEFAULT):
+    """Дождаться ответа карточки на **свой** промпт и вернуть его текст.
 
-    Перед отправкой промпта берут `dsh_session_cursor`, после — ждут здесь `turn/start`
-    (круг пошёл) или `turn/end` (круг кончился). Медленный ответ хоста — не повод бросать
-    ожидание: у него свой потолок `timeout`.
+    Ответ привязан к своему промпту, а не к первому концу круга после засечки: карточка
+    могла быть занята чужим кругом (работа руками, заход доски, соседняя задача того же
+    `fanout`), и первым после засечки лёг бы его `turn/end` — чужой ответ выдался бы за
+    наш, а наш потерялся. Поэтому: в журнале ищется свой `user/message` — новее засечки
+    `after` и с тем же текстом; затем `turn/end` после него; ответ — последнее сообщение
+    агента между ними, а не текущий хвост (следующий круг мог уже кончиться).
+
+    Переспрашивается только «хост не ответил» (`DshApiUnreachable`); прочие ошибки —
+    нет такой карточки, 401, отказ метода — уходят наверх сразу, ожиданием их не исправить.
+
+    ⚠ Два одинаковых промпта в одну карточку подряд неразличимы по тексту: оба вызова
+    найдут первый. Разные задачи в одну карточку — различимы.
+
+    Args:
+        after: засечка журнала до отправки (`dsh_session_cursor`).
+        text: текст отправленного промпта.
+        timeout: потолок ожидания, с.
 
     Returns:
-        True — событие легло; False — не дождались за `timeout`.
+        Текст ответа (пустая строка — круг кончился без текста), либо `None` — не
+        дождались за `timeout`.
     """
     deadline = time.time() + timeout
-    while time.time() < deadline:
+    asked = ' '.join(str(text).split())
+    mine = 0
+    while True:
         try:
-            events = dsh_session_history(session, base=base)
-        except DshApiError:
+            events = dsh_session_history(session, DSH_SESSION_REPLY_SPAN, base=base)
+        except DshApiUnreachable:
             events = []                      # хост занят — спросим следующим витком
-        if any(e.get('type') == kind and e.get('seq', 0) > after for e in events):
-            return True
+        if mine == 0:
+            mine = next((event.get('seq', 0) for event in events
+                         if event.get('seq', 0) > after and _is_prompt(event, asked)), 0)
+        if mine:
+            end = next((event.get('seq', 0) for event in events
+                        if event.get('type') == 'turn/end' and event.get('seq', 0) > mine), 0)
+            if end:
+                return _reply_between(events, mine, end)
+        if time.time() >= deadline:
+            return None
         time.sleep(DSH_SESSION_POLL)
-    return False
 
 
 def dsh_session_message_text(message: dict) -> str:
@@ -186,3 +223,20 @@ def _dialog_row(event: dict):
     if not text:
         return None
     return {'role': role, 'time': event.get('time'), 'seq': event.get('seq'), 'text': text}
+
+
+def _is_prompt(event: dict, asked: str) -> bool:
+    """Это наш промпт: реплика человека (`source.kind == "user"`) с тем же текстом."""
+    row = _dialog_row(event)
+    return row is not None and row['role'] == 'user' and ' '.join(row['text'].split()) == asked
+
+
+def _reply_between(events: list, start: int, end: int) -> str:
+    """Последний ответ агента строго между своим промптом и концом его круга."""
+    text = ''
+    for event in events:
+        if start < event.get('seq', 0) < end:
+            row = _dialog_row(event)
+            if row is not None and row['role'] == 'assistant':
+                text = row['text']
+    return text

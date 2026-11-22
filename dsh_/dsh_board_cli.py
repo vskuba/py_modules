@@ -25,7 +25,7 @@ import time
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_WAIT_TIMEOUT, DshBoardError, dsh_board_ask, \
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_set, \
-    dsh_board_session_new, \
+    dsh_board_session_new, dsh_board_working, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog
@@ -73,6 +73,10 @@ def _run(args) -> int:
         if not isinstance(tasks, list):
             raise ValueError('fanout ждёт JSON-список задач')
         return _print(args, dsh_board_fanout(tasks, args.timeout, base=base), _fanout_text)
+
+    if command == 'working':
+        rows = dsh_board_working(base=base)
+        return _print(args, rows, _working_line if args.line else _working_text)
 
     if command == 'answer':
         answer = dsh_session_answer_last(args.session, base=base)
@@ -170,6 +174,9 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     fanout.add_argument('file', help='JSON-список [{text, session | cwd+title, archive?}]; `-` — stdin')
     fanout.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
 
+    command('working', 'кто из агентов работает сейчас и над чем').add_argument(
+        '--line', action='store_true', help='одной строкой — для статусной строки')
+
     command('answer', 'последний ответ карточки').add_argument('session')
 
     history = command('history', 'промпты и ответы карточки')
@@ -265,6 +272,26 @@ def _history_text(rows: list) -> str:
         return 'сообщений нет'
     return '\n\n'.join(f"{'▶ промпт' if row['role'] == 'user' else '◀ ответ'} · "
                        f"{_clock(row['time'])}\n{row['text']}" for row in rows)
+
+
+def _working_text(rows: list) -> str:
+    if not rows:
+        return 'никто не работает'
+    return '\n'.join(f"мотор {row['motor']}  {row['title'] or row['session']}"
+                     f"{'  — ' + row['goal'] if row['goal'] else '  — работа руками'}" for row in rows)
+
+
+def _working_line(rows: list) -> str:
+    """`DSH 2: ревью dsh_board · Часовая сверка…` — пусто, если никто не работает."""
+    if not rows:
+        return ''
+    parts = [_short(row['goal'] or row['title'] or row['session'], 28) for row in rows]
+    return f"DSH {len(rows)}: {' · '.join(parts)}"
+
+
+def _short(text: str, limit: int) -> str:
+    text = ' '.join(str(text).split())
+    return text if len(text) <= limit else text[:limit - 1] + '…'
 
 
 def _fanout_text(rows: list) -> str:
