@@ -44,7 +44,7 @@ DSH_SAVING_RATE_MAX_AGE = 7 * 86400
 DSH_SAVING_CALIBRATION_FILE = '~/.cache/dsh-saving.calibration.json'
 DSH_SAVING_CALIBRATION_TTL = 300
 DSH_SAVING_REPORT_FILE = '~/.cache/dsh-saving.report.json'
-DSH_SAVING_REPORT_TTL = 30
+DSH_SAVING_REPORT_TTL = 60
 DSH_SAVING_MIN_PCT = 3
 DSH_SAVING_TRANSCRIPTS = '~/.claude/projects/**/*.jsonl'
 # Чей субагент: сессия Claude Code, из которой завели карточку (в каталоге хоста DSH).
@@ -179,18 +179,46 @@ def dsh_saving_badge(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> str:
     if not owner:
         return ''
     path = os.path.expanduser(DSH_SAVING_REPORT_FILE)
-    cache = _json_read(path) or {}
-    row = cache.get(owner) or {}
+    row = (_json_read(path) or {}).get(owner) or {}
     if time.time() - float(row.get('at') or 0) >= DSH_SAVING_REPORT_TTL:
-        row = {**dsh_saving_report(owner, base=base), 'at': time.time()}
-        cache = {key: value for key, value in cache.items()
-                 if time.time() - float(value.get('at') or 0) < 86400}
-        cache[owner] = row
-        _json_write(path, cache)
+        # ⚠⚠ Сперва застолбить срок, потом считать — и считать в отдельном процессе.
+        # `session/list` под нагрузкой дольше таймаута статусной строки (8 с): её убивали
+        # до записи кэша, через секунду она начинала снова — и сама держала хост под
+        # непрерывным потоком тяжёлых запросов. Ответ строки — прошлое значение.
+        _report_store(owner, {**row, 'at': time.time()})
+        _report_spawn(owner, base)
     pct = row.get('five_hour_pct')
     if not pct:
         return ''
     return f"(-{pct:.0f}%)" if pct >= 1 else f"(-{pct:.1f}%)"
+
+
+def dsh_saving_refresh(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Пересчитать экономию сессии и положить в кэш метки — фоновая половина `badge`."""
+    row = {**dsh_saving_report(owner, base=base), 'at': time.time()}
+    _report_store(owner, row)
+    return row
+
+
+def _report_store(owner: str, row: dict) -> None:
+    path = os.path.expanduser(DSH_SAVING_REPORT_FILE)
+    now = time.time()
+    cache = {key: value for key, value in (_json_read(path) or {}).items()
+             if now - float(value.get('at') or 0) < 86400}
+    cache[owner] = row
+    _json_write(path, cache)
+
+
+def _report_spawn(owner: str, base: str) -> None:
+    """Пересчёт отдельным процессом, отвязанным от вызывающего: таймаут строки его не убьёт."""
+    import subprocess
+    import sys
+    code = ('import sys; from dsh_.dsh_saving import dsh_saving_refresh; '
+            'dsh_saving_refresh(sys.argv[1], base=sys.argv[2])')
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = {**os.environ, 'PYTHONPATH': root + os.pathsep + os.environ.get('PYTHONPATH', '')}
+    subprocess.Popen([sys.executable, '-c', code, owner, base], env=env, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _claude_units(since: float, foreign: set = frozenset()) -> float:

@@ -37,7 +37,7 @@ DSH_SESSION_REPLY_SPAN = 40
 
 # Шаг опроса журнала в ожидании конца круга.
 DSH_SESSION_POLL = 2.0
-# Страница журнала долгой карточки (сотни шагов с выводами инструментов) тяжела: под
+# Страница журнала долгой карточки и список карточек (сотни шагов с выводами инструментов) тяжела: под
 # нагрузкой хост отдаёт её дольше общих 10 с, и verify/history падали с «timed out».
 DSH_SESSION_PAGE_TIMEOUT = 90.0
 
@@ -50,7 +50,9 @@ def dsh_session_list(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
         `agentAvailable`, иногда `cwd` и `projections` (там `values.title` и `asOfSeq`).
         ⚠ Архивные карточки в списке **остаются** — архив виден только реестром проектов.
     """
-    return (dsh_api_call('session/list', {'_request': {}}, base=base) or {}).get('items', [])
+    # Список несёт проекции всех карточек и под нагрузкой тяжёл так же, как страница журнала.
+    return (dsh_api_call('session/list', {'_request': {}}, base=base,
+                         timeout=DSH_SESSION_PAGE_TIMEOUT) or {}).get('items', [])
 
 
 def dsh_session_find(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
