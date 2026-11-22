@@ -24,7 +24,7 @@ import sys
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
-from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
+from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
     dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_count, dsh_board_inbox_take, \
     dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
     dsh_board_gc, dsh_board_stats, dsh_board_verify, \
@@ -135,6 +135,9 @@ def _run(args) -> int:
         cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
         dsh_worktree_drop(cwd, args.force)
         return _print(args, {'removed': cwd}, lambda v: f"копия убрана: {v['removed']}")
+
+    if command == 'gc' and args.auto:
+        return _print(args, dsh_board_gc_auto(base=base), lambda v: 'убрано' if v else 'рано')
 
     if command == 'gc':
         rows = dsh_board_gc(args.days, args.dry, base=base)
@@ -285,7 +288,9 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     drop_tree.add_argument('session')
     drop_tree.add_argument('--force', action='store_true', help='и с незакоммиченными правками')
     gc = command('gc', 'убрать отработавшие агентские карточки и их копии репозитория')
-    gc.add_argument('--days', type=float, default=7, help='дней тишины (по умолчанию 7)')
+    gc.add_argument('--days', type=float, default=DSH_BOARD_GC_DAYS,
+                    help='дней тишины для карточек без принятой работы (по умолчанию 1)')
+    gc.add_argument('--auto', action='store_true', help='не чаще раза в час на машину — для статусной строки')
     gc.add_argument('--dry', action='store_true', help='только показать')
     verify = command('verify', 'перекрёстная проверка ответа карточки вторым субагентом')
     verify.add_argument('session')

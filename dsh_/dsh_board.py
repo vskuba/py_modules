@@ -35,13 +35,15 @@ import contextlib
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
     DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
 from dsh_.dsh_saving import dsh_saving_owner_mark, dsh_saving_sent
-from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_new
+from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_merged, \
+    dsh_worktree_new
 from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_turn_start_wait, \
     dsh_session_dialog, dsh_session_find, dsh_session_history, dsh_session_list, \
     dsh_session_prompt, dsh_session_title, dsh_session_turn_reply
@@ -65,7 +67,10 @@ DSH_BOARD_BRIEF_ASK = ('\n\nФОРМАТ ОТВЕТА ОБЯЗАТЕЛЕН: пе
 DSH_BOARD_BRIEF_LINES = 5
 DSH_BOARD_BRIEF_CHARS = 700
 # Уборка: сколько дней тишины у агентской карточки, чтобы её убрать, и примета копии репо.
-DSH_BOARD_GC_DAYS = 7
+DSH_BOARD_GC_DAYS = 1
+# Как часто уборка зовётся сама (статусная строка) и где метка последнего раза.
+DSH_BOARD_GC_EVERY = 3600
+DSH_BOARD_GC_STAMP = 'dsh-board.gc-stamp.json'
 DSH_BOARD_WORKTREE_MARK = '/.claude/worktrees/dsh-'
 # Задание проверяющему субагенту.
 DSH_BOARD_VERIFY_ASK = (
@@ -411,9 +416,14 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
     """Убрать отработавшие агентские карточки: архив, их копии репозитория, проекты копий.
 
     Каждое «d …» и каждая задача оркестратора заводит карточку; без уборки их через неделю
-    десятки. Убираются только агентские (`robots`), не идущие и не обновлявшиеся дольше
-    `days`. Копия репозитория (`dsh_worktree`) снимается, только если в ней нет
-    незакоммиченных правок — ветка остаётся в любом случае.
+    десятки. Убираются только агентские (`robots`) и не идущие:
+    - **сразу** — карточка копии, чей каталог уже удалён или чья ветка уже слита в основную
+      (`dsh_worktree_merged`): работа принята, ждать нечего;
+    - остальные — после `days` тишины.
+    Копия снимается, только если в ней нет незакоммиченных правок — ветка остаётся.
+    Проекты копий, чей каталог удалён мимо слоя (`git worktree remove`), снимаются с панели
+    тоже — и без карточек: иначе их список на панели только растёт.
+    Зовётся сама — `dsh_board_gc_auto` из статусной строки, не чаще раза в час.
 
     Args:
         days: сколько дней тишины, чтобы карточка считалась отработавшей.
@@ -432,22 +442,57 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
         key = re.sub(r'-g\d+$', '', session)
         if key not in robots or session in archived or item.get('running'):
             continue
-        if (item.get('updatedAt') or 0) > edge:
-            continue
         cwd = item.get('cwd') or ''
         worktree = cwd if DSH_BOARD_WORKTREE_MARK in cwd else ''
+        gone = bool(worktree) and not os.path.isdir(worktree)
+        accepted = bool(worktree) and not gone and _merged(worktree)
+        if not (gone or accepted) and (item.get('updatedAt') or 0) > edge:
+            continue
         kept = ''
-        if worktree and dsh_worktree_dirty(worktree):
+        if worktree and not gone and dsh_worktree_dirty(worktree):
             kept = 'в копии незакоммиченные правки'
+        worktree_drop = bool(worktree) and not gone and not kept
         if not dry:
             dsh_session_archive(session, base=base)
-            if worktree and not kept:
+            if worktree_drop:
                 with contextlib.suppress(DshWorktreeError):
                     dsh_worktree_drop(worktree)
+            if worktree and not kept:
                 with contextlib.suppress(DshApiError):
                     dsh_board_workspace_drop(worktree, base=base)
         rows.append({'session': key, 'title': dsh_session_title(item), 'worktree': worktree, 'kept': kept})
+    # Проекты копий без каталога — и без карточек тоже: удалённая мимо слоя копия.
+    for workspace in state.get('workspaces') or []:
+        path = workspace.get('path') or ''
+        if DSH_BOARD_WORKTREE_MARK in path and not os.path.isdir(path):
+            if not dry:
+                with contextlib.suppress(DshApiError):
+                    dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace['id']}}, base=base)
+            rows.append({'session': '', 'title': os.path.basename(path), 'worktree': path, 'kept': ''})
     return rows
+
+
+def dsh_board_gc_auto(*, base: str = DSH_API_ADDR_DEFAULT) -> bool:
+    """Уборка сама, не чаще `DSH_BOARD_GC_EVERY` секунд на машину — для статусной строки.
+
+    Метка времени — файл в каталоге хоста; кто первым застолбил срок, тот и убирает, прочие
+    выходят сразу. Сбой уборки не роняет зовущего.
+
+    Returns:
+        True — уборка прошла в этом вызове.
+    """
+    stamp = _home_path(DSH_BOARD_GC_STAMP)
+    try:
+        if time.time() - os.path.getmtime(stamp) < DSH_BOARD_GC_EVERY:
+            return False
+    except OSError:
+        pass
+    _json_write(stamp, {'at': time.time()})
+    try:
+        dsh_board_gc(base=base)
+    except (DshApiError, DshBoardError, OSError):
+        return False
+    return True
 
 
 def dsh_board_workspace_drop(path: str, *, base: str = DSH_API_ADDR_DEFAULT) -> bool:
@@ -617,6 +662,13 @@ def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) ->
 
 
 # ── детали реализации ──
+
+def _merged(path: str) -> bool:
+    try:
+        return dsh_worktree_merged(path)
+    except (DshWorktreeError, OSError, subprocess.SubprocessError):
+        return False
+
 
 def _capacity(state: dict) -> int:
     """Моторы включённых моделей по настройкам доски (запасной путь для старого плагина)."""

@@ -113,7 +113,30 @@ def dsh_worktree_drop(path: str, force: bool = False) -> None:
     _git(path, *args)
 
 
+def dsh_worktree_merged(path: str) -> bool:
+    """Работа копии принята: её коммиты целиком вошли в ветку основной копии, правок вне коммитов нет.
+
+    Слитая ветка — значит копия и карточка больше не нужны (`dsh_board_gc` убирает сразу).
+    Копия без единого своего коммита слитой не считается: работа ещё не сделана.
+    """
+    if dsh_worktree_dirty(path):
+        return False
+    head = _git(path, 'rev-parse', 'HEAD').strip()
+    if head == _born(path):
+        return False
+    inside = subprocess.run(['git', '-C', path, 'merge-base', '--is-ancestor', head, _start_ref(path)],
+                            capture_output=True, timeout=DSH_WORKTREE_GIT_TIMEOUT)
+    return inside.returncode == 0
+
+
 # ── детали реализации ──
+
+def _born(path: str) -> str:
+    """Коммит, с которого ветка копии родилась: самая старая запись её reflog."""
+    branch = _git(path, 'rev-parse', '--abbrev-ref', 'HEAD').strip()
+    entries = _git(path, 'reflog', 'show', '--format=%H', branch, check=False).split()
+    return entries[-1] if entries else ''
+
 
 def _start_ref(path: str) -> str:
     """Откуда копия ответвилась: ветка основной копии, на которой она была заведена."""
