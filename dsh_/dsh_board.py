@@ -43,6 +43,7 @@ import time
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
     DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
 from dsh_.dsh_saving import dsh_saving_owner_mark, dsh_saving_sent
+from dsh_.dsh_wait import dsh_wait_done, dsh_wait_expect
 from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_merged, \
     dsh_worktree_new
 from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_turn_start_wait, \
@@ -321,6 +322,9 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
             dsh_board_motor_wait(max(0.0, deadline - time.time()), base=base)
             send()
             dsh_session_turn_start_wait(session, mark, DSH_BOARD_START_HOLD, base=base)
+    # Ответ этой карточки ждёт сессия Claude, отдавшая задачу: без метки ответ, не
+    # дождавшийся здесь (без --wait, оборванный процесс), ушёл бы в никуда (dsh_wait).
+    dsh_wait_expect(session)
     if not wait:
         return ''
     asked = text
@@ -342,9 +346,11 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     if reply['reason'] == 'interrupted':
         raise DshBoardError(f'круг в {session} обрывался {DSH_BOARD_RESUME_TRIES + 1} раза — '
                             f'последняя реплика: {dsh_board_brief(answer)}')
-    # Ответ получен — во «входящих» его больше нет.
+    # Ответ получен — во «входящих» его больше нет, и ждать его больше некому.
     with contextlib.suppress(DshApiError, OSError):
         dsh_board_inbox_take(session, dsh_board_turns(dsh_session_find(session, base=base)))
+    with contextlib.suppress(OSError):
+        dsh_wait_done(session)
     return answer
 
 

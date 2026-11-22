@@ -20,6 +20,7 @@ import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
+from dsh_.dsh_wait import dsh_wait_done
 
 DSH_FANOUT_LOG_FILE = 'fanout.json'
 DSH_FANOUT_LOG_POLL = 20.0
@@ -83,6 +84,7 @@ def dsh_fanout_log_collect(out_dir: str, timeout: float = 3600, *,
                     # Ответ забран в файл — во «входящих» его больше нет, как после `ask`.
                     with contextlib.suppress(DshApiError, OSError):
                         dsh_board_inbox_take(session, dsh_board_turns(dsh_session_find(session, base=base)))
+                        dsh_wait_done(session)
         if not (pending & busy) or time.time() >= deadline:
             return dsh_fanout_log_read(out_dir)
         time.sleep(DSH_FANOUT_LOG_POLL)

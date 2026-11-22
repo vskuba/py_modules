@@ -34,6 +34,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool, \
     dsh_board_worktree_test_ask
 from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
+from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_run
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
@@ -102,6 +103,15 @@ def _run(args) -> int:
             row.update(out=os.path.join(args.out_dir, f'{index + 1}.md'), brief=dsh_board_brief(row['answer']))
             row.pop('answer')
         return _print(args, rows, _fanout_text)
+
+    if command == 'wait':
+        owner = args.session or os.environ.get(DSH_WAIT_OWNER_ENV) or ''
+        if not owner:
+            raise ValueError('чью сессию ждать: --session или CLAUDE_CODE_SESSION_ID')
+        rows = dsh_wait_run(owner, args.out_dir, args.timeout, base=base)
+        return _print(args, rows, lambda v: '\n\n'.join(
+            f"🤖 {r['title'] or r['session']}\n{r['brief']}\n(полный ответ: {r['out']})" for r in v)
+            or 'ждать было нечего')
 
     if command == 'collect':
         rows = dsh_fanout_log_collect(args.out_dir, args.timeout, base=base)
@@ -278,6 +288,11 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     fanout.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
     fanout.add_argument('--out-dir', default=None, metavar='КАТАЛОГ',
                         help='полные ответы — в КАТАЛОГ/N.md, в вывод — только итоги')
+
+    wait = command('wait', 'дождаться ответов всех субагентов своей сессии Claude — запускать фоном')
+    wait.add_argument('--out-dir', required=True, metavar='КАТАЛОГ', help='полные ответы — сюда, в вывод — итоги')
+    wait.add_argument('--session', default='', metavar='ID', help='сессия Claude Code (по умолчанию — текущая)')
+    wait.add_argument('--timeout', type=float, default=6 * 3600)
 
     collect = command('collect', 'дособрать ответы оборванного fanout по его журналу')
     collect.add_argument('out_dir', metavar='КАТАЛОГ', help='тот же --out-dir, что был у fanout')
