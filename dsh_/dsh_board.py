@@ -39,7 +39,7 @@ import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
-    dsh_api_get, dsh_api_post
+    DshApiUnreachable, dsh_api_get, dsh_api_post
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cursor, dsh_session_list, dsh_session_prompt, dsh_session_title, \
     dsh_session_turn_wait
@@ -181,7 +181,10 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     Raises:
         DshBoardError: нет места под потолком или круг не кончился за `timeout`.
     """
-    mark = dsh_session_cursor(session, base=base)
+    # Засечку можно спрашивать сколько угодно раз — хост, занятый первые секунды после
+    # заведения карточки, не повод ронять задачу. Сам промпт вслепую не повторяем:
+    # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
+    mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
     if limit:
         with _slot_lock():
             dsh_board_slot_wait(session, timeout, base=base)
@@ -243,6 +246,22 @@ def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) ->
 
 
 # ── детали реализации ──
+
+def _patient(ask, timeout: float):
+    """Повторять безопасный вопрос хосту, пока он не ответит или не выйдет `timeout`.
+
+    Повторяется только «хост не ответил» (`DshApiUnreachable`): отказ метода и 401
+    приходят сразу, ждать их исправления нечего.
+    """
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return ask()
+        except DshApiUnreachable:
+            if time.time() > deadline:
+                raise
+            time.sleep(DSH_BOARD_SLOT_POLL)
+
 
 @contextlib.contextmanager
 def _slot_lock():

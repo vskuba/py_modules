@@ -45,6 +45,15 @@ class DshApiError(RuntimeError):
     """Хост не ответил, ответил веткой ошибки или не пустил (401)."""
 
 
+class DshApiUnreachable(DshApiError):
+    """Хост не ответил вовсе: таймаут, обрыв, порт закрыт.
+
+    Отдельным видом, потому что только его есть смысл переспросить: хост бывает занят
+    секунды (после заведения карточки, после перезапуска), а отказ метода и 401 от
+    повтора не исправятся.
+    """
+
+
 def dsh_api_call(method: str, args: dict = None, *, base: str = DSH_API_ADDR_DEFAULT,
                  timeout: float = DSH_API_TIMEOUT):
     """Позвать метод хоста и вернуть полезное значение из-под конверта.
@@ -209,7 +218,7 @@ def _send_raw(request, timeout: float) -> str:
                               f'пропуск — секрет хоста не тот или cookie истекла') from error
         raise DshApiError(f'HTTP {error.code}: {raw[:200]}') from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise DshApiError(f'хост не ответил: {error}') from error
+        raise DshApiUnreachable(f'хост не ответил: {error}') from error
 
 
 def _cookie(base: str) -> str:
