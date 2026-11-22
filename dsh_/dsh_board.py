@@ -32,13 +32,14 @@ answers = dsh_board_fanout([{'cwd': '/p/a', 'title': 'a', 'text': '…'},
 ```
 """
 import contextlib
+import json
 import os
 import re
 import threading
 import time
 
-from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnreachable, \
-    dsh_api_get, dsh_api_post
+from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
+    DshApiUnreachable, dsh_api_get, dsh_api_post
 from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_list, \
     dsh_session_prompt, dsh_session_reply_wait, dsh_session_title
 
@@ -46,6 +47,9 @@ from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_sessio
 DSH_BOARD_WAIT_TIMEOUT = 1800
 # Шаг, с которым переспрашивать хост, не ответивший вовремя.
 DSH_BOARD_RETRY_POLL = 2.0
+# Кэш подписей карточек для `dsh_board_working` и сколько он живёт, с.
+DSH_BOARD_TITLES = 'dsh-board.titles.json'
+DSH_BOARD_TITLES_TTL = 600
 # Потолок одного вызова плагина: заведение сессии собирает preset — это секунды.
 DSH_BOARD_HTTP_TIMEOUT = 60
 
@@ -110,23 +114,34 @@ def dsh_board_model_of(session: str, *, base: str = DSH_API_ADDR_DEFAULT):
 def dsh_board_working(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Кто из агентов сейчас работает и над чем — по занятым моторам доски.
 
+    Источник истины — хост: маршрут плагина `continuous-agent.working` отдаёт занятые
+    моторы с подписями одним лёгким запросом. Зовётся часто (статусная строка — раз в
+    секунду). Плагин старше маршрута (404) — список собирается здесь: `state` доски и
+    подписи из кэша на диске (`DSH_BOARD_TITLES`); тяжёлый `session/list` спрашивается,
+    только когда подписи в кэше нет или он старше `DSH_BOARD_TITLES_TTL`.
+
     Returns:
-        `[{session, title, kind, goal, motor, model}]`: `kind` — `run` (заход промпта
+        `[{session, title, kind, goal, motor, model, robot}]`: `kind` — `run` (заход промпта
         доски, `goal` — его название) или `hand` (работа руками: человек или
         оркестратор гонит сессию сам, `goal` пуст); `title` — подпись карточки.
     """
+    try:
+        answer = dsh_api_get('continuous-agent.working', base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
+        return [{key: row.get(key) for key in ('session', 'title', 'kind', 'goal', 'motor', 'model', 'robot')}
+                for row in answer.get('working') or []]
+    except DshApiError as error:
+        if 'HTTP 404' not in str(error):
+            raise
+    # Плагин старше маршрута `working`: собираем сами — доска и подписи из кэша.
     state = dsh_board_state(base=base)
     working = [brick for brick in state.get('chain') or [] if brick.get('kind') in ('run', 'hand')]
     if not working:
         return []
-    # Доска называет карточку основанием id, без суффикса поколения (`…-g2`).
-    titles = {}
-    for item in dsh_session_list(base=base):
-        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
-        titles.setdefault(key, dsh_session_title(item))
-    return [{'session': brick.get('session') or '', 'title': titles.get(brick.get('session') or '', ''),
-             'kind': brick.get('kind'), 'goal': brick.get('name') or '', 'motor': brick.get('motor'),
-             'model': brick.get('model')} for brick in working]
+    keys = [brick.get('session') or '' for brick in working]
+    titles = _titles_cached(keys, base)
+    return [{'session': key, 'title': titles.get(key, ''), 'kind': brick.get('kind'),
+             'goal': brick.get('name') or '', 'motor': brick.get('motor'),
+             'model': brick.get('model')} for key, brick in zip(keys, working)]
 
 
 def dsh_board_motors_set(provider: str, model: str, count: int, *,
@@ -190,7 +205,7 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, robot
 
 
 def dsh_board_ask(session: str, text: str, wait: bool = False,
-                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
+                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, images: list = None, *,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Задача субагенту: промпт в карточку; с `wait` — дождаться конца круга и ответа.
 
@@ -201,6 +216,7 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
         wait: ждать конца круга и вернуть ответ; без него промпт встаёт в очередь
             карточки, и ответ потом — `dsh_session_answer_last`.
         timeout: потолок всего вызова, с — общий на засечку и ожидание ответа.
+        images: пути к картинкам (скриншоты) — субагент видит их рядом с текстом.
 
     Returns:
         Текст ответа при `wait`, иначе пустая строка.
@@ -213,7 +229,7 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
     deadline = time.time() + timeout
     mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
-    dsh_session_prompt(session, text, base=base)
+    dsh_session_prompt(session, text, images=images, base=base)
     if not wait:
         return ''
     answer = dsh_session_reply_wait(session, mark, text, max(0.0, deadline - time.time()), base=base)
@@ -228,7 +244,7 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
     """Раздать задачи субагентам разом и собрать ответы — в порядке задач.
 
     Задача — `{text, session}` (готовая карточка) или `{text, cwd, title}` (карточка
-    заводится под каталог); `archive: true` — убрать заведённую карточку в архив после
+    заводится под каталог), с необязательным `images` — пути к картинкам; `archive: true` — убрать заведённую карточку в архив после
     ответа (после неудачи — не трогает: живой круг ещё можно дочитать). Задачи идут
     разом; несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
 
@@ -244,7 +260,8 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
             if not session:
                 session = dsh_board_session_new(task['cwd'], task.get('title') or 'задача',
                                                 bool(task.get('fullAccess')), base=base)
-            answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout, base=base)
+            answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
+                                   images=task.get('images'), base=base)
             results[index] = {'session': session, 'answer': answer, 'error': ''}
         except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
             results[index] = {'session': session, 'answer': '', 'error': f'{type(error).__name__}: {error}'}
@@ -273,6 +290,30 @@ def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) ->
 
 
 # ── детали реализации ──
+
+def _titles_cached(keys: list, base: str) -> dict:
+    """Подписи карточек по ключам (без суффикса поколения) — из кэша, а нет — с хоста."""
+    home = os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT)
+    path = os.path.join(home, DSH_BOARD_TITLES)
+    try:
+        fresh = time.time() - os.stat(path).st_mtime < DSH_BOARD_TITLES_TTL
+        with open(path, encoding='utf-8') as handle:
+            titles = json.load(handle)
+    except (OSError, ValueError):
+        fresh, titles = False, {}
+    if fresh and all(key in titles for key in keys):
+        return titles
+    titles = {}
+    for item in dsh_session_list(base=base):
+        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
+        titles.setdefault(key, dsh_session_title(item))
+    with contextlib.suppress(OSError):
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle:
+            json.dump(titles, handle, ensure_ascii=False)
+        os.replace(tmp, path)
+    return titles
+
 
 def _patient(ask, timeout: float):
     """Повторять безопасный вопрос хосту, пока он не ответит или не выйдет `timeout`.

@@ -15,6 +15,9 @@
 после первого круга новой карточки `/api` молчит до 30 с. Запись `turn/end` в журнале
 остаётся навсегда, её не проспать.
 """
+import base64
+import mimetypes
+import os
 import time
 import uuid
 
@@ -23,6 +26,9 @@ from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnreachable, d
 # Сколько записей журнала брать на одну видимую реплику: между промптом и ответом лежат
 # шаги инструментов и служебные вставки хоста, а окно хост режет по сообщениям.
 DSH_SESSION_SPAN = 8
+
+# Картинки, которые хост принимает частью промпта.
+DSH_SESSION_IMAGE_TYPES = ('image/png', 'image/jpeg', 'image/webp', 'image/gif')
 
 # Окно журнала при ожидании ответа: свой промпт должен в него попадать и в долгом
 # круге с десятками шагов инструментов.
@@ -56,13 +62,15 @@ def dsh_session_title(item: dict) -> str:
     return (((item.get('projections') or {}).get('values') or {}).get('title')) or ''
 
 
-def dsh_session_prompt(session: str, text: str, mode: str = 'queue', *,
+def dsh_session_prompt(session: str, text: str, mode: str = 'queue', images: list = None, *,
                        base: str = DSH_API_ADDR_DEFAULT) -> dict:
     """Отправить текст в карточку — как строку, набранную человеком.
 
     Args:
         mode: `queue` — встать в очередь карточки (несколько вызовов подряд — очередь
             промптов, агент разберёт их по одному); `steer` — вклиниться в идущий круг.
+        images: пути к картинкам (png, jpeg, webp, gif) — едут частями промпта рядом с
+            текстом, как картинка, приложенная человеком в поле ввода.
 
     Returns:
         `{"accepted": true}` — расписка о приёме, не ответ.
@@ -70,8 +78,9 @@ def dsh_session_prompt(session: str, text: str, mode: str = 'queue', *,
     Raises:
         DshApiError: `session/not-found`, `session/agent-busy`, `session/model-unavailable`.
     """
+    content = [{'type': 'text', 'text': text}] + [_image_part(path) for path in images or []]
     request = {'requestId': str(uuid.uuid4()), 'sessionId': session, 'mode': mode,
-               'content': [{'type': 'text', 'text': text}]}
+               'content': content}
     return dsh_api_call('session/prompt', {'request': request}, base=base) or {}
 
 
@@ -240,3 +249,13 @@ def _reply_between(events: list, start: int, end: int) -> str:
             if row is not None and row['role'] == 'assistant':
                 text = row['text']
     return text
+
+
+def _image_part(path: str) -> dict:
+    """Картинка с диска — часть промпта `{type: image, mediaType, data, name}`."""
+    media = mimetypes.guess_type(path)[0] or ''
+    if media not in DSH_SESSION_IMAGE_TYPES:
+        raise ValueError(f'{path}: картинка должна быть {", ".join(DSH_SESSION_IMAGE_TYPES)}, а не {media or "?"}')
+    with open(os.path.expanduser(path), 'rb') as handle:
+        data = base64.b64encode(handle.read()).decode('ascii')
+    return {'type': 'image', 'mediaType': media, 'data': data, 'name': os.path.basename(path)}

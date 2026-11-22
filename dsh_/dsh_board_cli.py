@@ -58,12 +58,13 @@ def _run(args) -> int:
         session = dsh_board_session_new(args.cwd, args.title, args.full_access, base=base)
         if args.ask is None:
             return _print(args, {'session': session}, lambda v: v['session'])
-        answer = dsh_board_ask(session, _text(args.ask), args.wait, args.timeout, base=base)
+        answer = dsh_board_ask(session, _text(args.ask), args.wait, args.timeout, args.image, base=base)
         return _print(args, {'session': session, 'answer': answer},
                       lambda v: f"{v['session']}\n{v['answer']}".rstrip())
 
     if command == 'ask':
-        answer = dsh_board_ask(args.session, _text(args.text), args.wait, args.timeout, base=base)
+        answer = dsh_board_ask(args.session, _text(args.text), args.wait, args.timeout, args.image,
+                               base=base)
         return _print(args, {'session': args.session, 'answer': answer},
                       lambda v: v['answer'] or 'принято в очередь карточки')
 
@@ -211,6 +212,8 @@ def _parser(prog: str) -> argparse.ArgumentParser:
 
 def _wait_args(parser) -> None:
     parser.add_argument('--wait', action='store_true', help='дождаться ответа')
+    parser.add_argument('--image', action='append', default=[], metavar='ПУТЬ',
+                        help='картинка к промпту (png/jpeg/webp/gif); флаг повторяется')
     parser.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT,
                         help=f'потолок ожидания, с (по умолчанию {DSH_BOARD_WAIT_TIMEOUT})')
 
