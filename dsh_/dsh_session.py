@@ -21,7 +21,8 @@ import os
 import time
 import uuid
 
-from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnreachable, dsh_api_call
+from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnavailable, DshApiUnreachable, \
+    dsh_api_call
 
 # Сколько записей журнала брать на одну видимую реплику: между промптом и ответом лежат
 # шаги инструментов и служебные вставки хоста, а окно хост режет по сообщениям.
@@ -170,7 +171,7 @@ def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float =
     `after` и с тем же текстом; затем `turn/end` после него; ответ — последнее сообщение
     агента между ними, а не текущий хвост (следующий круг мог уже кончиться).
 
-    Переспрашивается только «хост не ответил» (`DshApiUnreachable`); прочие ошибки —
+    Переспрашиваются «хост не ответил» и «служба ещё не поднялась»; прочие ошибки —
     нет такой карточки, 401, отказ метода — уходят наверх сразу, ожиданием их не исправить.
 
     ⚠ Два одинаковых промпта в одну карточку подряд неразличимы по тексту: оба вызова
@@ -191,8 +192,8 @@ def dsh_session_reply_wait(session: str, after: int, text: str, timeout: float =
     while True:
         try:
             events = dsh_session_history(session, DSH_SESSION_REPLY_SPAN, base=base)
-        except DshApiUnreachable:
-            events = []                      # хост занят — спросим следующим витком
+        except (DshApiUnreachable, DshApiUnavailable):
+            events = []                      # хост занят или поднимается — спросим следующим витком
         if mine == 0:
             mine = next((event.get('seq', 0) for event in events
                          if event.get('seq', 0) > after and _is_prompt(event, asked)), 0)

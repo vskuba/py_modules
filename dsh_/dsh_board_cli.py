@@ -19,16 +19,18 @@ PYTHONPATH=. python -m dsh_.dsh_board motors gx10-1/Qwen3.8-Flash-Next 1   # lla
 """
 import argparse
 import json
+import os
 import sys
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
-from dsh_.dsh_board import DSH_BOARD_WAIT_TIMEOUT, DshBoardError, dsh_board_ask, \
+from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
+    dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_take, \
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_set, \
     dsh_board_session_new, dsh_board_working, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
-    dsh_session_cancel, dsh_session_dialog
+    dsh_session_cancel, dsh_session_cursor, dsh_session_dialog
 
 
 def dsh_board_cli_main(argv: list = None, prog: str = 'dsh-board') -> int:
@@ -58,29 +60,49 @@ def _run(args) -> int:
         session = dsh_board_session_new(args.cwd, args.title, args.full_access, base=base)
         if args.ask is None:
             return _print(args, {'session': session}, lambda v: v['session'])
-        answer = dsh_board_ask(session, _text(args.ask), args.wait, args.timeout, args.image, base=base)
-        return _print(args, {'session': session, 'answer': answer},
-                      lambda v: f"{v['session']}\n{v['answer']}".rstrip())
+        answer = dsh_board_ask(session, _asked(args, args.ask), args.wait, args.timeout, args.image,
+                               base=base)
+        return _print(args, _answer_row(args, session, answer),
+                      lambda v: f"{v['session']}\n{_answer_text(v)}".rstrip())
 
     if command == 'ask':
-        answer = dsh_board_ask(args.session, _text(args.text), args.wait, args.timeout, args.image,
+        answer = dsh_board_ask(args.session, _asked(args, args.text), args.wait, args.timeout, args.image,
                                base=base)
-        return _print(args, {'session': args.session, 'answer': answer},
-                      lambda v: v['answer'] or 'принято в очередь карточки')
+        return _print(args, _answer_row(args, args.session, answer),
+                      lambda v: _answer_text(v) or 'принято в очередь карточки')
 
     if command == 'fanout':
         raw = sys.stdin.read() if args.file == '-' else open(args.file, encoding='utf-8').read()
         tasks = json.loads(raw)
         if not isinstance(tasks, list):
             raise ValueError('fanout ждёт JSON-список задач')
-        return _print(args, dsh_board_fanout(tasks, args.timeout, base=base), _fanout_text)
+        if args.out_dir:
+            tasks = [{**task, 'text': task['text'] + DSH_BOARD_BRIEF_ASK} for task in tasks]
+        rows = dsh_board_fanout(tasks, args.timeout, base=base)
+        if args.out_dir:
+            os.makedirs(args.out_dir, exist_ok=True)
+            for index, row in enumerate(rows, 1):
+                path = os.path.join(args.out_dir, f'{index}.md')
+                with open(path, 'w', encoding='utf-8') as handle:
+                    handle.write(row['answer'] or row['error'])
+                row.update(out=path, brief=dsh_board_brief(row['answer']))
+                row.pop('answer')
+        return _print(args, rows, _fanout_text)
 
     if command == 'working':
         rows = dsh_board_working(base=base)
         return _print(args, rows, _working_line if args.line else _working_text)
 
+    if command == 'inbox':
+        rows = dsh_board_inbox(base=base)
+        if args.take:
+            for row in rows:
+                dsh_board_inbox_take(row['session'], row['seq'])
+        return _print(args, rows, _inbox_text)
+
     if command == 'answer':
         answer = dsh_session_answer_last(args.session, base=base)
+        dsh_board_inbox_take(args.session, dsh_session_cursor(args.session, base=base))
         return _print(args, {'session': args.session, 'answer': answer}, lambda v: v['answer'])
 
     if command == 'history':
@@ -174,11 +196,15 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     fanout = command('fanout', 'раздать задачи разом и собрать ответы')
     fanout.add_argument('file', help='JSON-список [{text, session | cwd+title, archive?}]; `-` — stdin')
     fanout.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
+    fanout.add_argument('--out-dir', default=None, metavar='КАТАЛОГ',
+                        help='полные ответы — в КАТАЛОГ/N.md, в вывод — только итоги')
 
     command('working', 'кто из агентов работает сейчас и над чем').add_argument(
         '--line', action='store_true', help='одной строкой — для статусной строки')
 
-    command('answer', 'последний ответ карточки').add_argument('session')
+    command('answer', 'последний ответ карточки (и отметить прочитанным)').add_argument('session')
+    command('inbox', 'агентские карточки с непрочитанными ответами').add_argument(
+        '--take', action='store_true', help='отметить показанное прочитанным')
 
     history = command('history', 'промпты и ответы карточки')
     history.add_argument('session')
@@ -212,6 +238,8 @@ def _parser(prog: str) -> argparse.ArgumentParser:
 
 def _wait_args(parser) -> None:
     parser.add_argument('--wait', action='store_true', help='дождаться ответа')
+    parser.add_argument('--out', default=None, metavar='ФАЙЛ',
+                        help='полный ответ — в ФАЙЛ, в вывод — только итог (бережёт контекст)')
     parser.add_argument('--image', action='append', default=[], metavar='ПУТЬ',
                         help='картинка к промпту (png/jpeg/webp/gif); флаг повторяется')
     parser.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT,
@@ -301,8 +329,42 @@ def _fanout_text(rows: list) -> str:
     blocks = []
     for index, row in enumerate(rows, 1):
         head = f"#{index} {row['session'] or '—'}"
-        blocks.append(f"{head}  ✗ {row['error']}" if row['error'] else f"{head}\n{row['answer']}")
+        if row['error']:
+            blocks.append(f"{head}  ✗ {row['error']}")
+        elif 'out' in row:
+            blocks.append(f"{head}\n{row['brief']}\n(полный ответ: {row['out']})")
+        else:
+            blocks.append(f"{head}\n{row['answer']}")
     return '\n\n'.join(blocks)
+
+
+def _inbox_text(rows: list) -> str:
+    if not rows:
+        return 'непрочитанных ответов нет'
+    return '\n\n'.join(f"🤖 {row['title'] or row['session']}  [{row['session']}]\n{row['brief']}"
+                       for row in rows)
+
+
+def _asked(args, value: str) -> str:
+    """Текст промпта; с `--out` — с просьбой начать ответ итогом."""
+    text = _text(value)
+    return text + DSH_BOARD_BRIEF_ASK if getattr(args, 'out', None) else text
+
+
+def _answer_row(args, session: str, answer: str) -> dict:
+    """Строка ответа; с `--out` полный ответ уходит в файл, в строке — итог и путь."""
+    if not getattr(args, 'out', None) or not answer:
+        return {'session': session, 'answer': answer}
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    with open(args.out, 'w', encoding='utf-8') as handle:
+        handle.write(answer)
+    return {'session': session, 'brief': dsh_board_brief(answer), 'out': args.out}
+
+
+def _answer_text(row: dict) -> str:
+    if 'out' in row:
+        return f"{row['brief']}\n(полный ответ: {row['out']})"
+    return row.get('answer') or ''
 
 
 def _board_text(state: dict) -> str:

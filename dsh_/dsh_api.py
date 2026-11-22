@@ -40,9 +40,21 @@ DSH_API_TTL = 3600
 
 DSH_API_TIMEOUT = 10.0
 
+# Код ошибки хоста «служба ещё не поднялась» — первые секунды после перезапуска.
+DSH_API_UNAVAILABLE_CODE = 'gateway/service-unavailable'
+
 
 class DshApiError(RuntimeError):
     """Хост не ответил, ответил веткой ошибки или не пустил (401)."""
+
+
+class DshApiUnavailable(DshApiError):
+    """Хост ответил, но нужная служба у него ещё не поднялась (`gateway/service-unavailable`).
+
+    Так хост отвечает первые секунды после перезапуска. Вызов при этом **точно не
+    исполнен** — в отличие от таймаута, после которого неизвестно, дошёл ли он, — поэтому
+    его безопасно повторить, в том числе отправку промпта и заведение карточки.
+    """
 
 
 class DshApiUnreachable(DshApiError):
@@ -92,8 +104,9 @@ def dsh_api_call(method: str, args: dict = None, *, base: str = DSH_API_ADDR_DEF
     if result.get('ok'):
         return result.get('value')
     error = result.get('error') or {}
-    raise DshApiError(f"{error.get('code', 'internal')}: "
-                      f"{error.get('message', 'без описания')}")
+    code = error.get('code', 'internal')
+    kind = DshApiUnavailable if code == DSH_API_UNAVAILABLE_CODE else DshApiError
+    raise kind(f"{code}: {error.get('message', 'без описания')}")
 
 
 def dsh_api_get(path: str, *, base: str = DSH_API_ADDR_DEFAULT,

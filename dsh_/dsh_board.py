@@ -39,14 +39,23 @@ import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
-    DshApiUnreachable, dsh_api_get, dsh_api_post
-from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_list, \
-    dsh_session_prompt, dsh_session_reply_wait, dsh_session_title
+    DshApiUnavailable, DshApiUnreachable, dsh_api_get, dsh_api_post
+from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_cursor, \
+    dsh_session_list, dsh_session_prompt, dsh_session_reply_wait, dsh_session_title
 
 # Потолок ожидания ответа субагента по умолчанию, с.
 DSH_BOARD_WAIT_TIMEOUT = 1800
 # Шаг, с которым переспрашивать хост, не ответивший вовремя.
 DSH_BOARD_RETRY_POLL = 2.0
+# Сколько ждать, пока у хоста после перезапуска поднимутся службы, с.
+DSH_BOARD_STARTUP_WAIT = 120
+# Выжимка ответа: просьба к субагенту и пределы, которыми её режем, если он не послушал.
+DSH_BOARD_BRIEF_ASK = ('\n\nНачни ответ с блока «ИТОГ:» — 3–5 строк сути, затем пустая строка и '
+                       'подробности. Оркестратор читает только итог, подробности — по необходимости.')
+DSH_BOARD_BRIEF_LINES = 5
+DSH_BOARD_BRIEF_CHARS = 700
+# Отметки «ответ прочитан» по агентским карточкам: ключ карточки → seq журнала.
+DSH_BOARD_INBOX = 'dsh-board.inbox.json'
 # Кэш подписей карточек для `dsh_board_working` и сколько он живёт, с.
 DSH_BOARD_TITLES = 'dsh-board.titles.json'
 DSH_BOARD_TITLES_TTL = 600
@@ -195,10 +204,11 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, robot
     Raises:
         DshBoardError: ручка ответила без id сессии.
     """
-    answer = dsh_api_post('continuous-agent.session',
-                          {'workspace': os.path.realpath(os.path.expanduser(cwd)),
-                           'title': title, 'fullAccess': full_access, 'robot': robot},
-                          base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
+    body = {'workspace': os.path.realpath(os.path.expanduser(cwd)),
+            'title': title, 'fullAccess': full_access, 'robot': robot}
+    answer = _patient(lambda: dsh_api_post('continuous-agent.session', body, base=base,
+                                           timeout=DSH_BOARD_HTTP_TIMEOUT),
+                      DSH_BOARD_STARTUP_WAIT, retry=(DshApiUnavailable,)) or {}
     if not answer.get('session'):
         raise DshBoardError(f'карточка не заведена: ручка ответила {str(answer)[:200]}')
     return answer['session']
@@ -229,14 +239,71 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
     deadline = time.time() + timeout
     mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
-    dsh_session_prompt(session, text, images=images, base=base)
+    # Промпт повторяем только на «служба ещё не поднялась» — тогда он точно не ушёл.
+    _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), timeout,
+             retry=(DshApiUnavailable,))
     if not wait:
         return ''
     answer = dsh_session_reply_wait(session, mark, text, max(0.0, deadline - time.time()), base=base)
     if answer is None:
         raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
-                            f'dsh_session_answer_last')
+                            f'dsh-board inbox')
+    # Ответ получен — во «входящих» его больше нет.
+    with contextlib.suppress(DshApiError, OSError):
+        dsh_board_inbox_take(session, dsh_session_cursor(session, base=base))
     return answer
+
+
+def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Агентские карточки с ответами, которых оркестратор ещё не забрал.
+
+    Ответ субагента остаётся в журнале его карточки, даже если сессия оркестратора,
+    отдавшая задачу, закрылась. Здесь — список таких: агентская карточка (`robots`
+    доски), не в архиве, круг не идёт, а журнал ушёл дальше отметки «прочитано»
+    (`dsh_board_inbox_take`, файл `DSH_BOARD_INBOX`).
+
+    Returns:
+        `[{session, title, seq, brief}]` — `seq` отдавать в `dsh_board_inbox_take`.
+    """
+    state = dsh_board_state(base=base)
+    robots = set(state.get('robots') or [])
+    archived = set(state.get('archived') or [])
+    taken = _inbox_read()
+    rows = []
+    for item in dsh_session_list(base=base):
+        key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
+        if key not in robots or item.get('sessionId') in archived or item.get('running'):
+            continue
+        seq = int((item.get('projections') or {}).get('asOfSeq') or 0)
+        if seq <= taken.get(key, 0):
+            continue
+        answer = dsh_session_answer_last(item['sessionId'], taken.get(key, 0), base=base)
+        if answer:
+            rows.append({'session': key, 'title': dsh_session_title(item), 'seq': seq,
+                         'brief': dsh_board_brief(answer)})
+    return rows
+
+
+def dsh_board_inbox_take(session: str, seq: int) -> None:
+    """Отметить ответы карточки до записи журнала `seq` прочитанными."""
+    key = re.sub(r'-g\d+$', '', session)
+    taken = _inbox_read()
+    if seq > taken.get(key, 0):
+        taken[key] = seq
+        _json_write(_home_path(DSH_BOARD_INBOX), taken)
+
+
+def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
+    """Выжимка ответа субагента для оркестратора — чтобы полный ответ не ел его контекст.
+
+    Если ответ начинается блоком «ИТОГ:» (так просит `DSH_BOARD_BRIEF_ASK`), берётся этот
+    блок до первой пустой строки; иначе — первые строки ответа. В обоих случаях не
+    длиннее `limit` символов.
+    """
+    text = (answer or '').strip()
+    match = re.search(r'(?im)^\W*итог\W*:?\s*(.+?)(?:\n\s*\n|\Z)', text, re.DOTALL)
+    brief = match.group(1).strip() if match else '\n'.join(text.splitlines()[:DSH_BOARD_BRIEF_LINES])
+    return brief if len(brief) <= limit else brief[:limit - 1] + '…'
 
 
 def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
@@ -291,10 +358,30 @@ def dsh_board_goal_session(goal_id: str, *, base: str = DSH_API_ADDR_DEFAULT) ->
 
 # ── детали реализации ──
 
+def _home_path(name: str) -> str:
+    """Путь к файлу слоя в каталоге хоста (`DSH_HOME`, по умолчанию `~/.dsh`)."""
+    return os.path.join(os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT), name)
+
+
+def _json_write(path: str, value) -> None:
+    """Записать JSON целиком через временный файл: читающий не увидит полфайла."""
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as handle:
+        json.dump(value, handle, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _inbox_read() -> dict:
+    try:
+        with open(_home_path(DSH_BOARD_INBOX), encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
 def _titles_cached(keys: list, base: str) -> dict:
     """Подписи карточек по ключам (без суффикса поколения) — из кэша, а нет — с хоста."""
-    home = os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT)
-    path = os.path.join(home, DSH_BOARD_TITLES)
+    path = _home_path(DSH_BOARD_TITLES)
     try:
         fresh = time.time() - os.stat(path).st_mtime < DSH_BOARD_TITLES_TTL
         with open(path, encoding='utf-8') as handle:
@@ -308,24 +395,23 @@ def _titles_cached(keys: list, base: str) -> dict:
         key = re.sub(r'-g\d+$', '', item.get('sessionId') or '')
         titles.setdefault(key, dsh_session_title(item))
     with contextlib.suppress(OSError):
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as handle:
-            json.dump(titles, handle, ensure_ascii=False)
-        os.replace(tmp, path)
+        _json_write(path, titles)
     return titles
 
 
-def _patient(ask, timeout: float):
-    """Повторять безопасный вопрос хосту, пока он не ответит или не выйдет `timeout`.
+def _patient(ask, timeout: float, retry: tuple = (DshApiUnreachable, DshApiUnavailable)):
+    """Повторять вопрос хосту, пока он не ответит или не выйдет `timeout`.
 
-    Повторяется только «хост не ответил» (`DshApiUnreachable`): отказ метода и 401
-    приходят сразу, ждать их исправления нечего.
+    По умолчанию повторяются «хост не ответил» и «служба ещё не поднялась» — так зовут
+    безопасные вопросы (засечку). Действия (промпт, заведение карточки) зовут с
+    `retry=(DshApiUnavailable,)`: после таймаута неизвестно, дошло ли действие, и повтор
+    задвоил бы его. Отказ метода и 401 приходят сразу, ждать их исправления нечего.
     """
     deadline = time.time() + timeout
     while True:
         try:
             return ask()
-        except DshApiUnreachable:
+        except retry:
             if time.time() > deadline:
                 raise
             time.sleep(DSH_BOARD_RETRY_POLL)
