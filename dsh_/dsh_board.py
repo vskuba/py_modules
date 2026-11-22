@@ -40,6 +40,7 @@ import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
     DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
+from dsh_.dsh_saving import dsh_saving_owner_mark, dsh_saving_sent
 from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_new
 from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_turn_start_wait, \
     dsh_session_dialog, dsh_session_find, dsh_session_history, dsh_session_list, \
@@ -188,54 +189,6 @@ def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     return {'capacity': _capacity(state), 'working': working}
 
 
-def dsh_board_model_of(session: str, *, base: str = DSH_API_ADDR_DEFAULT):
-    """Модель, в бокс которой класть промпт карточки, или None — назвать нечем.
-
-    Модель карточки (`sessionModel`) известна только после её первого круга: у свежей
-    карточки выбора ещё нет. Тогда берётся включённая модель доски, если она одна, — ту
-    же модель карточка и получит на первом круге. Промпт без модели лёг бы вне бокса
-    («неположенным») и не пошёл бы нигде.
-    """
-    state = dsh_board_state(session, base=base)
-    if state.get('sessionModel'):
-        return state['sessionModel']
-    models = state.get('models') or []
-    return models[0] if len(models) == 1 else None
-
-
-def dsh_board_working(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
-    """Кто из агентов сейчас работает и над чем — по занятым моторам доски.
-
-    Источник истины — хост: маршрут плагина `continuous-agent.working` отдаёт занятые
-    моторы с подписями одним лёгким запросом. Зовётся часто (статусная строка — раз в
-    секунду). Плагин старше маршрута (404) — список собирается здесь: `state` доски и
-    подписи из кэша на диске (`DSH_BOARD_TITLES`); тяжёлый `session/list` спрашивается,
-    только когда подписи в кэше нет или он старше `DSH_BOARD_TITLES_TTL`.
-
-    Returns:
-        `[{session, title, kind, goal, motor, model, robot}]`: `kind` — `run` (заход промпта
-        доски, `goal` — его название) или `hand` (работа руками: человек или
-        оркестратор гонит сессию сам, `goal` пуст); `title` — подпись карточки.
-    """
-    try:
-        answer = dsh_api_get('continuous-agent.working', base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
-        return [{key: row.get(key) for key in ('session', 'title', 'kind', 'goal', 'motor', 'model', 'robot')}
-                for row in answer.get('working') or []]
-    except DshApiError as error:
-        if 'HTTP 404' not in str(error):
-            raise
-    # Плагин старше маршрута `working`: собираем сами — доска и подписи из кэша.
-    state = dsh_board_state(base=base)
-    working = [brick for brick in state.get('chain') or [] if brick.get('kind') in ('run', 'hand')]
-    if not working:
-        return []
-    keys = [brick.get('session') or '' for brick in working]
-    titles = _titles_cached(keys, base)
-    return [{'session': key, 'title': titles.get(key, ''), 'kind': brick.get('kind'),
-             'goal': brick.get('name') or '', 'motor': brick.get('motor'),
-             'model': brick.get('model')} for key, brick in zip(keys, working)]
-
-
 def dsh_board_motors_set(provider: str, model: str, count: int, *,
                          base: str = DSH_API_ADDR_DEFAULT) -> None:
     """Сколько моторов (параллельных цепочек) у модели: от 1 до 4, по умолчанию 4.
@@ -294,6 +247,8 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, robot
                       DSH_BOARD_STARTUP_WAIT, retry=(DshApiUnavailable,)) or {}
     if not answer.get('session'):
         raise DshBoardError(f'карточка не заведена: ручка ответила {str(answer)[:200]}')
+    # Чья карточка — для счёта экономии по сессиям Claude Code (dsh_saving).
+    dsh_saving_owner_mark(answer['session'])
     return answer['session']
 
 
@@ -325,6 +280,7 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     # заведения карточки, не повод ронять задачу. Сам промпт вслепую не повторяем:
     # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
     deadline = time.time() + timeout
+    dsh_saving_sent(session, text)
     mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
     # Промпт повторяем только на «служба ещё не поднялась» — тогда он точно не ушёл.
     def send():

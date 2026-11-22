@@ -31,6 +31,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_WAIT_TIMEOUT, DshBoard
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
+from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
 from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_land, dsh_worktree_new
@@ -100,6 +101,7 @@ def _run(args) -> int:
     if command == 'working':
         status = dsh_board_motors_busy(base=base)
         if args.line:
+            status['saving'] = dsh_saving_badge(args.session, base=base)
             return _print(args, status, _working_line)
         return _print(args, status['working'], _working_text)
 
@@ -149,6 +151,11 @@ def _run(args) -> int:
 
     if command == 'stats':
         return _print(args, dsh_board_stats(args.all, base=base), _stats_text)
+
+    if command == 'saving':
+        owner = args.session or os.environ.get(DSH_SAVING_OWNER_ENV) or ''
+        rows = [dsh_saving_report(owner, base=base)] if owner else []
+        return _print(args, rows + [dsh_saving_report(account_of=owner, base=base)], _saving_text)
 
     if command == 'revive':
         rows = dsh_board_resume(args.dry, base=base)
@@ -257,8 +264,12 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     fanout.add_argument('--out-dir', default=None, metavar='КАТАЛОГ',
                         help='полные ответы — в КАТАЛОГ/N.md, в вывод — только итоги')
 
-    command('working', 'кто из агентов работает сейчас и над чем').add_argument(
-        '--line', action='store_true', help='одной строкой — для статусной строки')
+    working = command('working', 'кто из агентов работает сейчас и над чем')
+    working.add_argument('--line', action='store_true', help='одной строкой — для статусной строки')
+    working.add_argument('--session', default='', metavar='ID',
+                         help='сессия Claude Code: к строке — её экономия «(-5%%)»')
+    command('saving', 'сколько процентов тарифа Claude сберегли субагенты').add_argument(
+        '--session', default='', metavar='ID', help='сессия Claude Code (по умолчанию — текущая)')
 
     command('answer', 'последний ответ карточки (и отметить прочитанным)').add_argument('session')
     diff = command('diff', 'что субагент поменял в своей копии репозитория')
@@ -395,10 +406,28 @@ def _working_line(status: dict) -> str:
     """`DSH 0/4` в простое, `DSH 2/4: ревью dsh_board · Часовая сверка…` в работе."""
     rows = status['working']
     head = f"DSH {len(rows)}/{status['capacity']}"
+    if status.get('saving'):
+        head += f" {status['saving']}"
     if not rows:
         return head
     parts = [_short(row['goal'] or row['title'] or row['session'], 28) for row in rows]
     return f"{head}: {' · '.join(parts)}"
+
+
+def _saving_text(rows: list) -> str:
+    def k(value):
+        return f'{value / 1000:,.0f}k'.replace(',', ' ')
+
+    def pct(value):
+        return '—' if value is None else f'{value:g}%'
+    blocks = []
+    for row in rows:
+        scope = f"сессия Claude {row['owner'][:8]}" if row['owner'] else 'все субагенты'
+        blocks.append(f"{scope}: карточек {row['sessions']}\n"
+                      f"  работа субагентов {k(row['worked'])} − делегирование {k(row['overhead'])} "
+                      f"= сбережено {k(row['saved'])} взвешенных токенов\n"
+                      f"  ≈ {pct(row['five_hour_pct'])} 5-часового окна · {pct(row['seven_day_pct'])} недели")
+    return '\n'.join(blocks)
 
 
 def _short(text: str, limit: int) -> str:
