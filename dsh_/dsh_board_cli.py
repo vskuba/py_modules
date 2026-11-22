@@ -26,7 +26,7 @@ import time
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
     dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_take, dsh_board_resume, \
-    dsh_board_stats, \
+    dsh_board_gc, dsh_board_stats, dsh_board_verify, \
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_set, \
     dsh_board_session_new, dsh_board_working, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
@@ -118,6 +118,19 @@ def _run(args) -> int:
         cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
         dsh_worktree_drop(cwd, args.force)
         return _print(args, {'removed': cwd}, lambda v: f"копия убрана: {v['removed']}")
+
+    if command == 'gc':
+        rows = dsh_board_gc(args.days, args.dry, base=base)
+        verb = 'к уборке' if args.dry else 'убрано'
+        return _print(args, rows, lambda v: '\n'.join(
+            f"🤖 {r['title'] or r['session']}" + (f"  [копия: {r['kept'] or 'убрана'}]" if r['worktree'] else '')
+            for r in v) + f"\n{verb}: {len(v)}" if v else 'убирать нечего')
+
+    if command == 'verify':
+        result = dsh_board_verify(args.session, args.timeout, base=base)
+        row = _answer_row(args, result['verifier'], result['answer'])
+        return _print(args, {**row, 'checked': args.session},
+                      lambda v: f"проверяющий: {v['session']}\n{_answer_text(v)}")
 
     if command == 'stats':
         return _print(args, dsh_board_stats(args.all, base=base), _stats_text)
@@ -239,6 +252,13 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     drop_tree = command('drop-worktree', 'убрать копию репозитория карточки (ветка остаётся)')
     drop_tree.add_argument('session')
     drop_tree.add_argument('--force', action='store_true', help='и с незакоммиченными правками')
+    gc = command('gc', 'убрать отработавшие агентские карточки и их копии репозитория')
+    gc.add_argument('--days', type=float, default=7, help='дней тишины (по умолчанию 7)')
+    gc.add_argument('--dry', action='store_true', help='только показать')
+    verify = command('verify', 'перекрёстная проверка ответа карточки вторым субагентом')
+    verify.add_argument('session')
+    verify.add_argument('--out', default=None, metavar='ФАЙЛ', help='полный разбор — в ФАЙЛ, в вывод — итог')
+    verify.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
     command('stats', 'сколько токенов отработали субагенты').add_argument(
         '--all', action='store_true', help='все карточки хоста, а не только агентские')
     command('revive', 'продолжить агентские круги, оборванные перезапуском хоста').add_argument(

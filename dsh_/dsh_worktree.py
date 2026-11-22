@@ -64,6 +64,13 @@ def dsh_worktree_diff(path: str, stat_only: bool = False) -> str:
     return diff or 'изменений нет'
 
 
+def dsh_worktree_dirty(path: str) -> bool:
+    """Есть ли в копии незакоммиченные правки (новые файлы — тоже); нет копии — False."""
+    if not os.path.isdir(path):
+        return False
+    return bool(_git(path, 'status', '--porcelain', check=False).strip())
+
+
 def dsh_worktree_drop(path: str, force: bool = False) -> None:
     """Убрать копию. Ветка остаётся — её сливают или удаляют руками.
 

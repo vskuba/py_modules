@@ -39,10 +39,11 @@ import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
-    DshApiUnavailable, DshApiUnreachable, dsh_api_get, dsh_api_post
+    DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
+from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_cursor, \
-    dsh_session_history, dsh_session_list, dsh_session_prompt, dsh_session_title, \
-    dsh_session_turn_reply
+    dsh_session_dialog, dsh_session_find, dsh_session_history, dsh_session_list, \
+    dsh_session_prompt, dsh_session_title, dsh_session_turn_reply
 
 # Потолок ожидания ответа субагента по умолчанию, с.
 DSH_BOARD_WAIT_TIMEOUT = 1800
@@ -59,6 +60,18 @@ DSH_BOARD_BRIEF_ASK = ('\n\nНачни ответ с блока «ИТОГ:» �
                        'подробности. Оркестратор читает только итог, подробности — по необходимости.')
 DSH_BOARD_BRIEF_LINES = 5
 DSH_BOARD_BRIEF_CHARS = 700
+# Уборка: сколько дней тишины у агентской карточки, чтобы её убрать, и примета копии репо.
+DSH_BOARD_GC_DAYS = 7
+DSH_BOARD_WORKTREE_MARK = '/.claude/worktrees/dsh-'
+# Задание проверяющему субагенту.
+DSH_BOARD_VERIFY_ASK = (
+    'Ты — проверяющий. Другой агент получил задачу и дал ответ. Сверь КАЖДОЕ утверждение '
+    'ответа с кодом в этой папке или с первоисточником (для фактов из интернета — открой '
+    'источник). Ничего не меняй в файлах. Разложи утверждения на три группы: ✅ подтверждено, '
+    '❌ неверно (что на самом деле и где это видно), ❓ не удалось проверить (почему). '
+    'Не пересказывай ответ — только вердикты.\n\n'
+    '=== ЗАДАЧА ===\n{task}\n\n=== ОТВЕТ ===\n{answer}'
+)
 # Сколько самых затратных карточек показывать в статистике.
 DSH_BOARD_STATS_TOP = 5
 # Отметки «ответ прочитан» по агентским карточкам: ключ карточки → seq журнала.
@@ -335,6 +348,83 @@ def dsh_board_resume(dry: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> 
         if not dry:
             dsh_session_prompt(session, DSH_BOARD_RESUME_TEXT, base=base)
         rows.append({'session': key, 'title': dsh_session_title(item)})
+    return rows
+
+
+def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
+                     base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Перекрёстная проверка: второй субагент сверяет ответ первого с кодом и источниками.
+
+    Проверка — самая дорогая часть работы оркестратора с субагентами: каждое утверждение
+    надо сверить самому. Здесь её делает другой агент в той же папке, без контекста
+    первого (свежим взглядом): получает исходную задачу и ответ, сверяет каждое
+    утверждение и раскладывает на «подтверждено / неверно / не проверить». Оркестратору —
+    итог; смотреть самому остаётся только «неверно» и «не проверить».
+
+    Returns:
+        `{session, verifier, answer}` — проверяемая карточка, карточка проверяющего и его
+        полный ответ (итог — `dsh_board_brief`).
+
+    Raises:
+        DshBoardError: в проверяемой карточке нет пары «задача — ответ».
+    """
+    item = dsh_session_find(session, base=base)
+    rows = dsh_session_dialog(session, 10, base=base)
+    task = next((row['text'] for row in reversed(rows) if row['role'] == 'user'), '')
+    answer = next((row['text'] for row in reversed(rows) if row['role'] == 'assistant'), '')
+    if not task or not answer:
+        raise DshBoardError(f'в карточке {session} нет пары «задача — ответ» для проверки')
+    title = f"проверка: {dsh_session_title(item) or session}"[:60]
+    verifier = dsh_board_session_new(item.get('cwd') or '.', title, base=base)
+    prompt = DSH_BOARD_VERIFY_ASK.format(task=task, answer=answer) + DSH_BOARD_BRIEF_ASK
+    return {'session': session, 'verifier': verifier,
+            'answer': dsh_board_ask(verifier, prompt, wait=True, timeout=timeout, base=base)}
+
+
+def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
+                 base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Убрать отработавшие агентские карточки: архив, их копии репозитория, проекты копий.
+
+    Каждое «d …» и каждая задача оркестратора заводит карточку; без уборки их через неделю
+    десятки. Убираются только агентские (`robots`), не идущие и не обновлявшиеся дольше
+    `days`. Копия репозитория (`dsh_worktree`) снимается, только если в ней нет
+    незакоммиченных правок — ветка остаётся в любом случае.
+
+    Args:
+        days: сколько дней тишины, чтобы карточка считалась отработавшей.
+        dry: только показать.
+
+    Returns:
+        `[{session, title, worktree, kept}]` — `kept` непусто, если копию оставили (почему).
+    """
+    state = dsh_board_state(base=base)
+    robots = set(state.get('robots') or [])
+    archived = set(state.get('archived') or [])
+    workspaces = {os.path.realpath(w.get('path') or ''): w.get('id') for w in state.get('workspaces') or []}
+    edge = (time.time() - days * 86400) * 1000
+    rows = []
+    for item in dsh_session_list(base=base):
+        session = item.get('sessionId') or ''
+        key = re.sub(r'-g\d+$', '', session)
+        if key not in robots or session in archived or item.get('running'):
+            continue
+        if (item.get('updatedAt') or 0) > edge:
+            continue
+        cwd = item.get('cwd') or ''
+        worktree = cwd if DSH_BOARD_WORKTREE_MARK in cwd else ''
+        kept = ''
+        if worktree and dsh_worktree_dirty(worktree):
+            kept = 'в копии незакоммиченные правки'
+        if not dry:
+            dsh_session_archive(session, base=base)
+            if worktree and not kept:
+                with contextlib.suppress(DshWorktreeError):
+                    dsh_worktree_drop(worktree)
+                workspace = workspaces.get(os.path.realpath(worktree))
+                if workspace:
+                    with contextlib.suppress(DshApiError):
+                        dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace}}, base=base)
+        rows.append({'session': key, 'title': dsh_session_title(item), 'worktree': worktree, 'kept': kept})
     return rows
 
 
