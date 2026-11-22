@@ -37,6 +37,9 @@ DSH_SESSION_REPLY_SPAN = 40
 
 # Шаг опроса журнала в ожидании конца круга.
 DSH_SESSION_POLL = 2.0
+# Страница журнала долгой карточки (сотни шагов с выводами инструментов) тяжела: под
+# нагрузкой хост отдаёт её дольше общих 10 с, и verify/history падали с «timed out».
+DSH_SESSION_PAGE_TIMEOUT = 90.0
 
 
 def dsh_session_list(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
@@ -110,7 +113,8 @@ def dsh_session_history(session: str, messages: int = DSH_SESSION_SPAN, *,
         return []
     request = {'address': {'kind': 'session', 'sessionId': session},
                'maxMessages': messages, 'throughSeq': cursor, 'beforeSeq': cursor + 1}
-    page = dsh_api_call('session/page', {'request': request}, base=base) or {}
+    page = dsh_api_call('session/page', {'request': request}, base=base,
+                        timeout=DSH_SESSION_PAGE_TIMEOUT) or {}
     return [entry.get('event', entry) for entry in page.get('records') or []
             if isinstance(entry, dict)]
 
