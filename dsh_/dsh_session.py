@@ -6,9 +6,12 @@
 
 Журнал читается **без вебсокета**. Хост отдаёт хвост журнала первым кадром потока
 `session/follow`, но тот же хвост даёт и обычный вызов `session/page` — ему нужна лишь
-засечка журнала (`throughSeq`), не дальше текущей. Её приносит `session/list`: у каждой
-карточки там `projections.asOfSeq`. Засечка проекций может отставать от журнала на
-запись-другую — тогда самое свежее событие придёт следующим опросом, а не потеряется.
+засечка журнала (`throughSeq`), не дальше текущей. Засечку одной карточки называет сам
+`session/page`: запрос «дальше конца» он отклоняет текстом `past cursor N` — 0,2 с.
+⚠⚠ Не `session/list` ради засечки: он несёт проекции **всех** карточек (346 карточек —
+2,5 МБ и 43 с), и ожидание ответа, звавшее его каждые 2 с, держало хост в непрерывной
+сборке мусора на 6 ГБ кучи. Сам список кэшируется на диске, общим для всех процессов
+(`DSH_SESSION_LIST_TTL`), и перечитывает его один процесс за раз.
 
 Конец круга узнаётся **по журналу**, а не опросом «идёт ли круг» (`running` в списке):
 короткий круг (3–5 с) опрос пропускает, если хост в эти секунды занят — замечено, что
@@ -16,12 +19,15 @@
 остаётся навсегда, её не проспать.
 """
 import base64
+import fcntl
+import json
 import mimetypes
 import os
+import re
 import time
 import uuid
 
-from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnavailable, DshApiUnreachable, \
+from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, DshApiUnavailable, DshApiUnreachable, \
     dsh_api_call
 
 # Сколько записей журнала брать на одну видимую реплику: между промптом и ответом лежат
@@ -40,26 +46,53 @@ DSH_SESSION_POLL = 2.0
 # Страница журнала долгой карточки и список карточек (сотни шагов с выводами инструментов) тяжела: под
 # нагрузкой хост отдаёт её дольше общих 10 с, и verify/history падали с «timed out».
 DSH_SESSION_PAGE_TIMEOUT = 90.0
+# Список карточек — общий кэш на диске (каталог хоста): моложе TTL — с диска, старше —
+# перечитывает один процесс под замком, остальные тем временем берут прошлый снимок.
+DSH_SESSION_LIST_CACHE = 'dsh-session-list.json'
+DSH_SESSION_LIST_TTL = 60.0
+# Засечка «дальше конца» — её хост отклоняет, называя настоящую.
+DSH_SESSION_PROBE_SEQ = 10 ** 12
 
 
-def dsh_session_list(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
-    """Все сохранённые карточки хоста, свежие сверху.
+def dsh_session_list(fresh: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Все сохранённые карточки хоста, свежие сверху — из общего кэша, если он свежий.
+
+    Args:
+        fresh: перечитать у хоста, даже если кэш моложе `DSH_SESSION_LIST_TTL`.
 
     Returns:
         Список `SessionSummary`: `sessionId`, `updatedAt`, `running`, `blank`,
         `agentAvailable`, иногда `cwd` и `projections` (там `values.title` и `asOfSeq`).
         ⚠ Архивные карточки в списке **остаются** — архив виден только реестром проектов.
     """
-    # Список несёт проекции всех карточек и под нагрузкой тяжёл так же, как страница журнала.
-    return (dsh_api_call('session/list', {'_request': {}}, base=base,
-                         timeout=DSH_SESSION_PAGE_TIMEOUT) or {}).get('items', [])
+    path = _cache_path(base)
+    cached = _cache_read(path)
+    if cached is not None and not fresh and time.time() - cached['at'] < DSH_SESSION_LIST_TTL:
+        return cached['items']
+    with open(path + '.lock', 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | (fcntl.LOCK_NB if cached is not None else 0))
+        except BlockingIOError:
+            return cached['items']           # перечитывает сосед — берём прошлый снимок
+        again = _cache_read(path)            # пока ждали замок, сосед мог уже перечитать
+        if again is not None and (again['at'] > (cached or {}).get('at', 0) or
+                                  (not fresh and time.time() - again['at'] < DSH_SESSION_LIST_TTL)):
+            return again['items']
+        items = (dsh_api_call('session/list', {'_request': {}}, base=base,
+                              timeout=DSH_SESSION_PAGE_TIMEOUT) or {}).get('items', [])
+        _cache_write(path, {'at': time.time(), 'items': items})
+        return items
 
 
 def dsh_session_find(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
-    """Карточка из списка по id; пустой словарь — такой нет."""
-    for item in dsh_session_list(base=base):
-        if item.get('sessionId') == session:
-            return item
+    """Карточка из списка по id; пустой словарь — такой нет.
+
+    Нет в кэше — список перечитывается один раз: карточку могли завести после снимка.
+    """
+    for fresh in (False, True):
+        for item in dsh_session_list(fresh, base=base):
+            if item.get('sessionId') == session:
+                return item
     return {}
 
 
@@ -102,7 +135,7 @@ def dsh_session_archive(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> li
     return value.get('archivedSessionIds', [])
 
 
-def dsh_session_history(session: str, messages: int = DSH_SESSION_SPAN, *,
+def dsh_session_history(session: str, messages: int = DSH_SESSION_SPAN, cursor: int = None, *,
                         base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Хвост журнала карточки: последние `messages` сообщений со всеми их событиями.
 
@@ -110,7 +143,8 @@ def dsh_session_history(session: str, messages: int = DSH_SESSION_SPAN, *,
         События `{"type", "seq", "time", "data"}` по возрастанию `seq`; пусто — журнала
         нет или карточка без проекций (пустая, ни одного круга).
     """
-    cursor = dsh_session_cursor(session, base=base)
+    if cursor is None:
+        cursor = dsh_session_cursor(session, base=base)
     if cursor == 0:
         return []
     request = {'address': {'kind': 'session', 'sessionId': session},
@@ -128,6 +162,17 @@ def dsh_session_cursor(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> int
         DshApiError: `session/not-found` — такой карточки нет: опечатка в id не должна
             оборачиваться получасом ожидания пустого журнала.
     """
+    request = {'address': {'kind': 'session', 'sessionId': session}, 'maxMessages': 1,
+               'throughSeq': DSH_SESSION_PROBE_SEQ, 'beforeSeq': DSH_SESSION_PROBE_SEQ + 1}
+    try:
+        dsh_api_call('session/page', {'request': request}, base=base)
+    except (DshApiUnreachable, DshApiUnavailable):
+        raise
+    except DshApiError as error:
+        found = re.search(r'past cursor (\d+)', str(error))
+        if found:
+            return int(found.group(1))
+    # Хост ответил иначе (журнала нет, формат сменился) — засечка из списка.
     item = dsh_session_find(session, base=base)
     if not item:
         raise DshApiError(f'session/not-found: {session}')
@@ -192,9 +237,15 @@ def dsh_session_turn_reply(session: str, after: int, text: str, timeout: float =
     deadline = time.time() + timeout
     asked = ' '.join(str(text).split())
     mine = 0
+    seen = -1
     while True:
+        # Журнал читается, только когда засечка сдвинулась: пока агент думает, виток
+        # стоит одну лёгкую пробу, а не страницу из 40 сообщений.
         try:
-            events = dsh_session_history(session, DSH_SESSION_REPLY_SPAN, base=base)
+            cursor = dsh_session_cursor(session, base=base)
+            events = dsh_session_history(session, DSH_SESSION_REPLY_SPAN, cursor, base=base) \
+                if cursor != seen else []
+            seen = cursor
         except (DshApiUnreachable, DshApiUnavailable):
             events = []                      # хост занят или поднимается — спросим следующим витком
         if mine == 0:
@@ -252,6 +303,28 @@ def dsh_session_message_text(message: dict) -> str:
 
 
 # ── детали реализации ──
+
+def _cache_path(base: str) -> str:
+    home = os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT)
+    tag = re.sub(r'[^0-9a-zA-Z]+', '-', base).strip('-')
+    return os.path.join(home, f'{tag}.{DSH_SESSION_LIST_CACHE}')
+
+
+def _cache_read(path: str):
+    try:
+        with open(path, encoding='utf-8') as handle:
+            value = json.load(handle)
+        return value if isinstance(value.get('items'), list) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _cache_write(path: str, value: dict) -> None:
+    tmp = f'{path}.{os.getpid()}.tmp'
+    with open(tmp, 'w', encoding='utf-8') as handle:
+        json.dump(value, handle)             # ASCII: в журналах хоста бывают одиночные суррогаты
+    os.replace(tmp, path)
+
 
 def _dialog_row(event: dict):
     """Событие журнала как реплика диалога, или None — это не реплика."""
