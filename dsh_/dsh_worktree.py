@@ -17,6 +17,7 @@ dsh_worktree_drop(tree['path'])          # ветка dsh/… остаётся, 
 """
 import os
 import re
+import secrets
 import subprocess
 import time
 
@@ -122,9 +123,13 @@ def _start_ref(path: str) -> str:
 
 
 def _slug(name: str) -> str:
-    """Латинский слаг имени с меткой времени: ветки и каталоги не сталкиваются."""
+    """Латинский слаг имени с меткой времени и случайным хвостом: ветки и каталоги не сталкиваются.
+
+    ⚠ Одной метки времени мало: `fanout` заводит копии в одну секунду, а кириллическое имя
+    целиком сводится к `task` — три задачи получали одну ветку, и две падали на старте.
+    """
     base = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:30] or 'task'
-    return f'{base}-{time.strftime("%m%d-%H%M%S")}'
+    return f'{base}-{time.strftime("%m%d-%H%M%S")}-{secrets.token_hex(2)}'
 
 
 def _git(cwd: str, *args, check: bool = True) -> str:
