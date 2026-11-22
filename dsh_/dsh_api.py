@@ -122,6 +122,38 @@ def dsh_api_get(path: str, *, base: str = DSH_API_ADDR_DEFAULT,
         raise DshApiError(f'ручка ответила не JSON: {raw[:200]!r}') from error
 
 
+def dsh_api_post(path: str, body: dict, *, base: str = DSH_API_ADDR_DEFAULT,
+                 timeout: float = DSH_API_TIMEOUT):
+    """Отправить POST в ручку плагина (`/api/<домен>.<route>`) телом JSON без конверта.
+
+    Пара к `dsh_api_get`: маршруты плагинов (`continuous-agent.tool`,
+    `continuous-agent.settings`) принимают обычный JSON и отвечают им же.
+    Отказ ручки (4xx с `{"error": …}`) приходит `DshApiError` с её текстом.
+
+    Args:
+        path: путь без ведущего `/api/`.
+        body: тело запроса.
+        base: `host:port` хоста.
+        timeout: потолок секунд.
+
+    Returns:
+        Разобранный JSON ответа; `None` — пустое тело.
+
+    Raises:
+        DshApiError: 401/404/4xx/5xx, хост не ответил или ответ не JSON.
+    """
+    request = urllib.request.Request('http://' + base + '/api/' + path,
+                                     data=json.dumps(body).encode('utf-8'),
+                                     method='POST', headers=_headers(base))
+    raw = _send_raw(request, timeout)
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError as error:
+        raise DshApiError(f'ручка ответила не JSON: {raw[:200]!r}') from error
+
+
 def dsh_api_alive(*, base: str = DSH_API_ADDR_DEFAULT, timeout: float = 1.5) -> bool:
     """Отвечает ли хост вообще — секрета для этого вопроса не нужно.
 

@@ -45,6 +45,17 @@ dsh_api_get('bell.state', query='session=...')     # {'ringing': True}
 Маршруты плагинов хоста отдают обычный JSON, конверта не наращиваем: что
 вернула ручка, то и приходит.
 
+POST в ручку плагина — `dsh_api_post` той же дорогой, тело обычным JSON:
+
+```python
+from dsh_.dsh_api import dsh_api_post
+
+dsh_api_post('continuous-agent.settings', {'maxParallel': 4})   # {'ok': True}
+```
+
+Отказ ручки (4xx с `{"error": …}`) приходит `DshApiError` с её текстом. Сессии,
+задачи субагентам и доска промптов поверх этих вызовов — `docs/dsh_board.md`.
+
 ```bash
 PYTHONPATH=. python -m dsh_.dsh_api alive
 PYTHONPATH=. python -m dsh_.dsh_api call session/list --args '{"_request":{}}'
@@ -70,4 +81,4 @@ PYTHONPATH=. python -m dsh_.dsh_api call session/list --args '{"_request":{}}'
    истёк; это не «метод не найден».
 5. **GET-ручки плагинов — не конверт**: у них свой ответ (и свои
    обязательные параметры — `bell.state` без `session` отвечает 400);
-   `dsh_api_call` на них не катится, для них `dsh_api_get`.
+   `dsh_api_call` на них не катится, для них `dsh_api_get` и `dsh_api_post`.
