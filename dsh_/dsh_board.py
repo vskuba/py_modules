@@ -14,10 +14,9 @@
   и под запором реестра. Замену списка целиком (`goals`) снаружи не берут — она затирала
   бы правку из открытой формы.
 
-**Потолок хоста** (`maxParallel` доски) считает все занятые сессии: заходы доски, работу
-руками и наши промпты. Бегунок доски соблюдает его сам; `dsh_board_ask` — здесь: место
-проверяется и промпт отправляется под файловой блокировкой, которая держится, пока круг
-не начнётся. Иначе два вызова, пущенные в одну секунду, оба увидели бы «занято 0».
+Параллельность задают **моторы** доски: у модели N цепочек (по умолчанию четыре), и
+заходы из разных рядов идут разом. Наши промпты — работа руками: они идут сразу, мимо
+очереди доски.
 
 Требования: хост `dsh --profile web` на этой машине и подключённый плагин
 `dsh-continuous-agent` (claude-shell, `plugins/`) — без него работают только функции
@@ -33,32 +32,25 @@ answers = dsh_board_fanout([{'cwd': '/p/a', 'title': 'a', 'text': '…'},
 ```
 """
 import contextlib
-import fcntl
 import os
 import threading
 import time
 
-from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
-    DshApiUnreachable, dsh_api_get, dsh_api_post
+from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError, DshApiUnreachable, \
+    dsh_api_get, dsh_api_post
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cursor, dsh_session_list, dsh_session_prompt, dsh_session_title, \
     dsh_session_turn_wait
 
 # Потолок ожидания ответа субагента по умолчанию, с.
 DSH_BOARD_WAIT_TIMEOUT = 1800
-# Сколько держать блокировку места после отправки: пока в журнале не ляжет начало круга.
-# Дольше — значит промпт встал в очередь карточки за чужим, и места он не занял.
-DSH_BOARD_SLOT_HOLD = 30
-# Шаг опроса места под потолком.
-DSH_BOARD_SLOT_POLL = 2.0
+# Шаг, с которым переспрашивать хост, не ответивший вовремя.
+DSH_BOARD_RETRY_POLL = 2.0
 # Потолок одного вызова плагина: заведение сессии собирает preset — это секунды.
 DSH_BOARD_HTTP_TIMEOUT = 60
-# Файл блокировки места — один на машину, как и хост.
-DSH_BOARD_LOCK_NAME = 'dsh-board.lock'
-
 
 class DshBoardError(RuntimeError):
-    """Отказ плагина доски, нет места под потолком или круг не кончился вовремя."""
+    """Отказ плагина доски или круг не кончился вовремя."""
 
 
 def dsh_board_state(session: str = '', *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
@@ -69,7 +61,7 @@ def dsh_board_state(session: str = '', *, base: str = DSH_API_ADDR_DEFAULT) -> d
             `sessionModel` — модель этого окна.
 
     Returns:
-        `{goals, chain, machines, schedule, maxParallel, paused, executors, motors,
+        `{goals, chain, machines, schedule, paused, executors, motors,
         models, catalog, workspaces, archived, sessionModel, now}`.
     """
     return dsh_api_get('continuous-agent.state', query=f'session={session or "-"}',
@@ -93,11 +85,39 @@ def dsh_board_tool(session: str, name: str, args: dict, *,
 
 
 def dsh_board_settings(patch: dict, *, base: str = DSH_API_ADDR_DEFAULT) -> None:
-    """Настройки доски: `{maxParallel?, paused?, defaultQuota?, models?, motors?, executors?}`.
+    """Настройки доски: `{paused?, defaultQuota?, models?, motors?, executors?}`.
 
     ⚠ `models`, `motors`, `executors` — списки целиком, не добавка: что не назвал, то снял.
     """
     dsh_api_post('continuous-agent.settings', patch, base=base, timeout=DSH_BOARD_HTTP_TIMEOUT)
+
+
+def dsh_board_model_of(session: str, *, base: str = DSH_API_ADDR_DEFAULT):
+    """Модель, в бокс которой класть промпт карточки, или None — назвать нечем.
+
+    Модель карточки (`sessionModel`) известна только после её первого круга: у свежей
+    карточки выбора ещё нет. Тогда берётся включённая модель доски, если она одна, — ту
+    же модель карточка и получит на первом круге. Промпт без модели лёг бы вне бокса
+    («неположенным») и не пошёл бы нигде.
+    """
+    state = dsh_board_state(session, base=base)
+    if state.get('sessionModel'):
+        return state['sessionModel']
+    models = state.get('models') or []
+    return models[0] if len(models) == 1 else None
+
+
+def dsh_board_motors_set(provider: str, model: str, count: int, *,
+                         base: str = DSH_API_ADDR_DEFAULT) -> None:
+    """Сколько моторов (параллельных цепочек) у модели: от 1 до 4, по умолчанию 4.
+
+    Настройка `motors` правится списком целиком — что не назвал, то сбросил к умолчанию,
+    — поэтому список берётся с доски и меняется в нём одна строка, как это делает форма.
+    """
+    current = [entry for entry in dsh_board_state(base=base).get('motors') or []
+               if (entry.get('provider'), entry.get('model')) != (provider, model)]
+    dsh_board_settings({'motors': current + [{'provider': provider, 'model': model,
+                                              'motors': count}]}, base=base)
 
 
 def dsh_board_sessions(include_idle: bool = False, *,
@@ -138,60 +158,27 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, *,
     return answer['session']
 
 
-def dsh_board_slot_wait(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
-                        base: str = DSH_API_ADDR_DEFAULT) -> None:
-    """Дождаться места под потолком хоста, прежде чем занять карточку `session`.
-
-    Карточка, уже занятая работой, места не требует: промпт встанет в её очередь и новой
-    параллельности не добавит. Хост, не ответивший вовремя, считается занятым.
-
-    Raises:
-        DshBoardError: место не освободилось за `timeout`.
-    """
-    started = time.time()
-    while True:
-        try:
-            state = dsh_board_state(session, base=base)
-        except DshApiError:
-            state = None
-        if state is not None:
-            limit = state.get('maxParallel') or 0
-            busy = [machine.get('busySession') for machine in state.get('machines', [])]
-            if limit == 0 or session in busy or len(busy) < limit:
-                return
-        if time.time() - started > timeout:
-            raise DshBoardError(f'место под потолком хоста не освободилось за {int(timeout)} с')
-        time.sleep(DSH_BOARD_SLOT_POLL)
-
-
 def dsh_board_ask(session: str, text: str, wait: bool = False,
-                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, limit: bool = True, *,
+                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Задача субагенту: промпт в карточку; с `wait` — дождаться конца круга и ответа.
 
     Args:
         wait: ждать конца круга и вернуть ответ; без него промпт встаёт в очередь
             карточки, и ответ потом — `dsh_session_answer_last`.
-        timeout: потолок ожидания места и конца круга, с.
-        limit: соблюдать потолок хоста (`maxParallel`); False — отправить сразу.
+        timeout: потолок ожидания конца круга, с.
 
     Returns:
         Текст ответа при `wait`, иначе пустая строка.
 
     Raises:
-        DshBoardError: нет места под потолком или круг не кончился за `timeout`.
+        DshBoardError: круг не кончился за `timeout`.
     """
     # Засечку можно спрашивать сколько угодно раз — хост, занятый первые секунды после
     # заведения карточки, не повод ронять задачу. Сам промпт вслепую не повторяем:
     # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
     mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
-    if limit:
-        with _slot_lock():
-            dsh_board_slot_wait(session, timeout, base=base)
-            dsh_session_prompt(session, text, base=base)
-            dsh_session_turn_wait(session, mark, 'turn/start', DSH_BOARD_SLOT_HOLD, base=base)
-    else:
-        dsh_session_prompt(session, text, base=base)
+    dsh_session_prompt(session, text, base=base)
     if not wait:
         return ''
     if not dsh_session_turn_wait(session, mark, 'turn/end', timeout, base=base):
@@ -206,7 +193,7 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
 
     Задача — `{text, session}` (готовая карточка) или `{text, cwd, title}` (карточка
     заводится под каталог); `archive: true` — убрать заведённую карточку в архив после
-    ответа. Параллельность ограничивает потолок хоста: задачи сверх него ждут места.
+    ответа. Задачи идут разом — каждая в своей карточке.
 
     Returns:
         `[{session, answer, error}]` — у удавшейся `error` пустой; одна сорвавшаяся
@@ -260,20 +247,7 @@ def _patient(ask, timeout: float):
         except DshApiUnreachable:
             if time.time() > deadline:
                 raise
-            time.sleep(DSH_BOARD_SLOT_POLL)
-
-
-@contextlib.contextmanager
-def _slot_lock():
-    """Один процесс за раз проверяет место и занимает его — на всю машину."""
-    home = os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT)
-    with open(os.path.join(home, DSH_BOARD_LOCK_NAME), 'a') as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-
+            time.sleep(DSH_BOARD_RETRY_POLL)
 
 if __name__ == '__main__':
     from dsh_.dsh_board_cli import dsh_board_cli_main

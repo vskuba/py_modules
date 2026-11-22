@@ -11,8 +11,8 @@ echo "длинный промпт" | PYTHONPATH=. python -m dsh_.dsh_board ask <
 PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # N задач разом
 PYTHONPATH=. python -m dsh_.dsh_board history <session> -n 5
 PYTHONPATH=. python -m dsh_.dsh_board board --session <session>  # очередь промптов карточки
-PYTHONPATH=. python -m dsh_.dsh_board add <session> "сверяй логи" --every 60
-PYTHONPATH=. python -m dsh_.dsh_board limit 4                    # потолок сессий разом
+PYTHONPATH=. python -m dsh_.dsh_board add <session> "сверяй логи" --every 60 --motor 2
+PYTHONPATH=. python -m dsh_.dsh_board motors gx10-1/Qwen3.8-Flash-Next 1   # llama — один поток
 ```
 
 `--json` — ответ JSON вместо текста, ставится и до, и после подкоманды.
@@ -24,8 +24,9 @@ import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_WAIT_TIMEOUT, DshBoardError, dsh_board_ask, \
-    dsh_board_fanout, dsh_board_goal_session, dsh_board_session_new, dsh_board_sessions, \
-    dsh_board_settings, dsh_board_state, dsh_board_tool
+    dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_set, \
+    dsh_board_session_new, \
+    dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog
 
@@ -57,14 +58,12 @@ def _run(args) -> int:
         session = dsh_board_session_new(args.cwd, args.title, args.full_access, base=base)
         if args.ask is None:
             return _print(args, {'session': session}, lambda v: v['session'])
-        answer = dsh_board_ask(session, _text(args.ask), args.wait, args.timeout,
-                               not args.no_limit, base=base)
+        answer = dsh_board_ask(session, _text(args.ask), args.wait, args.timeout, base=base)
         return _print(args, {'session': session, 'answer': answer},
                       lambda v: f"{v['session']}\n{v['answer']}".rstrip())
 
     if command == 'ask':
-        answer = dsh_board_ask(args.session, _text(args.text), args.wait, args.timeout,
-                               not args.no_limit, base=base)
+        answer = dsh_board_ask(args.session, _text(args.text), args.wait, args.timeout, base=base)
         return _print(args, {'session': args.session, 'answer': answer},
                       lambda v: v['answer'] or 'принято в очередь карточки')
 
@@ -100,9 +99,9 @@ def _run(args) -> int:
     if command == 'add':
         facets = _facets(args)
         if 'model' not in facets:
-            # Без модели цель «неположенная» и не идёт нигде — кладём на цепочку модели
-            # своей карточки, как форма делает с черновиком.
-            model = dsh_board_state(args.session, base=base).get('sessionModel')
+            # Без модели промпт «неположенный» и не идёт нигде — кладём в бокс модели
+            # своей карточки (у свежей — единственной включённой), как форма с черновиком.
+            model = dsh_board_model_of(args.session, base=base)
             if model:
                 facets['model'] = model
         value = dsh_board_tool(args.session, 'continuous_add',
@@ -122,12 +121,13 @@ def _run(args) -> int:
         value = dsh_board_tool(session, 'continuous_drop', {'goal': args.goal}, base=base)
         return _print(args, value, lambda v: f'цель {args.goal} убрана')
 
-    if command == 'limit':
-        if args.value < 0:
-            raise ValueError('потолок — неотрицательное число; 0 — без потолка')
-        dsh_board_settings({'maxParallel': args.value}, base=base)
-        return _print(args, {'maxParallel': args.value},
-                      lambda v: f"потолок: {v['maxParallel'] or 'нет'}")
+    if command == 'motors':
+        provider, _, model = args.model.partition('/')
+        if not provider or not model:
+            raise ValueError('модель пишется как provider/model, например gx10-2/Qwen3.8-Flash-Next')
+        dsh_board_motors_set(provider, model, args.count, base=base)
+        return _print(args, {'provider': provider, 'model': model, 'motors': args.count},
+                      lambda v: f"моторов у {v['provider']}/{v['model']}: {v['motors']}")
 
     if command in ('pause', 'resume'):
         dsh_board_settings({'paused': command == 'pause'}, base=base)
@@ -179,7 +179,7 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     command('cancel', 'прервать идущий круг карточки').add_argument('session')
     command('archive', 'убрать карточку в архив').add_argument('session')
 
-    command('board', 'доска: промпты, статусы, круги, потолок').add_argument(
+    command('board', 'доска: промпты, статусы, круги, моторы').add_argument(
         '--session', default=None, help='только промпты этой карточки')
 
     add = command('add', 'промпт на доску от имени карточки')
@@ -193,8 +193,10 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     _facet_args(edit)
 
     command('drop', 'убрать промпт с доски насовсем').add_argument('goal')
-    command('limit', 'потолок сессий, работающих разом').add_argument(
-        'value', type=int, help='сколько сессий разом; 0 — без потолка')
+    motors = command('motors', 'сколько параллельных цепочек у модели (по умолчанию 4)')
+    motors.add_argument('model', help='provider/model')
+    motors.add_argument('count', type=int, choices=[1, 2, 3, 4])
+
     command('pause', 'рубильник: остановить всю работу доски')
     command('resume', 'рубильник: продолжить работу доски')
     return parser
@@ -202,8 +204,6 @@ def _parser(prog: str) -> argparse.ArgumentParser:
 
 def _wait_args(parser) -> None:
     parser.add_argument('--wait', action='store_true', help='дождаться ответа')
-    parser.add_argument('--no-limit', action='store_true',
-                        help='не ждать места под потолком хоста (maxParallel)')
     parser.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT,
                         help=f'потолок ожидания, с (по умолчанию {DSH_BOARD_WAIT_TIMEOUT})')
 
@@ -214,7 +214,7 @@ def _facet_args(parser) -> None:
     parser.add_argument('--quota', type=int, default=None, help='кругов на заход')
     parser.add_argument('--status', choices=['active', 'paused', 'done', 'blocked'], default=None)
     parser.add_argument('--model', default=None, help='цепочка: provider/model')
-    parser.add_argument('--motor', type=int, choices=[1, 2], default=None, help='ряд цепочки')
+    parser.add_argument('--motor', type=int, choices=[1, 2, 3, 4], default=None, help='ряд цепочки, 1–4')
     parser.add_argument('--position', type=int, default=None, help='место в очереди, с 1')
 
 
@@ -277,10 +277,9 @@ def _fanout_text(rows: list) -> str:
 
 def _board_text(state: dict) -> str:
     goals = state.get('goals', [])
-    limit = state.get('maxParallel') or 0
     busy = len(state.get('machines', []))
     lines = [f"доска: {'ПАУЗА' if state.get('paused') else 'работает'}, промптов {len(goals)}, "
-             f"занято сессий {busy}{f' из {limit}' if limit else ' (без потолка)'}"]
+             f"занято сессий {busy}"]
     for goal in goals:
         model = goal.get('model') or {}
         chain = f"{model.get('provider')}/{model.get('model')}" if model else 'неположен'

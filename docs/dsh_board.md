@@ -3,7 +3,7 @@
 > Оркестратор на той же машине, что и хост harness'а (Claude Code), раздаёт работу его
 > агентам так же, как человек в браузере: заводит карточку под проект, шлёт промпт, ждёт
 > ответ. Повторяющаяся работа ложится на доску плагина `dsh-continuous-agent` и идёт
-> очередью и по расписанию сама. `dsh_/dsh_session.py` — карточки и их журнал,
+> очередью и по расписанию сама, по четырём цепочкам модели разом. `dsh_/dsh_session.py` — карточки и их журнал,
 > `dsh_/dsh_board.py` — задачи, потолок, доска, `dsh_/dsh_board_cli.py` — команда.
 
 Требования: хост `dsh --profile web` на этой машине (транспорт — `docs/dsh_api.md`) и
@@ -38,18 +38,19 @@ results = dsh_board_fanout([
 Сорвавшаяся задача остальных не роняет — у неё заполнен `error`. `archive: true` убирает
 в архив карточку, которую `fanout` завёл сам; чужую (`session`) не трогает никогда.
 
-## 3. Потолок сессий разом
+## 3. Параллельность — моторы
 
-Настройка доски `maxParallel` (0 — без потолка) считает **все** занятые сессии хоста:
-заходы доски, работу руками и наши промпты. Бегунок доски соблюдает её сам;
-`dsh_board_ask` — со своей стороны: место проверяется и промпт уходит под файловой
-блокировкой `<DSH_HOME>/dsh-board.lock`, которая держится до начала круга. Карточка,
-уже занятая работой, места не требует — промпт встанет в её очередь.
+У модели N цепочек (моторов), по умолчанию четыре: промпты из разных рядов идут
+разом. Модели на llama.cpp (один поток) ставят один мотор, иначе заходы встанут в её
+очередь:
 
 ```python
-from dsh_.dsh_board import dsh_board_settings
-dsh_board_settings({'maxParallel': 4})
+from dsh_.dsh_board import dsh_board_motors_set
+dsh_board_motors_set('gx10-1', 'Qwen3.8-Flash-Next', 1)
 ```
+
+Наши промпты (`dsh_board_ask`, `fanout`) — работа руками: они идут сразу, мимо очереди
+доски, и держат первый ряд своей модели.
 
 ## 4. Доска промптов
 
@@ -68,7 +69,7 @@ PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # `-` — stdin
 PYTHONPATH=. python -m dsh_.dsh_board history <session> -n 5
 PYTHONPATH=. python -m dsh_.dsh_board board --session <session>
 PYTHONPATH=. python -m dsh_.dsh_board add <session> "сверяй логи" --every 60
-PYTHONPATH=. python -m dsh_.dsh_board limit 4
+PYTHONPATH=. python -m dsh_.dsh_board motors gx10-2/Qwen3.8-Flash-Next 4
 ```
 
 Проект ставит её своей командой одной строкой — claude-shell: `dsh-board`

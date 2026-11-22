@@ -120,7 +120,7 @@ namespace-папок, которые проекты импортируют на�
 | `proc_/` | `docs/proc_mem.md` — память машины из /proc без колонок `free`, топ держателей по RSS |
 | `net_/net_port.py` | `docs/net_port.md` — порт свободен ли, дождаться занятия/освобождения; ⚠ `up` ≠ «сервис здоров» |
 | `dsh_/dsh_api.py` | `docs/dsh_api.md` — метод хоста harness'а: cookie из секрета на диске, конверт, alive, GET/POST ручек плагинов; ⚠ `_request` с подчёркиванием |
-| `dsh_/dsh_session.py`, `dsh_/dsh_board.py`, `dsh_/dsh_board_cli.py` | `docs/dsh_board.md` — агенты harness'а субагентами: карточки, промпт, ответ по `turn/end` журнала, раздача N задач, доска промптов и потолок сессий разом; ⚠ журнал — `session/page` с засечкой `asOfSeq`, без вебсокета |
+| `dsh_/dsh_session.py`, `dsh_/dsh_board.py`, `dsh_/dsh_board_cli.py` | `docs/dsh_board.md` — агенты harness'а субагентами: карточки, промпт, ответ по `turn/end` журнала, раздача N задач, доска промптов и моторы (параллельные цепочки, по умолчанию 4); ⚠ журнал — `session/page` с засечкой `asOfSeq`, без вебсокета |
 | `text_/text_emoji.py` | `docs/text_emoji.md` — эмодзи, разобранные чужим кодом неверно: зовётся на границе входа; ⚠ греческий с цифрой вплотную |
 | `text_/text_cyrillic.py` | `docs/text_cyrillic.md` — кириллица в строке, есть знак или нет: весь блок, а не `[а-я]`; ⚠ марка алфавита — не язык; имена кода судит `variable_cyrillic` |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
@@ -262,7 +262,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `proc_.proc_top` | `[-n N]` → тяжелейшие процессы по RSS, JSON |
 | `net_.net_port` | `free\|wait PORT [--down --timeout --host]` → свободен ли / дождаться; код возврата 0 — правда |
 | `dsh_.dsh_api` | `alive` / `call МЕТОД [--args '{json}']` / `get ПУТЬ [--base host:port]` → метод хоста harness'а, cookie сама |
-| `dsh_.dsh_board` | `sessions` / `new` / `ask [--wait]` / `fanout tasks.json` / `history` / `board` / `add` / `edit` / `drop` / `limit N` → задачи агентам harness'а и доска промптов |
+| `dsh_.dsh_board` | `sessions` / `new` / `ask [--wait]` / `fanout tasks.json` / `history` / `board` / `add` / `edit` / `drop` / `motors МОДЕЛЬ N` → задачи агентам harness'а и доска промптов |
 | `docker_.docker_echo` | `<файл> --must признак [--must …] --service СЕРВИС` → числом: видит ли поднятый контейнер правку |
 | `state.state_watch` | `ТАБЛИЦА КОЛОНКА --where к=в [--where …]` → значение строки сейчас + готовая проба сторожу |
 | `evm_.evm_keys` | `address КЛЮЧ` / `sign КЛЮЧ --digest …` → адрес EIP-55; подпись с самопроверкой signer==recovered |
