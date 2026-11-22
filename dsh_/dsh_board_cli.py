@@ -247,7 +247,10 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     new = command('new', 'завести карточку под каталог проекта')
     new.add_argument('cwd')
     new.add_argument('title')
-    new.add_argument('--full-access', action='store_true', help='полный доступ карточке')
+    new.add_argument('--full-access', dest='full_access', action='store_true', default=True,
+                     help='полный доступ карточке (по умолчанию и так)')
+    new.add_argument('--no-full-access', dest='full_access', action='store_false',
+                     help='карточка спрашивает подтверждение прав')
     new.add_argument('--worktree', action='store_true',
                      help='своя копия репозитория (git worktree) на своей ветке — для задач с правкой кода')
     new.add_argument('--ask', default=None, help='сразу отправить промпт (`-` — stdin)')

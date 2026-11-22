@@ -226,11 +226,14 @@ def dsh_board_sessions(include_idle: bool = False, *,
     return rows
 
 
-def dsh_board_session_new(cwd: str, title: str, full_access: bool = False, robot: bool = True, *,
+def dsh_board_session_new(cwd: str, title: str, full_access: bool = True, robot: bool = True, *,
                           base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Завести карточку под каталог — как «＋ сессия» доски: preset и модель хоста.
 
     Args:
+        full_access: «Full Access Permission» — карточка работает без подтверждения прав.
+            По умолчанию True, как галочка окна доски: без неё субагент встаёт на первом
+            же `git commit` в копии репо (каталог .git вне песочницы) и ждёт человека.
         robot: карточку заводит агент, а не человек — форма доски пометит её 🤖.
             Этот слой зовут оркестраторы, поэтому по умолчанию True.
 
@@ -582,7 +585,7 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
                     tree = dsh_worktree_new(cwd, task.get('title') or 'задача')
                     cwd = tree['path']
                 session = dsh_board_session_new(cwd, task.get('title') or 'задача',
-                                                bool(task.get('fullAccess')), base=base)
+                                                bool(task.get('fullAccess', True)), base=base)
             answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
                                    images=task.get('images'), gate=gate, base=base)
             results[index] = {'session': session, 'answer': answer, 'error': '',

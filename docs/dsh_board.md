@@ -81,7 +81,7 @@ dsh_board_motors_set('gx10-1', 'Qwen3.8-Flash-Next', 1)
 ```bash
 # сессии и задачи
 PYTHONPATH=. python -m dsh_.dsh_board sessions [--all]          # живые карточки (--all — и без агента)
-PYTHONPATH=. python -m dsh_.dsh_board new ~/proj "логи" [--full-access] [--ask "…" --wait]
+PYTHONPATH=. python -m dsh_.dsh_board new ~/proj "логи" [--no-full-access] [--ask "…" --wait]
 PYTHONPATH=. python -m dsh_.dsh_board ask <session> "прогони тесты" --wait [--timeout 1800]
 PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # N задач разом
 PYTHONPATH=. python -m dsh_.dsh_board answer <session>           # последний ответ
@@ -199,6 +199,11 @@ d посмотри в интернете новости за 24 часа
 ```
 
 ## Грабли
+
+- ⚠⚠ **Карточка без полного доступа встаёт молча.** Субагент в копии репо (`--worktree`)
+  доходит до `git commit`, каталог `.git` лежит вне песочницы — и круг ждёт «Allow once»
+  человека, а `fanout` ждёт круг. Поэтому `dsh_board_session_new` и `fanout` по умолчанию
+  дают полный доступ, как галочка окна доски; отказ — явный `--no-full-access`.
 
 1. **Ответ — на свой промпт, а не на первый конец круга.** Перед отправкой берётся
    засечка журнала; после — ищется свой `user/message` (новее засечки, тот же текст),
