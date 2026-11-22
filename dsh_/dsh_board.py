@@ -85,7 +85,7 @@ DSH_BOARD_GC_DAYS = 1
 DSH_BOARD_GC_EVERY = 3600
 DSH_BOARD_GC_STAMP = 'dsh-board.gc-stamp.json'
 # Автопродолжение оборванных кругов: как часто, какие свежие, что уже продолжено, кого ждут.
-DSH_BOARD_REVIVE_EVERY = 120
+DSH_BOARD_REVIVE_EVERY = 60
 DSH_BOARD_REVIVE_RECENT = 1800
 DSH_BOARD_REVIVE_STAMP = 'dsh-board.revive-stamp.json'
 DSH_BOARD_REVIVED = 'dsh-board.revived.json'

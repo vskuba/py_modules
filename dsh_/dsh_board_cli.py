@@ -314,7 +314,7 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     revive = command('revive', 'продолжить агентские круги, оборванные перезапуском хоста')
     revive.add_argument('--dry', action='store_true', help='только показать')
     revive.add_argument('--auto', action='store_true',
-                        help='свежие обрывы, не чаще раза в 2 минуты — для статусной строки')
+                        help='свежие обрывы, не чаще раза в минуту — для статусной строки')
     inbox = command('inbox', 'агентские карточки с непрочитанными ответами')
     inbox.add_argument('--take', action='store_true', help='отметить показанное прочитанным')
     inbox.add_argument('--count', action='store_true', help='только число — для статусной строки')
