@@ -54,6 +54,7 @@ namespace-папок, которые проекты импортируют на�
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) и про страницу панели без бойлерплейта (`web_drive_page`: вход из `.env`, модуль с любыми кавычками, `wait` с базой) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
+| `web_/web_signup.py`, `web_/web_wall.py`, `web_/web_ledger.py`, `mail_/mail_wait.py` | `docs/web_signup_flow.md` — чужая площадка: стена-стоп, регистрация, письмо-подтверждение, один аккаунт на площадку |
 | `web_/web_gallery.py` | `docs/web_gallery.md` — полноразмерные фото страницы-галереи: ленивая разметка, оригиналы без суффиксов |
 | `insta_/insta_.py` | `docs/insta.md` — профиль Instagram: карточка и счётчики без login, осмотр перед загрузкой; ⚠ списки подписок анониму за стеной |
 
@@ -303,6 +304,10 @@ CLI есть у модулей, которыми пользуются «рука
 | `web_.web_drive` | `СТРАНИЦА --js «тело async-функции» [--js-file --storage КЛЮЧ --shot --size]` → исполнение страницы по CDP |
 | `web_.web_drive_page` | `<адрес панели> -e 'return …' [--init файл|имя|арг]` → то же без бойлерплейта: вход из `.env`, модуль страницы (с `--init` — явно, без угадывания), `wait` с базой |
 | `web_.web_state` | `<ручка> [--params к=в] [--method --body] [--field путь.в.result]` → поле ответа из-под конверта `result`, учётка из `.env` |
+| `web_.web_wall` | `<URL> [--proxy]` → во что упёрся адрес: класс стены, действие (`human`/`wait`/`change_exit`), улики |
+| `web_.web_signup` | `form URL [--proxy]`, `try URL --person '{...}' [--password --proxy --ledger]` → разбор формы; регистрация кругом, вердикт `done`/`mail`/`wall`/`duplicate`/`busy`/`fields` |
+| `web_.web_ledger` | `put ФАЙЛ КЛЮЧ '{json}'`, `get ФАЙЛ [КЛЮЧ] [--all]` → ключ-реестр jsonl: лицо ключа — последняя строка журнала |
+| `mail_.mail_wait` | `wait ЛОГИН ТОКЕН [--contains --timeout]`, `follow ССЫЛКА [--proxy]` → письмо-подтверждение: дождаться, вынуть ссылку, провести тем же выходом; ⚠ follow — одна попытка |
 | `uvicorn_.uvicorn_panel` | `GET /health`, `POST /api/... --body '{...}'` — под учёткой из `.env`, автоперелогин |
 | `uvicorn_.uvicorn_dev` | `health`/`up [--service uvicorn --timeout 30]` → base url поднявшейся панели |
 | `uvicorn_.uvicorn_stale` | `[--root --service]` → панель бежит правку или старый код; мёртвые `.pyc` |
