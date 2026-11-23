@@ -35,6 +35,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_worktree_test_ask
 from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
 from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_run
+from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
@@ -174,6 +175,13 @@ def _run(args) -> int:
     if command == 'stats':
         return _print(args, dsh_board_stats(args.all, base=base), _stats_text)
 
+    if command == 'mode':
+        owner = args.session or os.environ.get(DSH_SAVING_OWNER_ENV) or ''
+        if args.mode:
+            path = dsh_mode_set(args.mode, session=owner, default=args.default)
+            return _print(args, {'mode': args.mode, 'file': path}, lambda v: f"режим {v['mode']} → {v['file']}")
+        return _print(args, {'mode': dsh_mode_get(owner)}, lambda v: v['mode'])
+
     if command == 'saving':
         owner = args.session or os.environ.get(DSH_SAVING_OWNER_ENV) or ''
         rows = [dsh_saving_report(owner, base=base)] if owner else []
@@ -302,6 +310,11 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     working.add_argument('--line', action='store_true', help='одной строкой — для статусной строки')
     working.add_argument('--session', default='', metavar='ID',
                          help='сессия Claude Code: к строке — её экономия «(-5%%)»')
+    mode = command('mode', 'режим работы с субагентами: high (умолчание), free, off')
+    mode.add_argument('mode', nargs='?', choices=DSH_MODE_ALL, help='новый режим; без него — показать')
+    mode.add_argument('--session', default='', help='сессия Claude Code (иначе CLAUDE_CODE_SESSION_ID)')
+    mode.add_argument('--default', action='store_true', help='записать общее умолчание, а не режим сессии')
+
     command('saving', 'сколько процентов тарифа Claude сберегли субагенты').add_argument(
         '--session', default='', metavar='ID', help='сессия Claude Code (по умолчанию — текущая)')
 
