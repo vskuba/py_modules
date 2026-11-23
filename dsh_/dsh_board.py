@@ -92,6 +92,25 @@ DSH_BOARD_REVIVE_STAMP = 'dsh-board.revive-stamp.json'
 DSH_BOARD_REVIVED = 'dsh-board.revived.json'
 DSH_BOARD_WAITING = 'dsh-board.waiting.json'
 DSH_BOARD_WORKTREE_MARK = '/.claude/worktrees/dsh-'
+# Технический workspace карточек-копий: одна папка каталога хоста (с ней же —
+# `dsh-worktrees` в панели), под которой живут ВСЕ worktree-карточки. Иначе каждая
+# `--worktree`-задача плодит на панели новый «проект»: харнесс не умеет задать сессии
+# cwd отдельно от пути workspace — `session/create` принимает workspaceId или cwd
+# (не оба), а `WorkspaceEntity.attachSession` отвергает сессию, чей cwd не равен пути
+# workspace. Путь копии агенту даёт шапка промпта (`dsh_board_worktree_head`).
+DSH_BOARD_WORKTREE_WORKSPACE = 'dsh-worktrees'
+DSH_BOARD_WORKTREES = 'dsh-board.worktrees.json'   # карточка → {path, branch, root} копии
+DSH_BOARD_WORKTREE_HEAD = ('Твоя копия репозитория: {path}. Все команды в ней начинай с '
+                           '`cd {path}`; файлы открывай только абсолютными путями внутри '
+                           'неё{tail}.\n\n')
+DSH_BOARD_WORKTREE_README = (
+    '# dsh-worktrees\n\n'
+    'Технический workspace доски `dsh-board`: здесь живут карточки всех пишущих задач '
+    '`new --worktree` и `fanout worktree` — одной папкой, а не отдельным проектом на '
+    'панели на каждую. Самих копий репозитория здесь нет: у каждой задачи своя копия '
+    'внутри её репозитория (`<repo>/.claude/worktrees/`), путь копии и основной репозиторий '
+    '— в шапке промпта карточки. Здесь не правят файлы и не запускают команды; папку не '
+    'удаляют — она общий дом этих карточек.\n')
 # Задание проверяющему субагенту.
 DSH_BOARD_VERIFY_ASK = (
     'Ты — проверяющий. Другой агент получил задачу и дал ответ. Сверь КАЖДОЕ утверждение '
@@ -252,7 +271,7 @@ def dsh_board_sessions(include_idle: bool = False, *,
 
 
 def dsh_board_session_new(cwd: str, title: str, full_access: bool = True, robot: bool = True, *,
-                          base: str = DSH_API_ADDR_DEFAULT) -> str:
+                          worktree: dict = None, base: str = DSH_API_ADDR_DEFAULT) -> str:
     """Завести карточку под каталог — как «＋ сессия» доски: preset и модель хоста.
 
     Args:
@@ -261,6 +280,11 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = True, robot:
             же `git commit` в копии репо (каталог .git вне песочницы) и ждёт человека.
         robot: карточку заводит агент, а не человек — форма доски пометит её 🤖.
             Этот слой зовут оркестраторы, поэтому по умолчанию True.
+        worktree: `{path, branch, root}` копии из `dsh_worktree_new`: карточка встаёт не в
+            копию, а в общий технический workspace (`DSH_BOARD_WORKTREE_WORKSPACE`) — одна
+            задача, один проект на панели; путь копии ложится в метаданные
+            (`dsh_board_worktree_row`), а агенту его даёт шапка промпта
+            (`dsh_board_worktree_head`). Пусто — карточка под `cwd`, как раньше.
 
     Returns:
         id новой сессии.
@@ -268,16 +292,38 @@ def dsh_board_session_new(cwd: str, title: str, full_access: bool = True, robot:
     Raises:
         DshBoardError: ручка ответила без id сессии.
     """
-    body = {'workspace': os.path.realpath(os.path.expanduser(cwd)),
-            'title': title, 'fullAccess': full_access, 'robot': robot}
+    # Хост не принимает cwd отдельно от workspace (see DSH_BOARD_WORKTREE_WORKSPACE),
+    # поэтому копией карточки рулит только промпт, а workspace у всех них — общий.
+    place = os.path.realpath(_worktree_workspace(make=True)) if worktree and worktree.get('path') \
+        else os.path.realpath(os.path.expanduser(cwd))
+    body = {'workspace': place, 'title': title, 'fullAccess': full_access, 'robot': robot}
     answer = _patient(lambda: dsh_api_post('continuous-agent.session', body, base=base,
                                            timeout=DSH_BOARD_HTTP_TIMEOUT),
                       DSH_BOARD_STARTUP_WAIT, retry=(DshApiUnavailable,)) or {}
     if not answer.get('session'):
         raise DshBoardError(f'карточка не заведена: ручка ответила {str(answer)[:200]}')
+    if worktree and worktree.get('path'):
+        _worktrees_mark(answer['session'], worktree)
     # Чья карточка — для счёта экономии по сессиям Claude Code (dsh_saving).
     dsh_saving_owner_mark(answer['session'])
     return answer['session']
+
+
+def dsh_board_worktree_row(session: str) -> dict:
+    """Метаданные копии карточки (`{path, branch, root, at}`), заведённой с `--worktree`.
+
+    Ключ — карточка без суффикса поколения; у старой карточки (есть до метаданных) их нет,
+    и её копия узнаётся по её же cwd — см. `DSH_BOARD_WORKTREE_MARK`.
+    """
+    return (_json_read(_home_path(DSH_BOARD_WORKTREES)) or {}).get(_key(session)) or {}
+
+
+def dsh_board_worktree_forget(session: str) -> None:
+    """Забыть метаданные копии: карточка отработала (копию приняли или сняли)."""
+    path = _home_path(DSH_BOARD_WORKTREES)
+    rows = _json_read(path) or {}
+    if rows.pop(_key(session), None) is not None:
+        _json_write(path, rows)
 
 
 def dsh_board_ask(session: str, text: str, wait: bool = False,
@@ -465,8 +511,15 @@ def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
     if not task or not answer:
         raise DshBoardError(f'в карточке {session} нет пары «задача — ответ» для проверки')
     title = f"проверка: {dsh_session_title(item) or session}"[:60]
-    verifier = dsh_board_session_new(item.get('cwd') or '.', title, base=base)
-    prompt = DSH_BOARD_VERIFY_ASK.format(task=task, answer=answer) + DSH_BOARD_BRIEF_ASK
+    row = dsh_board_worktree_row(session)
+    if row.get('path'):
+        # Копия: проверяющий — в тот же технический workspace, но глазами в копию (шапка).
+        verifier = dsh_board_session_new(row['path'], title, worktree=row, base=base)
+        prompt = dsh_board_worktree_head(row) + DSH_BOARD_VERIFY_ASK.format(task=task, answer=answer)
+    else:
+        verifier = dsh_board_session_new(item.get('cwd') or '.', title, base=base)
+        prompt = DSH_BOARD_VERIFY_ASK.format(task=task, answer=answer)
+    prompt += DSH_BOARD_BRIEF_ASK
     return {'session': session, 'verifier': verifier,
             'answer': dsh_board_ask(verifier, prompt, wait=True, timeout=timeout, base=base)}
 
@@ -503,7 +556,10 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
         if key not in robots or session in archived or item.get('running'):
             continue
         cwd = item.get('cwd') or ''
-        worktree = cwd if DSH_BOARD_WORKTREE_MARK in cwd else ''
+        # Копия новой карточки — в метаданных (её cwd теперь технический workspace),
+        # старой — по cwd с приметой копии.
+        worktree = dsh_board_worktree_row(key).get('path') or \
+            (cwd if DSH_BOARD_WORKTREE_MARK in cwd else '')
         gone = bool(worktree) and not os.path.isdir(worktree)
         accepted = bool(worktree) and not gone and _merged(worktree)
         if not (gone or accepted) and (item.get('updatedAt') or 0) > edge:
@@ -520,10 +576,14 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
             if worktree and not kept:
                 with contextlib.suppress(DshApiError):
                     dsh_board_workspace_drop(worktree, base=base)
+                dsh_board_worktree_forget(key)   # копии больше нет — метаданные не в счёт
         rows.append({'session': key, 'title': dsh_session_title(item), 'worktree': worktree, 'kept': kept})
     # Проекты копий без каталога — и без карточек тоже: удалённая мимо слоя копия.
+    tech = os.path.realpath(_worktree_workspace())   # технический workspace не снимаем
     for workspace in state.get('workspaces') or []:
         path = workspace.get('path') or ''
+        if os.path.realpath(path) == tech:
+            continue
         if DSH_BOARD_WORKTREE_MARK in path and not os.path.isdir(path):
             if not dry:
                 with contextlib.suppress(DshApiError):
@@ -560,8 +620,13 @@ def dsh_board_workspace_drop(path: str, *, base: str = DSH_API_ADDR_DEFAULT) -> 
 
     Returns:
         True — проект был и снят; False — такого проекта на панели нет.
+
+    Raises:
+        DshApiError: хост отказал в удалении.
     """
     real = os.path.realpath(path)
+    if real == os.path.realpath(_worktree_workspace()):
+        return False   # технический workspace — общий дом карточек-копий, его не снимаем
     for workspace in dsh_board_state(base=base).get('workspaces') or []:
         if os.path.realpath(workspace.get('path') or '') == real:
             dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace['id']}}, base=base)
@@ -701,9 +766,11 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
                     # Пишущей задаче — своя копия репо: соседи по fanout не затрут друг друга.
                     tree = dsh_worktree_new(cwd, task.get('title') or 'задача')
                     cwd = tree['path']
-                    task = {**task, 'text': task['text'] + dsh_board_worktree_test_ask(tree)}
+                    task = {**task, 'text': dsh_board_worktree_head(tree) + task['text']
+                            + dsh_board_worktree_test_ask(tree)}
                 session = dsh_board_session_new(cwd, task.get('title') or 'задача',
-                                                bool(task.get('fullAccess', True)), base=base)
+                                                bool(task.get('fullAccess', True)), base=base,
+                                                worktree=tree or None)
             tell(on_start, index, {'session': session, **({'worktree': tree['path'], 'branch': tree['branch']}
                                                          if tree else {})})
             answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
@@ -728,6 +795,20 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
     for thread in threads:
         thread.join()
     return results
+
+
+def dsh_board_worktree_head(tree: dict) -> str:
+    """Шапка в начало промпта задачи о копии: где копия и куда не соваться.
+
+    Карточка копии живёт в техническом workspace, её cwd про копию не знает — путь
+    доносит только промпт. Пустая строка, если пути копии нет (не worktree-задача).
+    """
+    path = tree.get('path') or ''
+    if not path:
+        return ''
+    root = tree.get('root') or ''
+    tail = f'; основной репозиторий {root} не трогай' if root else ''
+    return DSH_BOARD_WORKTREE_HEAD.format(path=path, tail=tail)
 
 
 def dsh_board_worktree_test_ask(tree: dict) -> str:
@@ -807,6 +888,37 @@ def _json_read(path: str):
             return json.load(handle)
     except (OSError, ValueError):
         return None
+
+
+def _key(session: str) -> str:
+    """Ключ карточки без суффикса поколения (`-gN`) — им карточку ищут в файлах слоя."""
+    return re.sub(r'-g\d+$', '', session or '')
+
+
+def _worktree_workspace(make: bool = False) -> str:
+    """Каталог технического workspace карточек-копий — в каталоге хоста (`DSH_HOME`).
+
+    С `make` — создать каталог и README, если их нет: хост заводит workspace только
+    по существующему каталогу, а пустой каталог вне репозитория — и есть задумка
+    (промах по относительному пути падает здесь, а не пишет в чужое дерево).
+    """
+    path = _home_path(DSH_BOARD_WORKTREE_WORKSPACE)
+    if make:
+        os.makedirs(path, exist_ok=True)
+        readme = os.path.join(path, 'README.md')
+        if not os.path.isfile(readme):
+            with open(readme, 'w', encoding='utf-8') as handle:
+                handle.write(DSH_BOARD_WORKTREE_README)
+    return path
+
+
+def _worktrees_mark(session: str, tree: dict) -> None:
+    """Записать метаданные копии под карточку: land/diff/gc читают их, а не cwd."""
+    path = _home_path(DSH_BOARD_WORKTREES)
+    rows = _json_read(path) or {}
+    rows[_key(session)] = {'path': tree.get('path') or '', 'branch': tree.get('branch') or '',
+                           'root': tree.get('root') or '', 'at': time.time()}
+    _json_write(path, rows)
 
 
 def _capacity(state: dict) -> int:

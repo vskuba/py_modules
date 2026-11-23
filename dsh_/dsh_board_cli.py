@@ -32,6 +32,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool, \
+    dsh_board_worktree_forget, dsh_board_worktree_head, dsh_board_worktree_row, \
     dsh_board_worktree_test_ask
 from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
 from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_run
@@ -67,14 +68,18 @@ def _run(args) -> int:
 
     if command == 'new':
         cwd = args.cwd
+        tree = {}
         if args.worktree:
             tree = dsh_worktree_new(args.cwd, args.title)
             cwd = tree['path']
             print(f"копия репозитория: {tree['path']} (ветка {tree['branch']})", file=sys.stderr)
-        session = dsh_board_session_new(cwd, args.title, args.full_access, base=base)
+        # Карточка копии — в общий технический workspace; путь копии — в метаданных и в шапке.
+        session = dsh_board_session_new(cwd, args.title, args.full_access, base=base,
+                                        worktree=tree or None)
         if args.ask is None:
             return _print(args, {'session': session}, lambda v: v['session'])
-        asked = _asked(args, args.ask) + (dsh_board_worktree_test_ask(tree) if args.worktree else '')
+        asked = (dsh_board_worktree_head(tree) if tree else '') + _asked(args, args.ask) \
+            + (dsh_board_worktree_test_ask(tree) if tree else '')
         answer = dsh_board_ask(session, asked, args.wait, args.timeout, args.image,
                                base=base)
         return _print(args, _answer_row(args, session, answer),
@@ -136,7 +141,9 @@ def _run(args) -> int:
         return _print(args, rows, _inbox_text)
 
     if command == 'diff':
-        cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
+        item = dsh_session_find(args.session, base=base)
+        # Копия новой worktree-карточки — в метаданных: её cwd теперь технический workspace.
+        cwd = dsh_board_worktree_row(args.session).get('path') or item.get('cwd') or ''
         if not cwd:
             raise ValueError(f'у карточки {args.session} нет каталога')
         return _print(args, {'session': args.session, 'cwd': cwd,
@@ -144,16 +151,20 @@ def _run(args) -> int:
 
     if command == 'land':
         item = dsh_session_find(args.session, base=base)
+        cwd = dsh_board_worktree_row(args.session).get('path') or item.get('cwd') or ''
         message = args.message or f"dsh: {(item.get('projections') or {}).get('values', {}).get('title') or args.session}"
-        result = dsh_worktree_land(item.get('cwd') or '', message)
+        result = dsh_worktree_land(cwd, message)
         # Работа принята: карточка и проект её копии на панели больше не нужны.
         dsh_session_archive(args.session, base=base)
-        dsh_board_workspace_drop(item.get('cwd') or '', base=base)
+        dsh_board_workspace_drop(cwd, base=base)   # у новой карточки копия — не проект, не снимется
+        dsh_board_worktree_forget(args.session)
         return _print(args, result, lambda v: f"ветка {v['branch']} слита: {v['merged']}; копия и карточка убраны")
 
     if command == 'drop-worktree':
-        cwd = dsh_session_find(args.session, base=base).get('cwd') or ''
+        cwd = dsh_board_worktree_row(args.session).get('path') or \
+            dsh_session_find(args.session, base=base).get('cwd') or ''
         dsh_worktree_drop(cwd, args.force)
+        dsh_board_worktree_forget(args.session)
         return _print(args, {'removed': cwd}, lambda v: f"копия убрана: {v['removed']}")
 
     if command == 'gc' and args.auto:
