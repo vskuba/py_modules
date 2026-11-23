@@ -42,7 +42,10 @@ DATA_MASK_SECRET_KEYS = ('card_cvv2', 'cvv2', 'cvv', 'cvc', 'cardExpireDate', 'c
                          'authorization', 'x-api-key', 'x-signature', 'x-api-key-test',
                          'apikey', 'api_key', 'x-app-signature', 'x-idempotency-key',
                          'accessToken', 'access_token', 'refreshToken', 'refresh_token',
-                         'id_token', 'client_secret', 'password', 'secret')
+                         'id_token', 'client_secret', 'password', 'secret',
+                         # Ключ подписи callback-а: по нему подделывают уведомление о
+                         # статусе, а в дампах бренда он лежит открыто в таблице `account`.
+                         'signature_key')
 _DATA_MASK_SECRET_KEYS_LOWER = frozenset(key.lower() for key in DATA_MASK_SECRET_KEYS)
 
 # ── публичный API модуля ──
