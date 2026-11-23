@@ -20,7 +20,8 @@ dsh-board working --line --session <id>  # «DSH 1/4 (-5%): …» — для с�
 - субагент считается столько, сколько потратил сам; оркестратор на той же работе гонял бы
   весь свой контекст на каждом шаге — настоящая экономия выше.
 ⚠ На машине бывают сессии **разных аккаунтов**: аккаунт узнаётся по сбросу недельного окна
-(`seven_day.resets_at`), транскрипты сессий с чужим сбросом в калибровку не идут.
+(`seven_day.resets_at`, с допуском `DSH_SAVING_ACCOUNT_DRIFT` — Anthropic сдвигает сброс на
+часы у того же аккаунта), транскрипты сессий с чужим сбросом в калибровку не идут.
 ⚠ Процент окна приходит целым числом: пока окно занято меньше `DSH_SAVING_MIN_PCT`,
 калибровка неточна, и берётся прошлая.
 """
@@ -47,6 +48,9 @@ DSH_SAVING_REPORT_FILE = '~/.cache/dsh-saving.report.json'
 DSH_SAVING_REPORT_TTL = 60
 # Меньше — калибровка шумная (процент целый, окно свежее), берётся прошлая того же аккаунта.
 DSH_SAVING_MIN_PCT = 10
+# Anthropic сдвигает недельный сброс у того же аккаунта на часы (было 1795777200 →
+# 1795780800): два `seven_day.resets_at` с расхождением меньше этого — один аккаунт.
+DSH_SAVING_ACCOUNT_DRIFT = 86400
 # Точка отсчёта метки: экономия сессии на начало текущего 5-часового окна её аккаунта.
 DSH_SAVING_BASELINE_FILE = '~/.cache/dsh-saving.baseline.json'
 DSH_SAVING_TRANSCRIPTS = '~/.claude/projects/**/*.jsonl'
@@ -91,6 +95,18 @@ def dsh_saving_units(usage: dict) -> float:
             + int(usage.get('cacheWriteTokens') or 0) * weight['cache_write'])
 
 
+def dsh_saving_account_same(left: str, right: str) -> bool:
+    """Один ли это аккаунт подписки по двум значениям `seven_day.resets_at`.
+
+    Точное равенство здесь не работает: Anthropic сдвигает недельный сброс у того же
+    аккаунта на часы — один аккаунт, если значения расходятся меньше чем на
+    `DSH_SAVING_ACCOUNT_DRIFT` секунд (разница в дни — уже другой аккаунт).
+    ⚠ Пустой/нулевой сброс не совпадает ни с чем: это «аккаунт неизвестен», а не сброс.
+    """
+    a, b = _account_num(left), _account_num(right)
+    return bool(a) and bool(b) and abs(a - b) < DSH_SAVING_ACCOUNT_DRIFT
+
+
 def dsh_saving_calibrate(owner: str = None, force: bool = False) -> dict:
     """Цена 1% окна подписки во взвешенных токенах Claude — по окнам `five_hour`/`seven_day`.
 
@@ -109,11 +125,14 @@ def dsh_saving_calibrate(owner: str = None, force: bool = False) -> dict:
     account = str((limits.get('seven_day') or {}).get('resets_at') or '')
     path = os.path.expanduser(DSH_SAVING_CALIBRATION_FILE)
     store = _json_read(path) or {}
-    cached = store.get(account) or {}
+    # Сброс недельного окна мог уехать на часы у того же аккаунта — калибровка тогда
+    # берётся из ближайшей записи в пределах дрейфа, а новая пишется под новым ключом.
+    cached = _calibration_find(store, account)
     if not force and cached and time.time() - float(cached.get('at') or 0) < DSH_SAVING_CALIBRATION_TTL:
         return cached
     foreign = {sid for sid, row in snapshots.items()
-               if str(((row.get('rate_limits') or {}).get('seven_day') or {}).get('resets_at') or '') != account}
+               if not dsh_saving_account_same(
+                   str(((row.get('rate_limits') or {}).get('seven_day') or {}).get('resets_at') or ''), account)}
     result = {'account': account, 'at': time.time()}
     for window, span in DSH_SAVING_WINDOWS.items():
         limit = limits.get(window) or {}
@@ -207,7 +226,8 @@ def dsh_saving_refresh(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     """Пересчитать экономию сессии и положить в кэш метки — фоновая половина `badge`.
 
     Окно — аккаунт и сброс 5-часового окна из снимка сессии; новое окно — новая точка
-    отсчёта (экономия на этот момент), метка считает прирост от неё.
+    отсчёта (экономия на этот момент), метка считает прирост от неё. Дрейф недельного
+    сброса в пределах `DSH_SAVING_ACCOUNT_DRIFT` окном не считается — точка отсчёта живёт.
     """
     row = {**dsh_saving_report(owner, base=base), 'at': time.time()}
     limits = ((_snapshots().get(owner) or {}).get('rate_limits') or {})
@@ -215,11 +235,16 @@ def dsh_saving_refresh(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     path = os.path.expanduser(DSH_SAVING_BASELINE_FILE)
     baselines = _json_read(path) or {}
     mark = baselines.get(owner) or {}
-    if mark.get('window') != window:
+    if _window_same(mark.get('window'), window):
+        if mark.get('window') != window:
+            # Тот же аккаунт, недельный сброс сдвинулся — точка отсчёта остаётся, ключ свежим.
+            mark['window'] = window
+            baselines[owner] = mark
+            _baselines_write(path, baselines)
+    else:
         mark = {'window': window, 'saved': row['saved'], 'at': time.time()}
         baselines[owner] = mark
-        _json_write(path, {key: value for key, value in baselines.items()
-                           if time.time() - float(value.get('at') or 0) < 7 * 86400})
+        _baselines_write(path, baselines)
     calibration = dsh_saving_calibrate(owner).get('five_hour') or {}
     per_pct = calibration.get('per_pct')
     gained = max(0, row['saved'] - int(mark.get('saved') or 0))
@@ -308,6 +333,41 @@ def _overhead_units(sent_chars: int, turns: int) -> float:
     weight = DSH_SAVING_WEIGHTS
     return (sent_chars / DSH_SAVING_CHARS_PER_TOKEN * weight['output']
             + turns * DSH_SAVING_BRIEF_CHARS / DSH_SAVING_CHARS_PER_TOKEN * weight['input'])
+
+
+def _calibration_find(store: dict, account: str) -> dict:
+    """Запись калибровки этого аккаунта: точный ключ, иначе ближайшая в пределах дрейфа."""
+    if store.get(account):
+        return store[account]
+    found, gap = None, None
+    for key, row in store.items():
+        if not dsh_saving_account_same(key, account):
+            continue
+        delta = abs(_account_num(key) - _account_num(account))
+        if gap is None or delta < gap:
+            found, gap = row, delta
+    return found or {}
+
+
+def _window_same(old: str, new: str) -> bool:
+    """То же ли 5-часовое окно: сброс `five_hour` тот же, недельный — в пределах дрейфа."""
+    new_seven, _, new_five = str(new or '').partition('/')
+    old_seven, _, old_five = str(old or '').partition('/')
+    return old_five == new_five and dsh_saving_account_same(old_seven, new_seven)
+
+
+def _baselines_write(path: str, baselines: dict) -> None:
+    """Записать точки отсчёта, выбросив те, что старше недели."""
+    _json_write(path, {key: value for key, value in baselines.items()
+                       if time.time() - float(value.get('at') or 0) < 7 * 86400})
+
+
+def _account_num(value) -> float:
+    """`resets_at` числом для сопоставления аккаунта; пустое/нечисловое — 0.0 («ни с чем»)."""
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _key(session: str) -> str:
