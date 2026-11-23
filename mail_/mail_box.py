@@ -36,6 +36,11 @@ async def mail_box_new() -> dict:
             dom = (dom.get('hydra:member') or dom.get('member'))[0]['domain']
             login = 'agent-' + secrets.token_hex(3) + '@' + dom
             pwd = 'Xq7!' + secrets.token_hex(6)
+            # mail.tm выдаёт токен только заведённому адресу: сначала создаём аккаунт.
+            a = await c.post(f'{API}/accounts', json={'address': login, 'password': pwd})
+            if a.status_code not in (200, 201):
+                return {'ok': False, 'login': '', 'password': '', 'token': '',
+                        'error': f'account {a.status_code}'}
             r = await c.post(f'{API}/token', json={'address': login, 'password': pwd})
             tok = r.json()['token'] if r.status_code == 200 else ''
             ok = r.status_code == 200
