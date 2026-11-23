@@ -5,7 +5,7 @@
 строитель тела запроса и расплющиватель бакетов. Транспорт, cookie-ротация и
 смерть сессии — в `opensearch_.py`, не дублировать.
 
-## Грабли (проверено на живом cashier-prod-fpm-*, OSD 3.9)
+## Грабли (проверено на живом индексе приложений, OSD 3.9)
 
 * **Поля — text с подполем `.keyword`** (`severity`, `jsonPayload.serviceName`, …).
   terms по голому text кластер отказывает: «Text fields are not optimised…» —

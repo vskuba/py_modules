@@ -1,7 +1,7 @@
 """
 Лента логов одной строкой на запись: `время под уровень сообщение` — разбор инцидента по поду.
 
-Родилась на разборе DLQ кассира (2026-11): чтобы увидеть, что консьюмер сделал
+Родилась на разборе DLQ консьюмера (2026-11): чтобы увидеть, что консьюмер сделал
 за секунду до падения, NDJSON из `opensearch_ search` шесть раз прогонялся через
 самописный jq — срезать SQL-шум, склеить задвоенные строки, достать stderr-трейс.
 Здесь то же одним вызовом.
@@ -31,16 +31,16 @@
 CLI:
 
     # что делал под консьюмера за 3 минуты вокруг падения
-    python -m opensearch_.opensearch_timeline 'cashier-prod-fpm-*' \\
-        --pod cashier-payment-gateway-daemon-consumer.check-payment-statmxzhf \\
+    python -m opensearch_.opensearch_timeline 'myapp-prod-app-*' \\
+        --pod app-daemon-consumer.check-statusmxzhf \\
         --time-from 2026-11-17T12:11:00Z --time-to 2026-11-17T12:13:00Z
 
     # все реплики деплоймента, только проблемы
-    python -m opensearch_.opensearch_timeline 'cashier-prod-fpm-*' \\
-        --controller cashier-payment-gateway-daemon-consumer.check-payment-status \\
+    python -m opensearch_.opensearch_timeline 'myapp-prod-app-*' \\
+        --controller app-daemon-consumer.check-status \\
         --time-from 2026-11-17T12:00:00Z --time-to 2026-11-17T12:20:00Z --not-info
 
-⚠ PCI: в сообщениях кассира бывают маски, телефоны и PAN — вывод в /tmp, не в git.
+⚠ PCI: в сообщениях бывают маски, телефоны и PAN — вывод в /tmp, не в git.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def opensearch_timeline(index: str, filters=(), time_from: str | None = None,
     """Записи окна строками ленты (см. `opensearch_timeline_rows`), по времени вверх.
 
     Args:
-        index: паттерн индекса (`cashier-prod-fpm-*`).
+        index: паттерн индекса (`myapp-prod-app-*`).
         filters: `FIELD=VALUE` (match_phrase), как у `opensearch_ search --filter`.
         time_from, time_to: ISO-границы по `timestamp`.
         size: сколько записей забрать до фильтрации (лимит кластера — 10000).
@@ -139,9 +139,10 @@ def _row(hit: dict) -> dict:
 
 def _main() -> None:
     ap = argparse.ArgumentParser(prog="opensearch_timeline", description=__doc__.splitlines()[1])
-    ap.add_argument("index", help="паттерн индекса, напр. cashier-prod-fpm-*")
+    ap.add_argument("index", help="паттерн индекса, напр. myapp-prod-app-*")
     ap.add_argument("query", nargs="?", default="all", help="all | JSON | строка Lucene")
-    ap.add_argument("--env-file", default=DEFAULT_ENV_FILE)
+    ap.add_argument("--env-file", default=DEFAULT_ENV_FILE,
+                    help="env-файл; по умолчанию .env.local проекта, файла нет — окружение процесса")
     ap.add_argument("--filter", action="append", default=[], metavar="FIELD=VALUE")
     for alias, field in OPENSEARCH_TIMELINE_FILTER_ALIASES.items():
         ap.add_argument(f"--{alias}", help=f"= --filter {field}=…")

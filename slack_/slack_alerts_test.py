@@ -2,20 +2,20 @@
 import slack_.slack_alerts as alerts
 
 FIRING_2 = {'ts': '1795013580.0', 'bot_id': 'B1', 'attachments': [{
-    'title': '[FIRING:2] TooManyMessagesInDeadLetterQueueCashierProd',
-    'text': ('*Alert:* [`prod`] Dead letter queue check_payment_status_dl filling up\n'
-             'Queue: `check_payment_status_dl`\nNum messages: `1`\n\n'
-             '*Alert:* [`prod`] Dead letter queue crypto_callback_processing_dl filling up\n'
-             'Queue: `crypto_callback_processing_dl`\nNum messages: `5`')}]}
+    'title': '[FIRING:2] TooManyMessagesInDeadLetterQueueAppProd',
+    'text': ('*Alert:* [`prod`] Dead letter queue worker_import_dl filling up\n'
+             'Queue: `worker_import_dl`\nNum messages: `1`\n\n'
+             '*Alert:* [`prod`] Dead letter queue worker_reports_dl filling up\n'
+             'Queue: `worker_reports_dl`\nNum messages: `5`')}]}
 FIRING_1 = {'ts': '1795004280.0', 'bot_id': 'B1', 'attachments': [{
-    'title': '[FIRING:1] TooManyMessagesInDeadLetterQueueCashierProd',
-    'text': '*Alert:* x\nQueue: `check_payment_status_dl`'}]}
+    'title': '[FIRING:1] TooManyMessagesInDeadLetterQueueAppProd',
+    'text': '*Alert:* x\nQueue: `worker_import_dl`'}]}
 RESOLVED = {'ts': '1795100000.0', 'bot_id': 'B1', 'attachments': [{
-    'title': '[RESOLVED] TooManyMessagesInDeadLetterQueueCashierProd',
-    'text': '*Alert:* x\nQueue: `check_payment_status_dl`'}]}
+    'title': '[RESOLVED] TooManyMessagesInDeadLetterQueueAppProd',
+    'text': '*Alert:* x\nQueue: `worker_import_dl`'}]}
 ELASTALERT = {'ts': '1795060000.0', 'subtype': 'bot_message', 'attachments': [{
-    'title': '[prod] Processor Accident Occurred',
-    'text': 'Processor `safe-charge` / <https://x|link>\ncustomer email: someone@example.com'}]}
+    'title': '[prod] Import Worker Failed',
+    'text': 'Worker `acme-agent` / <https://x|link>\ncustomer email: someone@example.com'}]}
 HUMAN = {'ts': '1795000000.0', 'user': 'U1', 'text': 'глянь алерты, тут письмо a@b.c'}
 
 
@@ -23,13 +23,13 @@ def test_slack_alerts_events_split_firing_n_into_alerts():
     """[FIRING:2] с двумя блоками *Alert:* — два события с разными очередями."""
     events = alerts.slack_alerts_events([FIRING_2])
     assert [(e['state'], e['subject']) for e in events] == [
-        ('FIRING', 'check_payment_status_dl'), ('FIRING', 'crypto_callback_processing_dl')]
+        ('FIRING', 'worker_import_dl'), ('FIRING', 'worker_reports_dl')]
 
 
 def test_slack_alerts_events_elastalert_keeps_only_ticks_of_first_line():
     """У elastalert предмет — `…`-значения первой строки; тело (почта) не попадает."""
     (event,) = alerts.slack_alerts_events([ELASTALERT])
-    assert (event['name'], event['subject']) == ('[prod] Processor Accident Occurred', 'safe-charge')
+    assert (event['name'], event['subject']) == ('[prod] Import Worker Failed', 'acme-agent')
     assert 'example.com' not in str(event)
 
 
@@ -41,7 +41,7 @@ def test_slack_alerts_events_skip_human_messages():
 def test_slack_alerts_summary_first_last_repeats_resolved():
     """Группа (имя, очередь): первый/последний FIRING, повторы, RESOLVED, итоговое состояние."""
     rows = alerts.slack_alerts_summary(alerts.slack_alerts_events([FIRING_2, FIRING_1, RESOLVED]))
-    dlq = next(r for r in rows if r['subject'] == 'check_payment_status_dl')
+    dlq = next(r for r in rows if r['subject'] == 'worker_import_dl')
     assert (dlq['first'], dlq['fired'], dlq['resolved'], dlq['state']) == (
         1795004280.0, 2, 1, 'RESOLVED')
 

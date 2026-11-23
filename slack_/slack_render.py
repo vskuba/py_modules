@@ -41,7 +41,7 @@ def slack_render_history(json_text: 'str | bytes', max_len: int = SLACK_RENDER_M
     `file: <имя>`, боты — тег `(бот)`; `is_msg_merged`/`thread_ts` помечаются.
 
     Args:
-        json_text: сырой JSON-дампа (`{"ok":true,"channel":"CRLD5SBL4","messages":[...]}`)
+        json_text: сырой JSON-дампа (`{"ok":true,"channel":"C0123456789","messages":[...]}`)
             либо голый список сообщений.
         max_len: обрезать тело сообщения, если оно длиннее `max_len` символов
             («…[обр.]»).

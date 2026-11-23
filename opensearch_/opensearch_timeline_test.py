@@ -4,7 +4,7 @@ import pytest
 from opensearch_.opensearch_ import opensearch_filters
 from opensearch_.opensearch_timeline import opensearch_timeline_format, opensearch_timeline_rows
 
-POD = 'cashier-payment-gateway-daemon-consumer.check-payment-statmxzhf'
+POD = 'app-daemon-consumer.check-statusmxzhf'
 
 
 def _hit(ts, message=None, level='INFO', text=None):
@@ -38,7 +38,7 @@ def test_opensearch_filters_broken_json_fails_loudly():
 def test_opensearch_timeline_rows_hides_sql_keeps_rollback():
     """SQL-шум DEBUG спрятан, Rolling back — след ошибки — оставлен."""
     rows = opensearch_timeline_rows([
-        _hit('2026-11-17T12:12:02.682000+00:00', 'Executing statement: UPDATE payment', 'DEBUG'),
+        _hit('2026-11-17T12:12:02.682000+00:00', 'Executing statement: UPDATE orders', 'DEBUG'),
         _hit('2026-11-17T12:12:02.683000+00:00', 'Beginning transaction', 'DEBUG'),
         _hit('2026-11-17T12:12:02.719000+00:00', 'Rolling back transaction', 'DEBUG'),
     ])
@@ -60,13 +60,13 @@ def test_opensearch_timeline_rows_merges_duplicated_records():
 def test_opensearch_timeline_rows_stderr_and_not_info():
     """stderr-трейс виден с уровнем '-', --not-info выкидывает INFO, но не stderr."""
     rows = opensearch_timeline_rows([
-        _hit('t1', 'Start check payment', 'INFO'),
-        _hit('t2', 'SafeCharge check status returned status error', 'NOTICE'),
+        _hit('t1', 'Start check status', 'INFO'),
+        _hit('t2', 'Gateway check status returned status error', 'NOTICE'),
         _hit('t3', text='  The EntityManager is closed.  '),
         _hit('t4', text='   '),
     ], not_info=True)
     assert [(r['level'], r['message']) for r in rows] == [
-        ('NOTICE', 'SafeCharge check status returned status error'),
+        ('NOTICE', 'Gateway check status returned status error'),
         ('-', 'The EntityManager is closed.')]
 
 

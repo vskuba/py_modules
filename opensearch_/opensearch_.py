@@ -5,12 +5,26 @@ OpenSearch за Google SSO: запросы через Dashboards по SAML-се�
 вход — только SAML через Google. Карта ловушек — в docstring, она половина
 ценности модуля.
 
-## Карта ловушек (проверено на живом opensearch.devopdata.co, OSD 3.9)
+## Конфиг — всё из своего `.env.local` (или из окружения процесса)
+
+Общий слой не знает ни хостов, ни путей: проект задаёт их сам.
+
+* `OPENSEARCH_URL` — адрес Dashboards; без дефолта, отсутствующий — внятный отказ.
+* `OPENSEARCH_COOKIE` / `OPENSEARCH_COOKIE_SAML` — пара cookie сессии (Copy as cURL).
+* `OPENSEARCH_STRATEGY` — id стратегии поиска; он у каждой установки свой, у
+  известного деплоя это был `opensearch-with-long-numerals`.
+* `OPENSEARCH_INDEX_FMT` — шаблон индекса для `opensearch_logwatch`
+  (`myapp-{env}-fpm-*`).
+
+По умолчанию конфиг читается из `.env.local` проекта (корень считает `config`);
+файл в другом месте — `opensearch_env(env_file=…)` или `--env-file`.
+
+## Карта ловушек (проверено на живой установке, OSD 3.9)
 
 * **REST закрыт, `api/console/proxy` тоже (404).** Единственный живой путь к
   данным — `POST /internal/search/<стратегия>`. Стратегию угадать нельзя:
   типовой `opensearch-dashboards` отвечает «Search strategy not found» (500),
-  а рабочий id этой установки — `opensearch-with-long-numerals`. Ошибку путают
+  а рабочий id задаётся настройкой проекта (`OPENSEARCH_STRATEGY`). Ошибку путают
   с отказом авторизации — это найденный эндпоинт, просто не та стратегия.
 * **Нужны ОБА cookie**: `security_authentication` и `security_authentication_saml1`.
   С одним первым — 401 и принудительное затирание (`Set-Cookie …Max-Age=0`),
@@ -31,7 +45,8 @@ OpenSearch за Google SSO: запросы через Dashboards по SAML-се�
 
 ## Что здесь есть
 
-* `opensearch_env` — конфиг из env-файла (`.env.local` cashier-проекта).
+* `opensearch_env` — конфиг доступа: `.env.local` проекта (резолвит `config`),
+  явный `env_file`, а если файла нет — только `os.environ`.
 * `opensearch_search` — POST в `/internal/search/...`, отдаёт `rawResponse`,
   по пути переписывает протировавшиеся cookie в env-файл.
 * `opensearch_hits` — хиты одним списком (index/id/ts/_source), удобно в pipe.
@@ -39,33 +54,33 @@ OpenSearch за Google SSO: запросы через Dashboards по SAML-се�
 * `opensearch_agg_run` (файл `opensearch_agg.py`) — terms-разбиения и
   date_histogram; `.keyword` к text-полям подставляется сам.
 
-CLI:
+CLI (паттерн индекса — свой, из настроек проекта):
 
     # 300 свежих логов по traceId (сортировка по времени вверх)
-    python -m opensearch_.opensearch_ search 'cashier-prod-fpm-*' all \\
+    python -m opensearch_.opensearch_ search 'myapp-prod-app-*' all \\
         --filter jsonPayload.traceId=4cba6a6a-... --sort timestamp --size 300
 
     # только счётчик
-    python -m opensearch_.opensearch_ count 'cashier-prod-fpm-*' all \\
+    python -m opensearch_.opensearch_ count 'myapp-prod-app-*' all \\
         --filter jsonPayload.traceId=4cba6a6a-...
 
     # разбивка: сервис x severity за окно (строки: счётчик, путь...)
-    python -m opensearch_.opensearch_ agg 'cashier-prod-fpm-*' all \\
+    python -m opensearch_.opensearch_ agg 'myapp-prod-app-*' all \\
         --group jsonPayload.serviceName --group severity \\
         --time-from 2026-11-07T17:00:00Z --time-to 2026-11-09T17:00:00Z
 
     # лента по часам (полю timestamp — date, .keyword не трогает)
-    python -m opensearch_.opensearch_ agg 'cashier-prod-fpm-*' all \\
+    python -m opensearch_.opensearch_ agg 'myapp-prod-app-*' all \\
         --hist timestamp --interval 1h --group severity
 
     # строка Lucene вместо JSON — уходит в query_string
-    python -m opensearch_.opensearch_ count 'cashier-prod-fpm-*' \\
+    python -m opensearch_.opensearch_ count 'myapp-prod-app-*' \\
         'jsonPayload.message:*nack* AND NOT jsonPayload.logLevel:INFO'
 
     # свой JSON целиком (body _search)
-    python -m opensearch_.opensearch_ search 'cashier-prod-fpm-*' '{"aggs": …}' --raw
+    python -m opensearch_.opensearch_ search 'myapp-prod-app-*' '{"aggs": …}' --raw
 
-⚠ ВНИМАНИЕ (PCI): в `jsonPayload.message` кассира чужие данные — маски, телефоны,
+⚠ ВНИМАНИЕ (PCI): в `jsonPayload.message` бывают чужие данные — маски, телефоны,
 полные PAN. результаты держать в /tmp, в git/файлы репозитория не выгружать.
 """
 
@@ -82,16 +97,31 @@ import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_ENV_FILE = "/var/www/cashier-service-payment-gateway/.env.local"
-DEFAULT_STRATEGY = os.environ.get("OPENSEARCH_STRATEGY", "opensearch-with-long-numerals")
+from config.config import ENV_LOCAL_PATH
+
+# '' — `.env.local` проекта: корень считает config от себя (родитель чекаута
+# py_modules), файла нет — только os.environ. Свой путь к env-файлу проект
+# передаёт в opensearch_env(env_file=…) или --env-file; ротация cookie пишет туда.
+DEFAULT_ENV_FILE = ""
+DEFAULT_STRATEGY = os.environ.get("OPENSEARCH_STRATEGY", "")
 UA = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:159.0) Gecko/20100101 Firefox/159.0"
 
 
 def opensearch_env(env_file: str = DEFAULT_ENV_FILE) -> dict:
-    """Конфиг доступа из env-файла: url, пара cookie, стратегия."""
-    p = pathlib.Path(env_file)
-    src = os.environ if not p.is_file() else {}
-    kv = dict(src)
+    """Конфиг доступа: url, пара cookie, стратегия.
+
+    Args:
+        env_file: явный путь — как прежде: файл есть — значения из него (ротация
+            cookie пишет обратно туда), файла нет — os.environ. Пусто (по
+            умолчанию) — `.env.local` проекта через config, а если его нет —
+            только os.environ.
+    """
+    if env_file:
+        p = pathlib.Path(env_file)
+        kv = {} if p.is_file() else dict(os.environ)
+    else:
+        p = pathlib.Path(ENV_LOCAL_PATH)
+        kv = dict(os.environ)
     if p.is_file():
         for line in p.read_text().splitlines():
             m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line.strip())
@@ -99,15 +129,23 @@ def opensearch_env(env_file: str = DEFAULT_ENV_FILE) -> dict:
                 kv[m.group(1)] = m.group(2)
     env = {
         "file": str(p),
-        "url": kv.get("OPENSEARCH_URL", "https://opensearch.devopdata.co").rstrip("/"),
+        "url": (kv.get("OPENSEARCH_URL") or "").rstrip("/"),
         "strategy": kv.get("OPENSEARCH_STRATEGY", DEFAULT_STRATEGY),
         "cookies": {
             "security_authentication": kv.get("OPENSEARCH_COOKIE", ""),
             "security_authentication_saml1": kv.get("OPENSEARCH_COOKIE_SAML", ""),
         },
     }
+    where = str(p) if p.is_file() else "окружении процесса"
+    if not env["url"]:
+        raise SystemExit(f"OPENSEARCH_URL пуст в {where}: укажи адрес кластера "
+                         "Dashboards — общего хоста по умолчанию в слое нет")
+    if not env["strategy"]:
+        raise SystemExit(f"OPENSEARCH_STRATEGY пуст в {where}: id стратегии свой у каждой "
+                         "установки (у известных — opensearch-with-long-numerals; типовой "
+                         "opensearch-dashboards отвечает «Search strategy not found»)")
     if not env["cookies"]["security_authentication"]:
-        raise SystemExit(f"OPENSEARCH_COOKIE пуст в {env_file}: сессия не заведена, "
+        raise SystemExit(f"OPENSEARCH_COOKIE пуст в {where}: сессия не заведена, "
                          "см. docstring модуля (Copy as cURL из браузера)")
     return env
 
@@ -270,11 +308,12 @@ def _join_sort(argv: list) -> list:
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="opensearch_", description=__doc__.splitlines()[1])
-    ap.add_argument("--env-file", default=DEFAULT_ENV_FILE)
+    ap.add_argument("--env-file", default=DEFAULT_ENV_FILE,
+                    help="env-файл; по умолчанию .env.local проекта, файла нет — окружение процесса")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(sp):
-        sp.add_argument("index", help="паттерн индекса, напр. cashier-prod-fpm-*")
+        sp.add_argument("index", help="паттерн индекса, напр. myapp-prod-app-*")
         sp.add_argument("query", help="all | JSON запроса (query_clause) | строка Lucene (query_string)")
         sp.add_argument("--filter", action="append", metavar="FIELD=VALUE",
                         help="match_phrase, повторяемый")

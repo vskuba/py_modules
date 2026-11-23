@@ -13,11 +13,18 @@ uuid → `'u'`, числа → `N`, кавычки с содержимым → `
 `context.exception` — `[класс @ файл:строка]` (без vendor/-пути). Одинаковая
 беда с разными uuid/суммами сворачивается в одну строку.
 
+## Индексы и среды
+
+Шаблон индекса `index_fmt` с `{env}` — из `OPENSEARCH_INDEX_FMT` в `.env.local`
+проекта или из `--index-fmt`; общего дефолта в слое нет, при пустом — отказ.
+
 ## Baseline
 
-`logwatch_known.txt` рядом с модулем, строчки `regex_сервиса|фрагмент`.
-Нашёл новое, убедил, что легальное — дописываешь строку (`--add`) и она
-больше не шумит. Файл в репозитории — baseline переживает /tmp.
+Baseline — файл проекта, в общий слой он не попадает: путь задаётся `--known`
+или `OPENSEARCH_LOGWATCH_KNOWN`; нет ни того ни другого — сверка без baseline.
+Строчки `regex_сервиса|фрагмент`. Нашёл новое, убедил, что легальное —
+дописываешь строку (`--add`) и она больше не шумит. Формат —
+`logwatch_known.example.txt` рядом с модулем.
 
 ## Что здесь
 
@@ -31,21 +38,25 @@ uuid → `'u'`, числа → `N`, кавычки с содержимым → `
 
 CLI:
 
+    # OPENSEARCH_INDEX_FMT (или --index-fmt) заданы в проекте
     python3 -m opensearch_.opensearch_logwatch --window 2h
-    # дописать легальное в baseline
-    python3 -m opensearch_.opensearch_logwatch --add 'my-service|Some Exception'
+    python3 -m opensearch_.opensearch_logwatch --index-fmt 'myapp-{env}-app-*' \\
+        --known /path/to/project/logwatch_known.txt --add 'my-service|Some Exception'
 
 Код выхода: 0 — чисто, 3 — есть незнакомые подписи.
 """
 import argparse
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
 
 from opensearch_.opensearch_ import opensearch_hits
 
-KNOWN_FILE = str(Path(__file__).with_name('logwatch_known.txt'))
+# baseline живёт в проекте: путь — из OPENSEARCH_LOGWATCH_KNOWN или --known;
+# формат строк — в logwatch_known.example.txt рядом с модулем
+KNOWN_FILE = os.environ.get('OPENSEARCH_LOGWATCH_KNOWN', '')
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _NUM = re.compile(r'\b\d+\b')
 _QUOT = re.compile(r"[\"'`][^\"'`]{0,60}[\"'`]")
@@ -71,17 +82,18 @@ def opensearch_logwatch_sig(src: dict) -> tuple:
 
 
 def opensearch_logwatch(window: str = '2h', envs=('prod', 'stage', 'dev'),
-                        index_fmt: str = 'cashier-{env}-fpm-*',
-                        levels=('ERROR', 'CRITICAL'), known_file: str = '',
+                        index_fmt: str = '', levels=('ERROR', 'CRITICAL'), known_file: str = '',
                         size: int = 1500, env: dict | None = None) -> dict:
     """Сверка логов за окно по средам, минус baseline.
 
     Args:
         window: промежуток для range (`2h`, `30m`, `1d`) — пишется как `now-<window>`.
         envs: имена сред; индекс собирается из `index_fmt`.
-        index_fmt: шаблон индекса с `{env}`.
+        index_fmt: шаблон индекса с `{env}`; пусто — `OPENSEARCH_INDEX_FMT`,
+            и если там пусто — отказ (общего дефолта в слое нет).
         levels: уровни logLevel.
-        known_file: baseline; пусто — `KNOWN_FILE` рядом с модулем.
+        known_file: baseline; пусто — `OPENSEARCH_LOGWATCH_KNOWN`, там пусто —
+            сверка без baseline.
         size: потолок хитов на индекс (окно и size — на одно, см. докстринг).
         env: конфиг opensearch_ (cookie-сессия); пусто — по умолчанию модуля.
 
@@ -89,6 +101,10 @@ def opensearch_logwatch(window: str = '2h', envs=('prod', 'stage', 'dev'),
         {'new': Counter{(svc, sig): n}, 'known': Counter{ключ: n},
          'samples': {индекс: снято хитов}}.
     """
+    fmt = index_fmt or os.environ.get('OPENSEARCH_INDEX_FMT', '')
+    if not fmt:
+        raise SystemExit("шаблон индекса не задан: index_fmt=/--index-fmt или "
+                         "OPENSEARCH_INDEX_FMT в .env.local проекта — общего дефолта в слое нет")
     query = json.dumps({'bool': {'filter': [
         {'terms': {'jsonPayload.logLevel.keyword': list(levels)}},
         {'range': {'timestamp': {'gte': f'now-{window}'}}},
@@ -96,7 +112,7 @@ def opensearch_logwatch(window: str = '2h', envs=('prod', 'stage', 'dev'),
     known = _known(known_file)
     new, tot_known, samples = Counter(), Counter(), {}
     for name in envs:
-        index = index_fmt.format(env=name)
+        index = fmt.format(env=name)
         hits = opensearch_hits(index, query, env, sort='timestamp', size=size)
         samples[index] = len(hits)
         for h in hits:
@@ -112,7 +128,7 @@ def opensearch_logwatch(window: str = '2h', envs=('prod', 'stage', 'dev'),
 
 def _known(path: str = '') -> list:
     path = path or KNOWN_FILE
-    if not Path(path).is_file():
+    if not path or not Path(path).is_file():
         return []
     return [tuple(l.strip().split('|', 1)) for l in open(path, encoding='utf-8')
             if '|' in l]
@@ -122,15 +138,20 @@ if __name__ == '__main__':
     _P = argparse.ArgumentParser(description=__doc__.split('\n')[1])
     _P.add_argument('--window', default='2h')
     _P.add_argument('--envs', default='prod,stage,dev')
-    _P.add_argument('--index-fmt', default='cashier-{env}-fpm-*')
-    _P.add_argument('--known', default='', help='baseline-файл; по умолчанию рядом с модулем')
+    _P.add_argument('--index-fmt', default='',
+                    help='шаблон с {env}; по умолчанию OPENSEARCH_INDEX_FMT, там пусто — отказ')
+    _P.add_argument('--known', default='',
+                    help='baseline-файл; по умолчанию OPENSEARCH_LOGWATCH_KNOWN, там пусто — без baseline')
     _P.add_argument('--size', type=int, default=1500)
     _P.add_argument('--add', default='', help='строка `сервис|фрагмент` в baseline и выход')
     _C = _P.parse_args()
     if _C.add:
-        with open(_C.known or KNOWN_FILE, 'a', encoding='utf-8') as fh:
+        _known_file = _C.known or KNOWN_FILE
+        if not _known_file:
+            raise SystemExit('--add: baseline-файл не задан (--known или OPENSEARCH_LOGWATCH_KNOWN)')
+        with open(_known_file, 'a', encoding='utf-8') as fh:
             fh.write(_C.add.rstrip('\n') + '\n')
-        print(f'дописано в {_C.known or KNOWN_FILE}')
+        print(f'дописано в {_known_file}')
         raise SystemExit(0)
     got = opensearch_logwatch(_C.window, tuple(e for e in _C.envs.split(',') if e),
                               _C.index_fmt, known_file=_C.known, size=_C.size)

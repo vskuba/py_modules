@@ -1,7 +1,7 @@
 """
 Сводка алертов Slack-канала: какой алерт, по чему, когда впервые и сколько раз повторился.
 
-Родилась на разборе DLQ кассира (2026-11): время, когда сообщение легло в DLQ,
+Родилась на разборе DLQ (2026-11): время, когда сообщение легло в DLQ,
 нашлось только по первому `FIRING` в истории канала, а всё, что после, —
 суточные повторы Alertmanager того же самого состояния. Читать это глазами в
 канале нельзя: один пост `[FIRING:2]` несёт два разных алерта (две очереди), у
@@ -31,13 +31,13 @@ elastalert текст лежит не в `text`, а в `attachments[].text`.
     SLACK_BOT_TOKEN_EXPIRES_AT=1794950000  # epoch конца жизни
     SLACK_REFRESH_TOKEN=xoxe-1-…           # одноразовый
     SLACK_CLIENT_ID=… / SLACK_CLIENT_SECRET=…
-    SLACK_CHANNEL_ALERTS_CRITICAL=CRLD5SBL4
+    SLACK_CHANNEL_ALERTS_CRITICAL=C0123456789
 
 CLI:
 
     python -m slack_.slack_alerts --env-file /var/www/<проект>/.env.local \\
         --channel-var SLACK_CHANNEL_ALERTS_CRITICAL --days 14
-    python -m slack_.slack_alerts --env-file … --channel CRLD5SBL4 --events   # лента событий
+    python -m slack_.slack_alerts --env-file … --channel C0123456789 --events   # лента событий
 """
 import argparse
 import datetime
@@ -94,7 +94,7 @@ def slack_alerts_history(token: str, channel: str, oldest: float = 0, limit: int
 
     Args:
         token: bot-токен.
-        channel: id канала (`CRLD5SBL4`).
+        channel: id канала (`C0123456789`).
         oldest: epoch-граница снизу; 0 — без границы.
         limit: максимум сообщений всего.
     """

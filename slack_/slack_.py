@@ -227,7 +227,7 @@ def slack_api_call(method: str, token: str = '', params: dict = None,
         method: имя метода (`conversations.history`) — уйдёт в URL.
         token: сессионный токен (`xoxc-…`); пустой — запрос без токена.
         params: {'oldest': '1754640000.000000', 'latest': 'true', 'inclusive': 'true',
-            'channel': 'CRLD5SBL4', 'limit': '200'} — уходят в query-строку.
+            'channel': 'C0123456789', 'limit': '200'} — уходят в query-строку.
         d_cookie, b_cookie, x_cookie, ss_cookie: значения кук сессии.
         base: базовый URL; '' — SLACK_API_BASE.
         token_in_body: имя ключа токена в JSON-теле; '' — токен только в заголовке.

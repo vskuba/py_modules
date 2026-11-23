@@ -1,4 +1,5 @@
 """Тесты PHP-примет overengineering: правила на словарях разбора и один сквозной прогон через php."""
+import os
 import shutil
 from pathlib import Path
 
@@ -6,7 +7,8 @@ import pytest
 
 from tool_.tool_overengineering_php import _fixed_param, _passthrough, _single_impl, tool_overengineering_php
 
-CASHIER_VENDOR = Path('/var/www/cashier-service-payment-gateway/vendor')
+# vendor с nikic/php-parser — из TOOL_OVERENGINEERING_PHP_VENDOR; без него php-прогон пропускается
+VENDOR = Path(os.environ.get('TOOL_OVERENGINEERING_PHP_VENDOR', ''))
 
 
 def test_passthrough_skips_doors_factories_routes_and_protocol():
@@ -53,11 +55,12 @@ def test_single_impl_counts_file_class_pairs_and_transitive(tmp_path):
     assert [one['name'] for one in judge('LonelyInterface', 'interface')] == ['LonelyInterface']
 
 
-@pytest.mark.skipif(not shutil.which('php') or not (CASHIER_VENDOR / 'nikic').is_dir(),
-                    reason='нужны php и nikic/php-parser')
+@pytest.mark.skipif(not shutil.which('php') or not os.environ.get('TOOL_OVERENGINEERING_PHP_VENDOR')
+                    or not (VENDOR / 'nikic').is_dir(),
+                    reason='нужны php и vendor с nikic/php-parser (TOOL_OVERENGINEERING_PHP_VENDOR)')
 def test_end_to_end_through_php(tmp_path, monkeypatch):
     """Настоящий разбор: обёртка над чужим методом находится, PHP 8-синтаксис не мешает."""
-    monkeypatch.setenv('TOOL_OVERENGINEERING_PHP_VENDOR', str(CASHIER_VENDOR))
+    monkeypatch.setenv('TOOL_OVERENGINEERING_PHP_VENDOR', str(VENDOR))
     src = tmp_path / 'Manager.php'
     src.write_text('<?php\nfinal class Manager {\n'
                    '    public function __construct(private readonly Api $api) {}\n'
