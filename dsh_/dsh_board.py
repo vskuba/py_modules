@@ -14,9 +14,10 @@
   и под запором реестра. Замену списка целиком (`goals`) снаружи не берут — она затирала
   бы правку из открытой формы.
 
-Параллельность задают **моторы** доски: у модели N цепочек (по умолчанию четыре), и
-заходы из разных рядов идут разом. Наши промпты — работа руками: они идут сразу, мимо
-очереди доски.
+Параллельность задаёт **бокс доски**: задача, поставленная с ожиданием (`dsh_board_ask`
+с `wait`, `dsh_board_fanout`), — одноразовая цель на доске, видимая и переставляемая;
+освободившийся мотор модели берёт раннюю по порядку бокса. Потому одна очередь у всех:
+и у человека из формы, и у оркестратора.
 
 Требования: хост `dsh --profile web` на этой машине и подключённый плагин
 `dsh-continuous-agent` (claude-shell, `plugins/`) — без него работают только функции
@@ -46,8 +47,8 @@ from dsh_.dsh_saving import dsh_saving_owner_mark, dsh_saving_sent
 from dsh_.dsh_wait import dsh_wait_done, dsh_wait_expect
 from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_merged, \
     dsh_worktree_new
-from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_turn_start_wait, \
-    dsh_session_dialog, dsh_session_find, dsh_session_history, dsh_session_list, \
+from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_dialog, \
+    dsh_session_find, dsh_session_history, dsh_session_image_part, dsh_session_list, \
     dsh_session_prompt, dsh_session_title, dsh_session_turn_reply
 
 # Потолок ожидания ответа субагента по умолчанию, с.
@@ -58,8 +59,6 @@ DSH_BOARD_RETRY_POLL = 2.0
 DSH_BOARD_RESUME_TRIES = 2
 DSH_BOARD_RESUME_TEXT = ('Хост перезапустился посреди твоего круга, и он оборвался. Продолжай '
                          'задачу с того места, где остановился, и дай полный ответ.')
-# Сколько держать замок fanout после отправки: пока круг задачи не начнётся, с.
-DSH_BOARD_START_HOLD = 60
 # Сколько ждать, пока у хоста после перезапуска поднимутся службы, с.
 DSH_BOARD_STARTUP_WAIT = 120
 # Выжимка ответа: просьба к субагенту и пределы, которыми её режем, если он не послушал.
@@ -327,77 +326,52 @@ def dsh_board_worktree_forget(session: str) -> None:
 
 
 def dsh_board_ask(session: str, text: str, wait: bool = False,
-                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, images: list = None, gate=None, *,
+                  timeout: float = DSH_BOARD_WAIT_TIMEOUT, images: list = None, *,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
-    """Задача субагенту: промпт в карточку; с `wait` — дождаться конца круга и ответа.
+    """Задача субагенту: с `wait` — через бокс доски, без него — промптом в карточку.
 
-    Ответ — на **свой** промпт (`dsh_session_turn_reply`), а не первый конец круга после
-    отправки: карточка могла быть занята чужим кругом. Круг, оборванный перезапуском хоста
-    (`turn/end` с причиной `interrupted`), продолжается сам — до `DSH_BOARD_RESUME_TRIES` раз.
+    С `wait` задача кладётся в бокс доски тем же `continuous_add`, каким человек кладёт
+    промпты из формы, — от имени самой карточки (`quotaRounds: 1`, без периода). Пока
+    она в боксе — она видна на доске целью: её можно переставить, снять, поставить на
+    её место другую; первый свободный мотор цепочки достаётся ранней по порядку бокса.
+    Ответ ждётся на **свой** промпт (`dsh_session_turn_reply`): карточка могла быть
+    занята чужим кругом. Полученный ответ — цель снимается с доски, бокс не должен
+    копить закрытое; при ошибке и таймауте цель не трогается: живой круг и его ответ
+    разберёт человек (`dsh-board answer`, «входящие»). Круг, оборванный перезапуском
+    хоста (`interrupted`), продолжается по-прежнему прямым промптом — до
+    `DSH_BOARD_RESUME_TRIES` раз.
+
+    Без `wait` — как раньше, промпт в карточку: снять цель после ответа некому, а
+    мёртвый груз в боксе не нужен; ответ потом — `dsh_session_answer_last`.
 
     Args:
         wait: ждать конца круга и вернуть ответ; без него промпт встаёт в очередь
             карточки, и ответ потом — `dsh_session_answer_last`.
-        timeout: потолок всего вызова, с — общий на засечку и ожидание ответа.
-        images: пути к картинкам (скриншоты) — субагент видит их рядом с текстом.
-        gate: общий замок для нескольких задач разом (`fanout`): задача ждёт свободный
-            мотор и держит замок, пока её круг не начнётся, — две задачи не займут один
-            и тот же свободный мотор. Без него промпт уходит сразу.
+        timeout: потолок всего вызова, с — общий на засечку, клад и ожидание ответа.
+        images: пути к картинкам (скриншоты) — едут вместе с задачей и в круге
+            лягут частями промпта рядом с текстом.
 
     Returns:
         Текст ответа при `wait`, иначе пустая строка.
 
     Raises:
         DshBoardError: круг не кончился за `timeout`.
+
+    ⚠ Два одинаковых текста в одну карточку неразличимы: ни боксом, ни журналом.
     """
-    # Засечку можно спрашивать сколько угодно раз — хост, занятый первые секунды после
-    # заведения карточки, не повод ронять задачу. Сам промпт вслепую не повторяем:
-    # таймаут на отправке не говорит, дошёл ли он, а дважды он уйти не должен.
     deadline = time.time() + timeout
     dsh_saving_sent(session, text)
-    mark = _patient(lambda: dsh_session_cursor(session, base=base), timeout)
-    # Промпт повторяем только на «служба ещё не поднялась» — тогда он точно не ушёл.
-    def send():
+    if not wait:
+        # Промпт повторяем только на «служба ещё не поднялась» — тогда он точно не ушёл.
         _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), timeout,
                  retry=(DshApiUnavailable,))
-
-    if gate is None:
-        send()
-    else:
-        with gate:
-            dsh_board_motor_wait(max(0.0, deadline - time.time()), base=base)
-            send()
-            dsh_session_turn_start_wait(session, mark, DSH_BOARD_START_HOLD, base=base)
-    # Ответ этой карточки ждёт сессия Claude, отдавшая задачу: без метки ответ, не
-    # дождавшийся здесь (без --wait, оборванный процесс), ушёл бы в никуда (dsh_wait).
-    dsh_wait_expect(session)
-    if not wait:
+        dsh_wait_expect(session)
         return ''
-    asked = text
-    # Пока ждём — карточка помечена: обрыв продолжаем здесь, `revive --auto` её не трогает.
-    with _waiting(session):
-        for resumed in range(DSH_BOARD_RESUME_TRIES + 1):
-            reply = dsh_session_turn_reply(session, mark, asked, max(0.0, deadline - time.time()), base=base)
-            if reply is None:
-                raise DshBoardError(f'круг в {session} не кончился за {int(timeout)} с — ответ потом: '
-                                    f'dsh-board inbox')
-            if reply['reason'] != 'interrupted' or resumed == DSH_BOARD_RESUME_TRIES:
-                break
-            # Хост перезапустился посреди круга и закрыл его: промежуточная реплика — не
-            # ответ. Просим продолжить с того же места, и ждём уже конца нового круга.
-            mark, asked = reply['seq'], DSH_BOARD_RESUME_TEXT
-            _patient(lambda: dsh_session_prompt(session, asked, base=base), DSH_BOARD_STARTUP_WAIT,
-                     retry=(DshApiUnavailable,))
-    answer = reply['text']
-    if reply['reason'] == 'interrupted':
-        raise DshBoardError(f'круг в {session} обрывался {DSH_BOARD_RESUME_TRIES + 1} раза — '
-                            f'последняя реплика: {dsh_board_brief(answer)}')
-    # Ответ получен — во «входящих» его больше нет, и ждать его больше некому.
-    with contextlib.suppress(DshApiError, OSError):
-        dsh_board_inbox_take(session, dsh_board_turns(dsh_session_find(session, base=base)))
-    with contextlib.suppress(OSError):
-        dsh_wait_done(session)
-    return answer
+    goal_id, mark = _box_place(session, text, images=images, deadline=deadline, base=base)
+    # Ответ этой карточки ждёт сессия Claude, отдавшая задачу: без метки ответ, не
+    # дождавшийся здесь, ушёл бы в никуда (dsh_wait).
+    dsh_wait_expect(session)
+    return _box_answer(session, goal_id, mark, text, deadline, base=base)
 
 
 def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
@@ -701,44 +675,29 @@ def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
     return (cut[:end + 1] if end > limit // 3 else cut).rstrip() + ' …'
 
 
-def dsh_board_motor_wait(timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
-                         base: str = DSH_API_ADDR_DEFAULT) -> None:
-    """Дождаться свободного мотора: занятых меньше, чем всего (`dsh_board_motors_busy`).
-
-    Работа руками (наши промпты) моторами доски не гейтится — без этой проверки десять
-    задач `fanout` разом ушли бы в модель, у которой слотов меньше, и встали бы в её
-    очередь, деля скорость. Хост, не ответивший вовремя, считается занятым.
-
-    Raises:
-        DshBoardError: мотор не освободился за `timeout`.
-    """
-    started = time.time()
-    while True:
-        try:
-            status = dsh_board_motors_busy(base=base)
-            if len(status['working']) < max(1, int(status['capacity'] or 0)):
-                return
-        except DshApiError:
-            pass
-        if time.time() - started > timeout:
-            raise DshBoardError(f'свободный мотор не появился за {int(timeout)} с')
-        time.sleep(DSH_BOARD_RETRY_POLL)
-
-
 def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_start=None, on_done=None, *,
                      base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Раздать задачи субагентам разом и собрать ответы — в порядке задач.
 
+    Каждая задача кладётся в бокс доски — `continuous_add` от имени своей карточки,
+    `quotaRounds: 1`, без периода, — и по порядку списка: что раньше в задачах, то
+    раньше в боксе, и первый свободный мотор достаётся ранней. Задачи видны на доске
+    карточками: их можно переставить, снять, поставить на их место другие. Нити только
+    ждут ответы, задачу не заводит и не гонит ни одна нить — заход делает доска, и
+    доходит он, даже если процесс, раздавший задачи, умер (ответ — `dsh-board answer`,
+    `collect`).
+
     Задача — `{text, session}` (готовая карточка) или `{text, cwd, title}` (карточка
     заводится под каталог), с необязательными `images` — пути к картинкам — и `worktree: true`
     — задача правит код в своей копии репозитория (`dsh_worktree`), в результате путь и ветка; `archive: true` — убрать заведённую карточку в архив после
-    ответа (после неудачи — не трогает: живой круг ещё можно дочитать). Задачи идут
-    разом, но не больше, чем свободных моторов: лишние ждут (`dsh_board_motor_wait`).
-    Несколько задач в одну карточку встают в её очередь, и у каждой — свой ответ.
+    ответа (после неудачи — не трогает: живой круг ещё можно дочитать). Задач больше,
+    чем моторов, — лишние ждут своей очереди в боксе, а не в нити. Несколько задач в
+    одну карточку лежат в её боксе по порядку и у каждой — свой ответ.
 
     Args:
         on_start: `(index, row)` — задача получила карточку (`row`: session, worktree,
-            branch); зовётся до промпта, чтобы оборванный `fanout` можно было дособрать.
+            branch); зовётся до клада в бокс, чтобы оборванный `fanout` можно было
+            дособрать.
         on_done: `(index, row)` — задача кончилась; зовётся сразу, а не после всех.
             Сбой обоих колбэков задачу не роняет.
 
@@ -747,34 +706,19 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
         задача остальных не роняет.
     """
     results = [None] * len(tasks)
+    plans = []
 
     def tell(callback, index, row):
         if callback:
             with contextlib.suppress(Exception):
                 callback(index, row)
-    # Общий замок задач: каждая ждёт свободный мотор — задач больше, чем моторов, не
-    # уходит в модель разом; лишние ждут, пока освободится мотор.
-    gate = threading.Lock()
 
-    def run(index: int, task: dict) -> None:
-        session = task.get('session') or ''
-        tree = {}
+    def wait(plan: dict) -> None:
+        """Дождаться ответа одной задачи — в нити, больше в нити делать нечего."""
+        index, task, session, tree = plan['index'], plan['task'], plan['session'], plan['tree']
         try:
-            if not session:
-                cwd = task['cwd']
-                if task.get('worktree'):
-                    # Пишущей задаче — своя копия репо: соседи по fanout не затрут друг друга.
-                    tree = dsh_worktree_new(cwd, task.get('title') or 'задача')
-                    cwd = tree['path']
-                    task = {**task, 'text': dsh_board_worktree_head(tree) + task['text']
-                            + dsh_board_worktree_test_ask(tree)}
-                session = dsh_board_session_new(cwd, task.get('title') or 'задача',
-                                                bool(task.get('fullAccess', True)), base=base,
-                                                worktree=tree or None)
-            tell(on_start, index, {'session': session, **({'worktree': tree['path'], 'branch': tree['branch']}
-                                                         if tree else {})})
-            answer = dsh_board_ask(session, task['text'], wait=True, timeout=timeout,
-                                   images=task.get('images'), gate=gate, base=base)
+            answer = _box_answer(session, plan['goal'], plan['mark'], plan['text'],
+                                 time.time() + timeout, base=base)
             results[index] = {'session': session, 'answer': answer, 'error': '',
                               **({'worktree': tree['path'], 'branch': tree['branch']} if tree else {})}
         except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
@@ -788,8 +732,34 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
             with contextlib.suppress(DshApiError):
                 dsh_session_archive(session, base=base)
 
-    threads = [threading.Thread(target=run, args=(index, task), daemon=True)
-               for index, task in enumerate(tasks)]
+    # Клады — последовательно, по порядку задач: порядок в боксе — порядок раздачи,
+    # и гонка нитей не должна его путать. Ждать — параллельно, это только чтение.
+    for index, task in enumerate(tasks):
+        session, tree, text = task.get('session') or '', {}, task['text']
+        try:
+            if not session:
+                cwd = task['cwd']
+                if task.get('worktree'):
+                    # Пишущей задаче — своя копия репо: соседи по fanout не затрут друг друга.
+                    tree = dsh_worktree_new(cwd, task.get('title') or 'задача')
+                    cwd = tree['path']
+                    text = dsh_board_worktree_head(tree) + text + dsh_board_worktree_test_ask(tree)
+                session = dsh_board_session_new(cwd, task.get('title') or 'задача',
+                                                bool(task.get('fullAccess', True)), base=base,
+                                                worktree=tree or None)
+            tell(on_start, index, {'session': session, **({'worktree': tree['path'], 'branch': tree['branch']}
+                                                         if tree else {})})
+            dsh_saving_sent(session, text)
+            goal_id, mark = _box_place(session, text, images=task.get('images'),
+                                       deadline=time.time() + timeout, base=base)
+            dsh_wait_expect(session)
+            plans.append({'index': index, 'task': task, 'session': session, 'tree': tree,
+                          'goal': goal_id, 'mark': mark, 'text': text})
+        except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
+            results[index] = {'session': session, 'answer': '', 'error': f'{type(error).__name__}: {error}'}
+            tell(on_done, index, results[index])
+
+    threads = [threading.Thread(target=wait, args=(plan,), daemon=True) for plan in plans]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -849,6 +819,120 @@ def _merged(path: str) -> bool:
         return dsh_worktree_merged(path)
     except (DshWorktreeError, OSError, subprocess.SubprocessError):
         return False
+
+
+def _box_place(session: str, text: str, images: list = None, deadline: float = None, *,
+               base: str = DSH_API_ADDR_DEFAULT) -> tuple:
+    """Задачу — в бокс доски от имени карточки: модель, засечка журнала, `continuous_add`.
+
+    Клад — тем же инструментом `continuous_add`, каким человек кладёт промпты из
+    формы, и строго в собственном имени карточки: цель живёт на её сессии, в её
+    боксе, подписана её моделью (`dsh_board_model_of`), заход одноразовый
+    (`quotaRounds: 1`, без периода). Засечку журнала берём ДО клада: круг может
+    начаться через секунду после добавления, и ответ ищется от засечки.
+
+    Прямым промптом вместо клада — два случая, где бокс задачу не донёс бы: карточка
+    спит (инструмент хост даёт только живому агенту) и модель карточки нечем назвать
+    при нескольких моделях на доске (цель не лежала бы ни на какой цепочке).
+
+    Returns:
+        `(id цели, засечка журнала)`; id пустой — задача ушла прямым промптом.
+
+    Raises:
+        DshBoardError: клад прошёл, а цели в снимке доски не видно.
+    """
+    def left() -> float:
+        return max(0.0, deadline - time.time())
+
+    model = _patient(lambda: dsh_board_model_of(session, base=base), left())
+    mark = _patient(lambda: dsh_session_cursor(session, base=base), left())
+    if model is None:
+        _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), left(),
+                 retry=(DshApiUnavailable,))
+        return '', mark
+    args = {'text': text, 'model': model, 'everyMinutes': 0, 'quotaRounds': 1}
+    if images:
+        args['images'] = [_box_image(path) for path in images]
+    try:
+        value = _patient(lambda: dsh_board_tool(session, 'continuous_add', args, base=base), left(),
+                         retry=(DshApiUnavailable,))
+    except DshApiError as error:
+        if 'not live' not in str(error):   # карточка спит: инструмент живёт только у живого агента
+            raise
+        _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), left(),
+                 retry=(DshApiUnavailable,))
+        return '', mark
+    goal_id = _box_goal_id(value, session, text)
+    if goal_id == '':
+        raise DshBoardError(f'клад в {session} прошёл, а цели в снимке доски нет — '
+                            f'ответ потом: dsh-board answer')
+    return goal_id, mark
+
+
+def _box_goal_id(value: dict, session: str, text: str) -> str:
+    """Id цели клада из снимка доски: последняя цель этой карточки с этим текстом.
+
+    Плагин нормализует текст цели (срезает пробелы по краям), потому сверка —
+    сжатием пробелов, а не посимвольно; карточка в снимке подписана без поколения,
+    потому и здесь ключ, а не строка сессии.
+    """
+    rows = [goal for goal in value.get('goals') or []
+            if _key(goal.get('session') or '') == _key(session)
+            and ' '.join(str(goal.get('text') or '').split()) == ' '.join(text.split())]
+    return (rows[-1].get('id') or '') if rows else ''
+
+
+def _box_image(path: str) -> dict:
+    """Картинку — формой цели: `{mediaType, data, name}`; частью промпта круг её соберёт сам."""
+    part = dsh_session_image_part(path)
+    return {name: part[name] for name in ('mediaType', 'data', 'name')}
+
+
+def _box_answer(session: str, goal_id: str, mark: int, asked: str, deadline: float, *,
+                base: str = DSH_API_ADDR_DEFAULT) -> str:
+    """Дождаться ответа на задачу; полученный — убрать цель с доски.
+
+    Ждёт свой круг (`dsh_session_turn_reply`); круг, оборванный перезапуском хоста,
+    продолжает по-прежнему прямым промптом — цель тут ни при чём, очередь она не
+    ждёт, обрыв — дело живого круга. Таймаут и обрывы подряд — отказ, цель не
+    тронута: круг её живой, его ответ разберёт человек (`dsh-board answer`).
+
+    ⚠ `mark` — засечка журнала ДО клада; `goal_id` пустой — задача шла прямым
+    промптом, и снимать на доске нечего.
+
+    Raises:
+        DshBoardError: круг не кончился в срок или обрывался слишком много раз.
+    """
+    started = time.time()
+    # Пока ждём — карточка помечена: обрыв продолжаем здесь, `revive --auto` её не трогает.
+    with _waiting(session):
+        for resumed in range(DSH_BOARD_RESUME_TRIES + 1):
+            reply = dsh_session_turn_reply(session, mark, asked, max(0.0, deadline - time.time()), base=base)
+            if reply is None:
+                raise DshBoardError(f'круг в {session} не кончился за {int(time.time() - started)} с — '
+                                    f'ответ потом: dsh-board inbox')
+            if reply['reason'] != 'interrupted' or resumed == DSH_BOARD_RESUME_TRIES:
+                break
+            # Хост перезапустился посреди круга и закрыл его: промежуточная реплика — не
+            # ответ. Просим продолжить с того же места, и ждём уже конца нового круга.
+            mark, asked = reply['seq'], DSH_BOARD_RESUME_TEXT
+            _patient(lambda: dsh_session_prompt(session, asked, base=base), DSH_BOARD_STARTUP_WAIT,
+                     retry=(DshApiUnavailable,))
+    answer = reply['text']
+    if reply['reason'] == 'interrupted':
+        raise DshBoardError(f'круг в {session} обрывался {DSH_BOARD_RESUME_TRIES + 1} раза — '
+                            f'последняя реплика: {dsh_board_brief(answer)}')
+    # Ответ получен — цель отработала, закрытой в боксе не место. Ошибку снимаем молча:
+    # ответ уже в руках, а одноразовая цель закрывается и сама.
+    if goal_id:
+        with contextlib.suppress(DshApiError, OSError):
+            dsh_board_tool(session, 'continuous_drop', {'goal': goal_id}, base=base)
+    # Во «входящих» ответа больше нет, и ждать его больше некому.
+    with contextlib.suppress(DshApiError, OSError):
+        dsh_board_inbox_take(session, dsh_board_turns(dsh_session_find(session, base=base)))
+    with contextlib.suppress(OSError):
+        dsh_wait_done(session)
+    return answer
 
 
 @contextlib.contextmanager
