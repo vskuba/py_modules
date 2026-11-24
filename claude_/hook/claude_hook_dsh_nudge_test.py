@@ -65,6 +65,14 @@ READ_COMMANDS = (
     'git status --short | head -20; git log --oneline -1 MERGE_HEAD 2>&1',
     'docker ps && docker logs app --tail 50',
     'gh pr view 3524 --json mergeableState && gh run list --limit 3',
+    # живые команды разведки (сессия 16dc3e63): `|` внутри кавычек — часть шаблона grep,
+    # а не граница куска; раньше такие разбирались в `unknown` и серию не двигали вовсе
+    'cd /var/www/app; grep -rn "Missing externalId\\|IgnoreException" --include=*.php src '
+    '| grep -v "^.*use " | head -20',
+    'grep -n -i -A3 "ветк\\|branch\\|hotfix\\|fix/" docs/Cashier.md | head -60',
+    'cd ~/app; git status --short | head; ls hooks; grep -rn "dsh\\|gate" settings.json '
+    '2>/dev/null | head -30',
+    'cd /app; sed -n 55,140p processors/pay.php',
 )
 
 # Команды, которые читают не только читают: правка, сборка, выкладка, делегирование.
@@ -87,6 +95,8 @@ NOT_READ_COMMANDS = (
     'python -m dsh_.dsh_board_cli new blog "имя" --ask "что найти"',
     # одно действие внутри составной команды делает её работой, а не разведкой
     'git commit -q -m "x" && git log --oneline -3',
+    'git checkout main && grep -rn "a\\|b" .',
+    'grep -n "x\\|y" f.php && git push origin main',
     'git rebase origin/main',
     'git reset --hard HEAD~1',
     'git branch -D tmp/x',
@@ -315,6 +325,57 @@ def test_dsh_service_message_is_not_a_prompt():
              'data': {'source': {'kind': 'system'}, 'message': {'content': [{'type': 'text', 'text': 'context'}]}}}]
 
     assert claude_hook_dsh_nudge_read_series(rows)['start'] == 'p1'
+
+
+NOTIFY_TEXT = '<task-notification>\n<task-id>bn4fecdr8</task-id>\n<output-file>/tmp/x</output-file>\n</task-notification>'
+
+# Вставка о фоновой задаче: в новых сборках у неё поля происхождения, в старых — один текст.
+INJECTURES = (
+    {'type': 'user', 'uuid': 'n1', 'timestamp': 't-n1', 'promptSource': 'system',
+     'turnOrigin': 'task_notification', 'origin': {'kind': 'task-notification'},
+     'message': {'role': 'user', 'content': NOTIFY_TEXT}},
+    {'type': 'user', 'uuid': 'n1', 'timestamp': 't-n1',
+     'message': {'role': 'user', 'content': NOTIFY_TEXT}},
+)
+
+
+@pytest.mark.parametrize('inject', INJECTURES)
+def test_task_notification_does_not_restart_series(inject):
+    """`<task-notification>` посреди хода — не сообщение человека: серия читается сквозь вставку."""
+    rows = [_prompt('разберись', 'p1'), _bash('cd /app; cat a.py', 'c1'), inject,
+            _bash('cd /app; grep -rn "A\\|B" src | head -20', 'c2'), _result('u1'),
+            {'type': 'user', 'uuid': 'n2', 'timestamp': 't-n2', 'isMeta': True,
+             'message': {'role': 'user', 'content': 'Stop hook feedback:\n[hook]: жди субагентов'}},
+            _bash('cd /app; sed -n 1,20p b.py', 'c3')]
+
+    series = claude_hook_dsh_nudge_read_series(rows)
+
+    assert series['reads'] == 3
+    assert series['start'] == 'p1'
+
+
+def test_image_meta_row_is_not_a_prompt():
+    """`isMeta`-строка-спутник вставленного изображения — не человек: серию не обнуляет."""
+    rows = [_prompt('разберись', 'p1'), _tool('Read', {}, 'c1'),
+            {'type': 'user', 'uuid': 'n1', 'timestamp': 't-n1', 'isMeta': True,
+             'message': {'role': 'user', 'content': [{'type': 'text', 'text': '[Image: source: /tmp/a.png]'}]}},
+            _tool('Read', {}, 'c2')]
+
+    series = claude_hook_dsh_nudge_read_series(rows)
+
+    assert series['reads'] == 2
+    assert series['start'] == 'p1'
+
+
+def test_human_message_mid_turn_still_restarts_series():
+    """Реплика человека посреди хода — по-прежнему новый ход: с неё серия с нуля."""
+    rows = [_prompt('разберись', 'p1')] + [_tool('Read', {}, f'c{i}') for i in range(4)] + \
+        [_prompt('стоп, посмотри ещё вот что', 'p2'), _tool('Read', {}, 'c5')]
+
+    series = claude_hook_dsh_nudge_read_series(rows)
+
+    assert series['reads'] == 1
+    assert series['start'] == 'p2'
 
 
 # --- Построители транскриптов ------------------------------------------------

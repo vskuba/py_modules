@@ -21,7 +21,10 @@
 `git commit` внутри `… && git log` делает всю команду работой, а не разведкой. Первый же
 `cd X && Q() { …mysql_query… }; Q` прошёл бы мимо регулярки, ловившей **только начало
 строки**, — так и было: один `dsh-board` в ходе глушил напоминание до его конца, а
-`git fetch && ls` не считалось чтением вовсе.
+`git fetch && ls` не считалось чтением вовсе. Две грабли помолчали и здесь: `grep "A\\|B"`
+резался по `|` **внутри кавычек** — и чистое чтение переставало считаться чтением, а
+системные вставки (`<task-notification>`, фидбек стоп-хука), записанные харнесом как
+реплика человека, обнуляли серию на каждом ответе субагента.
 
     echo '{"transcript_path":"…/x.jsonl","session_id":"s"}' \\
       | python3 claude_/hook/claude_hook_dsh_nudge.py
@@ -113,8 +116,14 @@ CLAUDE_HOOK_DSH_NUDGE_MARK_WRITE_RE = re.compile(r'mysql_query\b[^\n]*--write')
 CLAUDE_HOOK_DSH_NUDGE_DELEGATE = ('dsh-board', 'dsh_board')
 # `curl` читает, пока в нём нет флага записи.
 CLAUDE_HOOK_DSH_NUDGE_CURL_WRITE_RE = re.compile(r'(?:^|\s)(?:-X\s*(?:POST|PUT|DELETE)|-d\b|--data)', re.I)
-# Куски составной команды.
-CLAUDE_HOOK_DSH_NUDGE_SPLIT_RE = re.compile(r'&&|\|\||[;|\n]')
+# Границы кусков составной команды: двойные — парами, одиночные — знаком.
+# ⚠ Ищутся только вне кавычек и `$(…)`: в `grep "a\|b"` `|` — часть шаблона, а не `||`.
+CLAUDE_HOOK_DSH_NUDGE_SPLIT_PAIRS = ('&&', '||')
+CLAUDE_HOOK_DSH_NUDGE_SPLIT_MARKS = ';|\n'
+# Системные вставки, записанные харнесом под видом реплики человека: `origin.kind`,
+# `promptSource`/`turnOrigin` с такими значениями — не человек, ход не начинался.
+CLAUDE_HOOK_DSH_NUDGE_HUMAN_MARKS = ('', 'human', 'user', 'typed')
+CLAUDE_HOOK_DSH_NUDGE_INJECT_TEXTS = ('<task-notification>', '<task-failed>', 'Stop hook feedback:')
 # Ведущие `cd <путь>` и присваивания `VAR=…` — обстановка команды, а не её действие.
 CLAUDE_HOOK_DSH_NUDGE_LEADING_RE = re.compile(
     r'^(?:cd\s+(?:"[^"]*"|\'[^\']*\'|[^\s]+)|[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\'[^\']*\'|[^\s]*))\s*')
@@ -256,8 +265,81 @@ def _command_of(call: dict) -> str:
 
 
 def _segments(command: str) -> list:
-    """Куски составной команды: `&&`, `||`, `;`, `|` и перевод строки — граница куска."""
-    return [one for one in CLAUDE_HOOK_DSH_NUDGE_SPLIT_RE.split(str(command or '')) if one.strip()]
+    """Куски составной команды: `&&`, `||`, `;`, `|` и перевод строки — граница куска.
+
+    ⚠ Разделители ищем **вне кавычек и `$(…)`**: в `grep -rn "A\\|B" src` `|` — часть
+    шаблона, и разрезанный по нему `grep` распадался на кусок, не похожий на чтение, —
+    серия разведки не набиралась вовсе (живой транскрипт 16dc3e63, ноябрь 2026).
+    """
+    text, out, buf = str(command or ''), [], []
+    quote, depth, index = '', 0, 0
+
+    while index < len(text):
+        char = text[index]
+
+        if quote:
+            buf.append(char)
+
+            if quote == '"' and char == '\\' and index + 1 < len(text):
+                buf.append(text[index + 1])
+                index += 1
+            elif char == quote:
+                quote = ''
+
+            index += 1
+            continue
+
+        if char == '\\' and index + 1 < len(text):       # экранированный знак — не разделитель
+            buf.append(char)
+            buf.append(text[index + 1])
+            index += 2
+            continue
+
+        if char in ('"', "'"):
+            quote = char
+            buf.append(char)
+            index += 1
+            continue
+
+        if depth:                                        # внутри `$(…)`: свои скобки, свои концы
+            buf.append(char)
+            depth += char == '('
+            depth -= char == ')'
+            index += 1
+            continue
+
+        if text.startswith('$(', index):
+            buf.append('$(')
+            depth = 1
+            index += 2
+            continue
+
+        if char == '`':                                  # `…` — подкоманда целиком одним куском
+            end = text.find('`', index + 1)
+            buf.append(text[index:] if end < 0 else text[index:end + 1])
+            index = len(text) if end < 0 else end + 1
+            continue
+
+        pair = text[index:index + 2]
+
+        if pair in CLAUDE_HOOK_DSH_NUDGE_SPLIT_PAIRS:
+            out.append(''.join(buf))
+            buf = []
+            index += 2
+            continue
+
+        if char in CLAUDE_HOOK_DSH_NUDGE_SPLIT_MARKS:
+            out.append(''.join(buf))
+            buf = []
+            index += 1
+            continue
+
+        buf.append(char)
+        index += 1
+
+    out.append(''.join(buf))
+
+    return [one for one in out if one.strip()]
 
 
 def _strip_leading(segment: str) -> str:
@@ -505,7 +587,7 @@ def _last_prompt_index(rows: list) -> int:
                 return index
             continue
 
-        if row.get('type') != 'user':
+        if row.get('type') != 'user' or _row_injected(row):
             continue
 
         content = (row.get('message') or {}).get('content')
@@ -518,6 +600,34 @@ def _last_prompt_index(rows: list) -> int:
             return index
 
     return -1
+
+
+def _row_injected(row: dict) -> bool:
+    """Запись записана харнесом под именем человека: реплика ли это на деле.
+
+    ⚠ Харнес пишет системные вставки как `type: user` с текстом: фидбек стоп-хука
+    (`isMeta`), уведомление о фоновой задаче (`promptSource: system`,
+    `turnOrigin: task_notification`, `origin.kind: task-notification`), строка-спутник
+    вставленного изображения. Ход с них не начинался; принять их за сообщение человека —
+    обнулять серию чтений на каждом ответе субагента (живой транскрипт 16dc3e63).
+    """
+    if row.get('isMeta'):
+        return True
+
+    origin = row.get('origin')
+
+    if isinstance(origin, dict) and str(origin.get('kind') or '').lower() not in CLAUDE_HOOK_DSH_NUDGE_HUMAN_MARKS:
+        return True
+
+    for key in ('promptSource', 'turnOrigin'):
+        got = str(row.get(key) or '').lower()
+
+        if got and got not in CLAUDE_HOOK_DSH_NUDGE_HUMAN_MARKS:
+            return True
+
+    content = (row.get('message') or {}).get('content')
+
+    return isinstance(content, str) and content.lstrip().startswith(CLAUDE_HOOK_DSH_NUDGE_INJECT_TEXTS)
 
 
 def _row_is_solo(row) -> bool:

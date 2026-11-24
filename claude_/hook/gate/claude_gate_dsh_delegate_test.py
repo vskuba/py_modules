@@ -101,6 +101,28 @@ def test_heredoc_commit_is_not_a_read(tmp_path):
     assert _check(rows, tmp_path)['block'] is False     # четвертое чтение — ниже порога
 
 
+def test_reported_session_denies_fifth_compound_read(tmp_path):
+    """Сценарий сессии 16dc3e63: серия составных `cd …; grep "a\\|b"` со вставками посреди
+    хода — пятая подряд отменена; ни `|` в кавычках, ни `<task-notification>` счёт не портили."""
+    rows = [_prompt('разберись с ошибками', 'p1'),
+            _bash('cd /var/www/app; cat -n src/A.php | head -40', 'b1'),
+            _inject('<task-notification>\n<task-id>bn4f</task-id>\n</task-notification>', 'n1'),
+            _bash('cd /var/www/app; grep -rn "Missing externalId\\|IgnoreException" '
+                  '--include=*.php src | head -20', 'b2'),
+            _bash('cd /var/www/app; sed -n 1,200p src/B.php', 'b3'),
+            _inject('Stop hook feedback:\n[gate]: жди субагентов', 'n2', meta=True),
+            _bash('cd /var/www/app; grep -n "json_encode\\|getBody" src/C.php', 'b4')]
+
+    data = {'tool_name': 'Bash', 'tool_input': {'command': 'cd /var/www/app; sed -n 55,140p processors/pay.php'},
+            'session_id': 's'}
+
+    verdict = claude_gate_dsh_delegate_check(data, rows=rows, mode=HIGH,
+                                             state_path=tmp_path / 'state.json')
+
+    assert verdict['block'] is True
+    assert verdict['reads'] == 5
+
+
 def test_silent_in_free_and_off(tmp_path):
     """Вне HIGH заставы нет: в FREE работает напоминание, в OFF субагентов не зовут."""
     rows = _rows(40)
@@ -244,3 +266,13 @@ def _bash(command: str, uuid: str) -> dict:
     return {'type': 'assistant', 'uuid': uuid, 'timestamp': f't-{uuid}',
             'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'name': 'Bash',
                                                           'input': {'command': command}}]}}
+
+
+def _inject(text: str, uuid: str, meta: bool = False) -> dict:
+    """Системная вставка посреди хода: записана харнесом как реплика человека, ходом не является."""
+    row = {'type': 'user', 'uuid': uuid, 'timestamp': f't-{uuid}',
+           'message': {'role': 'user', 'content': text}}
+
+    return dict(row, isMeta=True) if meta else dict(row, promptSource='system',
+                                                    turnOrigin='task_notification',
+                                                    origin={'kind': 'task-notification'})
