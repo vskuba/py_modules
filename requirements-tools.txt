@@ -1,0 +1,48 @@
+# Инструменты агента: всё, что модули слоя импортируют сверх ядра, — кроме тяжёлого
+# ML-стека (torch, diffusers, insightface: он в requirements-vision.txt и ставится отдельно).
+# Нужен venv, из которого их зовут: `bin/cai` проектов, хуки, dsh-board.
+# Пересоздать venv слоя целиком:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements-tools.txt
+-r requirements-doc.txt
+
+# HTTP и API: opensearch_, circleci_, jira_, confluence_, slack_, web_
+httpx>=0.28
+requests>=2.32
+beautifulsoup4>=4.13
+
+# конфиг: config/ грузит .env и .env.local проекта
+python-dotenv>=1.0
+
+# базы: mysql_ (mysql_query, mysql_rehearse), миграции, разбор SQL
+PyMySQL>=1.1
+aiomysql>=0.2
+yoyo-migrations>=9.0
+sqlparse>=0.5
+redis>=5.0
+rq>=2.0
+qdrant-client>=1.12
+
+# LLM-агенты и сервисы: ai_, mcp, fastapi-обвязки
+pydantic>=2.10
+pydantic-ai>=1.80
+mcp>=1.0
+fastapi>=0.115
+starlette>=0.40
+uvicorn>=0.30
+websockets>=14
+python-json-logger>=3.0
+
+# браузер и картинки: web_drive_page, browser_login_shots, adb_
+playwright>=1.49
+opencv-python-headless>=4.10
+
+# прочее: telegram_, переводы, речь, процессы, хэши паролей, yaml
+Telethon>=1.38
+deep-translator>=1.11
+SpeechRecognition>=3.10
+psutil>=6.0
+bcrypt>=4.2
+PyYAML>=6.0
+
+# тесты слоя и проектов
+pytest>=8.3
