@@ -223,6 +223,29 @@ def test_ask_via_box_keeps_goal_when_answer_not_awaited(sandbox, monkeypatch):
     assert not [e for e in events if e[0] == 'tool' and e[2] == 'continuous_drop']
 
 
+def test_ask_without_wait_goes_to_box_not_direct_prompt(sandbox, monkeypatch):
+    """`ask` без `--wait` — тоже клад в бокс: прямой промпт встал бы мотором «руками»
+    сверх числа моторов (24.11 — пятый мотор при четырёх)."""
+    events = _box(monkeypatch, sandbox, {})
+    assert dsh_board.dsh_board_ask('card-1', 'разведка', wait=False, timeout=5) == ''
+    adds = [e for e in events if e[0] == 'tool' and e[2] == 'continuous_add']
+    assert len(adds) == 1 and adds[0][3]['text'] == 'разведка'
+    assert not sandbox.calls                                    # прямого промпта нет
+    assert not [e for e in events if e[0] == 'wait']            # ответа не ждём
+
+
+def test_box_clear_drops_only_done_goals_of_card(sandbox, monkeypatch):
+    """Уборка после `dsh-board wait`: снимаются закрытые цели этой карточки, и только они."""
+    goals = [{'id': 'g1', 'session': 'card-1', 'status': 'done'},
+             {'id': 'g2', 'session': 'card-1-g2', 'status': 'done'},
+             {'id': 'g3', 'session': 'card-1', 'status': 'active'},
+             {'id': 'g4', 'session': 'card-2', 'status': 'done'}]
+    monkeypatch.setattr(dsh_board, 'dsh_api_get', lambda route, **_kw: {'goals': goals})
+    assert dsh_board.dsh_board_box_clear('card-1') == ['g1', 'g2']
+    drops = [body['args'] for route, body in sandbox.posts if route == 'continuous-agent.tool']
+    assert drops == [{'goal': 'g1'}, {'goal': 'g2'}]
+
+
 def test_ask_box_resumes_interrupted_round_with_direct_prompt(sandbox, monkeypatch):
     """Оборванный круг продолжается прямым промптом — как раньше; цель — снята после ответа."""
     events = _box(monkeypatch, sandbox, {})

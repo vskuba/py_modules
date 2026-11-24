@@ -113,7 +113,7 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, *,
         `[{session, title, out, brief}]` — забранные ответы; пусто — ждать было нечего
         или вышел срок (тогда метки остаются).
     """
-    from dsh_.dsh_board import dsh_board_brief, dsh_board_inbox_take  # ленивый: цикл импорта
+    from dsh_.dsh_board import dsh_board_box_clear, dsh_board_brief, dsh_board_inbox_take  # ленивый: цикл импорта
     from dsh_.dsh_session import dsh_session_answer_last
     os.makedirs(out_dir, exist_ok=True)
     with open(_waiter_path(owner), 'w', encoding='utf-8') as handle:
@@ -128,6 +128,7 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, *,
                 with open(path, 'w', encoding='utf-8', errors='replace') as out:
                     out.write(answer)
                 dsh_board_inbox_take(session, row['turns'])
+                dsh_board_box_clear(session, base=base)
                 dsh_wait_done(session)
                 taken.append({'session': session, 'title': row['title'], 'out': path,
                               'brief': dsh_board_brief(answer)})

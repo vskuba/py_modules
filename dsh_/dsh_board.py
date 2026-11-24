@@ -328,9 +328,9 @@ def dsh_board_worktree_forget(session: str) -> None:
 def dsh_board_ask(session: str, text: str, wait: bool = False,
                   timeout: float = DSH_BOARD_WAIT_TIMEOUT, images: list = None, *,
                   base: str = DSH_API_ADDR_DEFAULT) -> str:
-    """Задача субагенту: с `wait` — через бокс доски, без него — промптом в карточку.
+    """Задача субагенту — всегда через бокс доски; `wait` решает только, ждать ли ответа.
 
-    С `wait` задача кладётся в бокс доски тем же `continuous_add`, каким человек кладёт
+    Задача кладётся в бокс доски тем же `continuous_add`, каким человек кладёт
     промпты из формы, — от имени самой карточки (`quotaRounds: 1`, без периода). Пока
     она в боксе — она видна на доске целью: её можно переставить, снять, поставить на
     её место другую; первый свободный мотор цепочки достаётся ранней по порядку бокса.
@@ -341,8 +341,10 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     хоста (`interrupted`), продолжается по-прежнему прямым промптом — до
     `DSH_BOARD_RESUME_TRIES` раз.
 
-    Без `wait` — как раньше, промпт в карточку: снять цель после ответа некому, а
-    мёртвый груз в боксе не нужен; ответ потом — `dsh_session_answer_last`.
+    Без `wait` — тот же клад, ответ забирает `dsh-board wait` (метка `dsh_wait_expect`),
+    он же снимает отработавшую цель (`dsh_board_box_clear`). ⚠ Прямым промптом мимо
+    бокса без `wait` было нельзя: такой круг занимает мотор «работой руками» сверх
+    числа моторов — 24.11 так встал пятый мотор при четырёх.
 
     Args:
         wait: ждать конца круга и вернуть ответ; без него промпт встаёт в очередь
@@ -361,17 +363,33 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
     """
     deadline = time.time() + timeout
     dsh_saving_sent(session, text)
+    goal_id, mark = _box_place(session, text, images=images, deadline=deadline, base=base)
     if not wait:
-        # Промпт повторяем только на «служба ещё не поднялась» — тогда он точно не ушёл.
-        _patient(lambda: dsh_session_prompt(session, text, images=images, base=base), timeout,
-                 retry=(DshApiUnavailable,))
         dsh_wait_expect(session)
         return ''
-    goal_id, mark = _box_place(session, text, images=images, deadline=deadline, base=base)
     # Ответ этой карточки ждёт сессия Claude, отдавшая задачу: без метки ответ, не
     # дождавшийся здесь, ушёл бы в никуда (dsh_wait).
     dsh_wait_expect(session)
     return _box_answer(session, goal_id, mark, text, deadline, base=base)
+
+
+def dsh_board_box_clear(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Снять с доски отработавшие (`done`) цели карточки — ответ на них уже забран.
+
+    Задачу без ожидания кладут в бокс, а ответ забирает другой процесс (`dsh-board
+    wait`); он и зовёт уборку. Закрытая одноразовая цель в очередь не встаёт, но
+    копится списком — потому снимаем. Сбой молчит: ответ уже в руках.
+
+    Returns:
+        id снятых целей.
+    """
+    dropped = []
+    with contextlib.suppress(DshApiError, OSError):
+        for goal in dsh_board_state(session, base=base).get('goals') or []:
+            if _key(goal.get('session') or '') == _key(session) and goal.get('status') == 'done':
+                dsh_board_tool(session, 'continuous_drop', {'goal': goal['id']}, base=base)
+                dropped.append(goal['id'])
+    return dropped
 
 
 def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
