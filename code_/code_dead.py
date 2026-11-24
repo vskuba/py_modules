@@ -1,9 +1,9 @@
 """
 Имена, которые определены, но никто их не читает: мёртвый код списком.
 
-    PYTHONPATH=py_modules python -m tool_.tool_dead src
-    PYTHONPATH=py_modules python -m tool_.tool_dead . --private   # только приватные
-    PYTHONPATH=py_modules python -m tool_.tool_dead src --keys    # ключи словарей
+    PYTHONPATH=py_modules python -m code_.code_dead src
+    PYTHONPATH=py_modules python -m code_.code_dead . --private   # только приватные
+    PYTHONPATH=py_modules python -m code_.code_dead src --keys    # ключи словарей
 
 Мёртвый код не мешает работать — он мешает читать. Функция с докстрингом, обещающим
 «одно написание имени на три места», выглядит частью устройства, и следующий читатель
@@ -24,7 +24,7 @@
 
 Поэтому вопрос ставится иначе: **встречается ли имя где-нибудь, кроме своего
 определения**. Ответ по всем слоям — код, разметка, тесты, доки, — как у
-`tool_impact`.
+`code_impact`.
 
 ## ⚠⚠ Комментарии и докстринги вычёркиваются
 
@@ -37,7 +37,7 @@
 
 Обработчик `@router.get`, фикстура, тест, `main`, `__init__` зовутся **не по имени**:
 их берёт FastAPI, pytest, оболочка. В живом проекте таких обработчиков 176 — не
-исключи их, и отчёт станет бесполезным с первой строки (`TOOL_DEAD_ALIVE`).
+исключи их, и отчёт станет бесполезным с первой строки (`CODE_DEAD_ALIVE`).
 
 ## ⚠⚠ В общем слое публичные имена судить нельзя
 
@@ -87,21 +87,21 @@ if __package__ in (None, ''):
 
 from file_.file_walk import file_walk
 from tests_.tests_guard import tests_guard_code, tests_guard_text
-from tool_.tool_impact import TOOL_IMPACT_SUFFIXES
+from code_.code_impact import CODE_IMPACT_SUFFIXES
 
-# Слои ответа — те же, что у `tool_impact`: отчёты двух инструментов про одно и то же
+# Слои ответа — те же, что у `code_impact`: отчёты двух инструментов про одно и то же
 # имя должны читаться одинаково.
-TOOL_DEAD_TESTS = 'тесты'
-TOOL_DEAD_DOC = 'док'
+CODE_DEAD_TESTS = 'тесты'
+CODE_DEAD_DOC = 'док'
 
 # Вердикты. ⚠ Про удаление говорит только первый; остальные — про расхождение.
-TOOL_DEAD_GONE = 'мёртвое'
-TOOL_DEAD_TESTS_ONLY = 'только тесты'
-TOOL_DEAD_DOC_ONLY = 'только док'
+CODE_DEAD_GONE = 'мёртвое'
+CODE_DEAD_TESTS_ONLY = 'только тесты'
+CODE_DEAD_DOC_ONLY = 'только док'
 
 # Имена, которые каркас зовёт сам. ⚠⚠ Без этого списка отчёт начинается со 176
 # обработчиков FastAPI — см. ⚠⚠ в докстринге модуля.
-TOOL_DEAD_ALIVE = ('main', 'lifespan')
+CODE_DEAD_ALIVE = ('main', 'lifespan')
 
 # Приметы входной точки в декораторах: маршрут, фикстура, свойство, переходник.
 #
@@ -109,25 +109,25 @@ TOOL_DEAD_ALIVE = ('main', 'lifespan')
 # `ast.dump`. В дампе `@router.get('/x')` выглядит как `Attribute(value=Name(id=
 # 'router'…), attr='get'…)` — подстроки `router.` там нет вовсе, и первая версия не
 # отсеивала ни одного обработчика, хотя список примет был верный.
-TOOL_DEAD_ALIVE_MARKS = ('router.', 'app.', 'fixture', 'property', 'setter',
+CODE_DEAD_ALIVE_MARKS = ('router.', 'app.', 'fixture', 'property', 'setter',
                          'staticmethod', 'classmethod', 'overload', 'hookimpl',
                          'celery', 'task', 'cron', 'listener', 'command')
 
 # Начала имён, которые каркас зовёт сам.
-TOOL_DEAD_ALIVE_STARTS = ('test_', '__')
+CODE_DEAD_ALIVE_STARTS = ('test_', '__')
 
 # Ветки, которые в обход не берутся: чужой код и черновики.
 #
 # ⚠⚠ Сверяется путь **от корня обхода**, а не абсолютный. С абсолютным инструмент
 # отсеивал всё дерево целиком, стоило проекту лежать под каталогом с таким именем, —
 # и делал это молча, отвечая «мёртвых имён не нашлось».
-TOOL_DEAD_SKIP = ('py_modules/', 'scratchpad/', 'node_modules/')
+CODE_DEAD_SKIP = ('py_modules/', 'scratchpad/', 'node_modules/')
 
 # Слово целиком: `photo` не должно стрелять внутри `photo_batch`.
-TOOL_DEAD_WORD = re.compile(r'\w+')
+CODE_DEAD_WORD = re.compile(r'\w+')
 
 
-def tool_dead(root='.', private_only=False, search=None, keys=False) -> list[dict]:
+def code_dead(root='.', private_only=False, search=None, keys=False) -> list[dict]:
     """Определённые имена (или ключи словарей), которых никто не читает.
 
     Args:
@@ -141,7 +141,7 @@ def tool_dead(root='.', private_only=False, search=None, keys=False) -> list[dic
 
     Returns:
         list[dict]: записи `{name, kind, file, line, verdict, seen}` — имя, что это
-        (`func`, `class`, `const`, `key`), где определено, вердикт из трёх (`TOOL_DEAD_GONE`
+        (`func`, `class`, `const`, `key`), где определено, вердикт из трёх (`CODE_DEAD_GONE`
         и два «только…») и слои, где имя всё же встретилось. Пусто — мёртвого нет.
 
     ⚠⚠ Два круга разные, и это главное в устройстве: судим подкаталог, а ищем по
@@ -163,7 +163,7 @@ def tool_dead(root='.', private_only=False, search=None, keys=False) -> list[dic
 
     judged = [one for one in file_walk(base, ('.py',))
               if not _skipped(one, base, keep)]
-    files = [one for one in file_walk(whole, TOOL_IMPACT_SUFFIXES)
+    files = [one for one in file_walk(whole, CODE_IMPACT_SUFFIXES)
              if not _skipped(one, whole, keep)]
 
     defined = {}
@@ -197,7 +197,7 @@ def tool_dead(root='.', private_only=False, search=None, keys=False) -> list[dic
     return sorted(out, key=lambda one: (one['file'], one['line']))
 
 
-def tool_dead_format(found, root='.') -> str:
+def code_dead_format(found, root='.') -> str:
     """Отчёт словами. Пусто — мёртвых имён не нашлось."""
     if not found:
         return 'Мёртвых имён не нашлось.'
@@ -234,17 +234,17 @@ def main() -> int:
     ap.add_argument('--keys', action='store_true',
                     help='судить ключи словарей и именованные аргументы')
     ap.add_argument('--only', default='',
-                    help=f'один вердикт: {TOOL_DEAD_GONE}, {TOOL_DEAD_TESTS_ONLY}, '
-                         f'{TOOL_DEAD_DOC_ONLY}')
+                    help=f'один вердикт: {CODE_DEAD_GONE}, {CODE_DEAD_TESTS_ONLY}, '
+                         f'{CODE_DEAD_DOC_ONLY}')
     ns = ap.parse_args()
 
-    found = tool_dead(ns.root, private_only=ns.private, keys=ns.keys)
+    found = code_dead(ns.root, private_only=ns.private, keys=ns.keys)
     if ns.only:
         found = [one for one in found if one['verdict'] == ns.only]
 
-    print(tool_dead_format(found, ns.root))
+    print(code_dead_format(found, ns.root))
 
-    return sum(1 for one in found if one['verdict'] == TOOL_DEAD_GONE)
+    return sum(1 for one in found if one['verdict'] == CODE_DEAD_GONE)
 
 
 def _defs(path: Path) -> list[dict]:
@@ -309,9 +309,9 @@ def _key_defs(path: Path) -> list[dict]:
 
 def _alive(node) -> bool:
     """Зовёт ли это имя каркас, а не код: маршрут, тест, фикстура, `main`."""
-    if node.name in TOOL_DEAD_ALIVE:
+    if node.name in CODE_DEAD_ALIVE:
         return True
-    if node.name.startswith(TOOL_DEAD_ALIVE_STARTS):
+    if node.name.startswith(CODE_DEAD_ALIVE_STARTS):
         return True
 
     for one in getattr(node, 'decorator_list', ()):
@@ -320,7 +320,7 @@ def _alive(node) -> bool:
         except (AttributeError, ValueError):      # ⚠ на всякий случай: см. ⚠⚠ выше
             text = ast.dump(one)
 
-        if any(mark in text for mark in TOOL_DEAD_ALIVE_MARKS):
+        if any(mark in text for mark in CODE_DEAD_ALIVE_MARKS):
             return True
 
     return False
@@ -352,7 +352,7 @@ def _seen(files, names) -> dict:
             continue
 
         layer = _layer(str(one))
-        for word in TOOL_DEAD_WORD.findall(text):
+        for word in CODE_DEAD_WORD.findall(text):
             if word in names:
                 out.setdefault(word, {})
                 out[word][layer] = out[word].get(layer, 0) + 1
@@ -385,13 +385,13 @@ def _stripped(path: Path) -> str:
 
 
 def _layer(where: str) -> str:
-    """Слой файла: тесты, док или код. ⚠ Те же слои, что у `tool_impact`."""
+    """Слой файла: тесты, док или код. ⚠ Те же слои, что у `code_impact`."""
     said = _slash(where)
 
     if '/tests/' in said or said.split('/')[-1].startswith('test_'):
-        return TOOL_DEAD_TESTS
+        return CODE_DEAD_TESTS
     if said.endswith(('.md', '.txt')):
-        return TOOL_DEAD_DOC
+        return CODE_DEAD_DOC
 
     return 'код'
 
@@ -399,11 +399,11 @@ def _layer(where: str) -> str:
 def _verdict(where) -> str:
     """Вердикт по слоям, где имя встретилось. Пусто — имя живое."""
     if not where:
-        return TOOL_DEAD_GONE
-    if where == {TOOL_DEAD_TESTS}:
-        return TOOL_DEAD_TESTS_ONLY
-    if where == {TOOL_DEAD_DOC}:
-        return TOOL_DEAD_DOC_ONLY
+        return CODE_DEAD_GONE
+    if where == {CODE_DEAD_TESTS}:
+        return CODE_DEAD_TESTS_ONLY
+    if where == {CODE_DEAD_DOC}:
+        return CODE_DEAD_DOC_ONLY
 
     return ''
 
@@ -414,7 +414,7 @@ def _skipped(path, base: Path, keep: tuple = ()) -> bool:
     said = _slash(_short(base, path))
 
     return any(bad.strip('/') in said.split('/')
-               for bad in TOOL_DEAD_SKIP if bad not in keep)
+               for bad in CODE_DEAD_SKIP if bad not in keep)
 
 
 def _repo_of(path: Path) -> Path:

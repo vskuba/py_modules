@@ -115,7 +115,7 @@ TOOL_INSTEAD_MARKS = (
     (r'subprocess[^\n]*pytest|\bpytest\b\s+-n\s',
      ('tests_/',), 'сюита прогон сторож'),
     (r'ast\.parse|ast\.walk',
-     ('function_/', 'tool_/', 'variable_/'), 'нарушения порядка файле дереве'),
+     ('function_/', 'tool_/', 'code_/', 'variable_/'), 'нарушения порядка файле дереве'),
     (r'cyrillic|def\s+\w*[а-яё]|^\s*[а-яё]\w*\s*=\s*[^=]',
      ('variable_/', 'tool_/'), 'кириллические имена коде'),
     # ⚠ `json.loads` вообще — не примета: им читают настройки, тела запросов, что

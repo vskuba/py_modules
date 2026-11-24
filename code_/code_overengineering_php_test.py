@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from tool_.tool_overengineering_php import _fixed_param, _passthrough, _single_impl, tool_overengineering_php
+from code_.code_overengineering_php import _fixed_param, _passthrough, _single_impl, code_overengineering_php
 
-# vendor с nikic/php-parser — из TOOL_OVERENGINEERING_PHP_VENDOR; без него php-прогон пропускается
-VENDOR = Path(os.environ.get('TOOL_OVERENGINEERING_PHP_VENDOR', ''))
+# vendor с nikic/php-parser — из CODE_OVERENGINEERING_PHP_VENDOR; без него php-прогон пропускается
+VENDOR = Path(os.environ.get('CODE_OVERENGINEERING_PHP_VENDOR', ''))
 
 
 def test_passthrough_skips_doors_factories_routes_and_protocol():
@@ -55,19 +55,19 @@ def test_single_impl_counts_file_class_pairs_and_transitive(tmp_path):
     assert [one['name'] for one in judge('LonelyInterface', 'interface')] == ['LonelyInterface']
 
 
-@pytest.mark.skipif(not shutil.which('php') or not os.environ.get('TOOL_OVERENGINEERING_PHP_VENDOR')
+@pytest.mark.skipif(not shutil.which('php') or not os.environ.get('CODE_OVERENGINEERING_PHP_VENDOR')
                     or not (VENDOR / 'nikic').is_dir(),
-                    reason='нужны php и vendor с nikic/php-parser (TOOL_OVERENGINEERING_PHP_VENDOR)')
+                    reason='нужны php и vendor с nikic/php-parser (CODE_OVERENGINEERING_PHP_VENDOR)')
 def test_end_to_end_through_php(tmp_path, monkeypatch):
     """Настоящий разбор: обёртка над чужим методом находится, PHP 8-синтаксис не мешает."""
-    monkeypatch.setenv('TOOL_OVERENGINEERING_PHP_VENDOR', str(VENDOR))
+    monkeypatch.setenv('CODE_OVERENGINEERING_PHP_VENDOR', str(VENDOR))
     src = tmp_path / 'Manager.php'
     src.write_text('<?php\nfinal class Manager {\n'
                    '    public function __construct(private readonly Api $api) {}\n'
                    '    public function wallet(string $id): array { return $this->api->walletCreate($id); }\n'
                    '}\n')
 
-    found, skipped = tool_overengineering_php([src], tmp_path)
+    found, skipped = code_overengineering_php([src], tmp_path)
     assert skipped == ''
     assert [(one['kind'], one['name']) for one in found] == [('passthrough', 'Manager::wallet')]
 

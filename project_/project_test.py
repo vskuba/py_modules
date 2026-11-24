@@ -73,7 +73,7 @@ def project_test_scope(modules: tuple = (), root: str = '',
         (пути от корня) и метки этих файлов. Пусто — под правку тестов нет.
 
     ⚠ Тест считается затронутым по слову имени в файле — тот же текстовый круг,
-    что у `tool_dead`: подмена строкой (`monkeypatch.setattr`) здесь живой тест,
+    что у `code_dead`: подмена строкой (`monkeypatch.setattr`) здесь живой тест,
     а не шум; решения о запуске `llm`/`llm_live` остаются за человеком.
     """
     base = Path(root or project_root()).resolve()

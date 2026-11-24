@@ -1,8 +1,8 @@
 """
 Импорты, которые никто в файле не читает: мёртвые провода списком.
 
-    PYTHONPATH=py_modules python -m tool_.tool_import src
-    PYTHONPATH=py_modules python -m tool_.tool_import . ; echo $?   # сторож
+    PYTHONPATH=py_modules python -m code_.code_import src
+    PYTHONPATH=py_modules python -m code_.code_import . ; echo $?   # сторож
 
 Мёртвый импорт — не просто мусор: он обещает зависимость, которой файл не
 имеет. Читатель (и следующий агент) решает по первой строке, чем живёт модуль,
@@ -10,7 +10,7 @@
 отчёта. Линтеров в рабочих образах нет и не предвидится, а ручная AST-простыня
 на каждый случай не пишется — отсюда модуль.
 
-`tool_dead` судит **имена-определения** по всему репозиторию: у импорта другая
+`code_dead` судит **имена-определения** по всему репозиторию: у импорта другая
 природа — он не определение, а обещание, и проверяется **внутри своего
 файла**: прочитано ли имя хоть раз. Две дороги не сливают: у вердиктов разные
 основания и разная цена ложного срабатывания.
@@ -42,14 +42,14 @@ from file_.file_walk import FILE_WALK_SKIP, file_walk
 # слоя (его судят в нём самом, а не из каждого проекта).
 # ⚠ Имена веток, а не пути: `file_walk` режет по имени каталога на любом
 # уровне; переданный `skip` заменяет собой молчавший по умолчанию список.
-TOOL_IMPORT_SKIP = FILE_WALK_SKIP + ('scratchpad', 'py_modules')
+CODE_IMPORT_SKIP = FILE_WALK_SKIP + ('scratchpad', 'py_modules')
 
 # `__init__.py` не судится вовсе: его импорт по идиому и есть реэкспорт,
 # читать его будет другой файл пакета.
-TOOL_IMPORT_PACKAGE_FILE = '__init__.py'
+CODE_IMPORT_PACKAGE_FILE = '__init__.py'
 
 
-def tool_import(root='.') -> list:
+def code_import(root='.') -> list:
     """Импорты, чьё имя не прочитано в том же файле.
 
     Args:
@@ -65,14 +65,14 @@ def tool_import(root='.') -> list:
     сюиты), а не этот список.
     """
     found = []
-    for path in file_walk(root, ('.py',), skip=TOOL_IMPORT_SKIP):
-        if path.name == TOOL_IMPORT_PACKAGE_FILE:
+    for path in file_walk(root, ('.py',), skip=CODE_IMPORT_SKIP):
+        if path.name == CODE_IMPORT_PACKAGE_FILE:
             continue
         found += _file_imports(path)
     return sorted(found, key=lambda one: (str(one['file']), one['line']))
 
 
-def tool_import_format(found: list) -> str:
+def code_import_format(found: list) -> str:
     """Отчёт словами. Пусто — мёртвых импортов не нашлось."""
     if not found:
         return 'Мёртвых импортов не нашлось.'
@@ -93,7 +93,7 @@ def _file_imports(path: Path) -> list:
     """Импорты файла без тех, чьё имя читается в том же файле.
 
     ⚠ Файл с синтаксической ошибкой пропускается молча — тот же порядок,
-    что у `tool_dead`: инструмент вспомогательный и падать из-за чужой
+    что у `code_dead`: инструмент вспомогательный и падать из-за чужой
     недописанной правки не должен.
     """
     try:
@@ -160,8 +160,8 @@ def main() -> int:
         description='Импорты, которые никто в файле не читает.')
     ap.add_argument('root', nargs='?', default='.', help='файл или корень')
     ns = ap.parse_args()
-    found = tool_import(ns.root)
-    print(tool_import_format(found))
+    found = code_import(ns.root)
+    print(code_import_format(found))
     return len(found)
 
 

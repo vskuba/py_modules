@@ -27,7 +27,7 @@
 | `migrations`   | `mysql_migration_check_check` | `ALTER` раньше `CREATE`, подкаталоги вне глаз `yoyo` |
 | `collate`      | `mysql_collate_risks` | разные сличения у прода и локально — падение на проде |
 | `pages`        | `page_wire_check` | шаблон, которого нет, и страница вне навигации |
-| `dead`         | `tool_dead`       | имя, которое правка оставила без зовущих |
+| `dead`         | `code_dead`       | имя, которое правка оставила без зовущих |
 | `instead`      | `tool_instead`    | своё поверх готового в общем слое |
 | `keys`         | разбор dict-реестров | ключ исчез из реестра — выставленное значение на проде молча откатится к умолчанию |
 
@@ -74,7 +74,7 @@ from js_.js_check import js_check
 from mysql_.migration.mysql_migration_check import mysql_migration_check_check
 from mysql_.mysql_collate import mysql_collate_risks
 from page_.page_wire import page_wire_check
-from tool_.tool_dead import TOOL_DEAD_GONE, tool_dead
+from code_.code_dead import CODE_DEAD_GONE, code_dead
 from tool_.tool_instead import tool_instead
 from tool_.tool_typo import tool_typo_cyrillic
 from variable_.variable_cyrillic import variable_cyrillic
@@ -436,11 +436,11 @@ def _check_dead(base: Path, going) -> list[dict]:
     файле `A`, мёртвой делаешь функцию в файле `B`, которого правка не касалась, —
     а это и есть самый частый способ завести мёртвый код.
 
-    ⚠ `взгляд`, а не `стоп`: `tool_dead` отдаёт кандидатов (имя может приезжать из
+    ⚠ `взгляд`, а не `стоп`: `code_dead` отдаёт кандидатов (имя может приезжать из
     базы или из workflow соседа), и держать выкладку догадкой нельзя.
 
     ⚠ По всему проекту не показываем никогда: на живом дереве это 159 находок
-    накопленного долга. Разовый обход — `python -m tool_.tool_dead src`.
+    накопленного долга. Разовый обход — `python -m code_.code_dead src`.
     """
     src = base / DEPLOY_PRECHECK_SRC
     if not src.exists():
@@ -453,8 +453,8 @@ def _check_dead(base: Path, going) -> list[dict]:
         return [_note('dead', 'уезжающего не видно — пропущено')]
 
     out = []
-    for one in tool_dead(str(src)):
-        if one['verdict'] != TOOL_DEAD_GONE:
+    for one in code_dead(str(src)):
+        if one['verdict'] != CODE_DEAD_GONE:
             continue
 
         if _short(base, one['file']) in files:

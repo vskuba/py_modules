@@ -16,7 +16,7 @@ import sys
 
 from pathlib import Path
 
-# Файл запускают и путём (`python3 py_modules/tool_/tool_impact.py`). Тогда первым в путях
+# Файл запускают и путём (`python3 py_modules/code_/code_impact.py`). Тогда первым в путях
 # лежит каталог файла, и соседний namespace (`file_`) не находится вовсе.
 if __package__ in (None, ''):
     _here = str(Path(__file__).resolve().parent)
@@ -26,7 +26,7 @@ if __package__ in (None, ''):
 from file_.file_walk import file_walk
 
 # Порядок слоёв = порядок правки: сначала код, за ним разметка, тесты, доки.
-TOOL_IMPACT_ORDER = ('код', 'разметка', 'тесты', 'док')
+CODE_IMPACT_ORDER = ('код', 'разметка', 'тесты', 'док')
 # Слои, в которых имя живёт строкой: питон, фронтенд, схема базы, доки, оболочка.
 # Миграция и `.sql` здесь не для полноты: имя колонки правят тем же
 # изменением, что и код, который её читает, — а `grep` по `*.py` его не видит.
@@ -34,13 +34,13 @@ TOOL_IMPACT_ORDER = ('код', 'разметка', 'тесты', 'док')
 # ⚠⚠ `.sh` — по той же причине и найдено тем же способом: в `deploy.sh` этих проектов
 # **встроен python**, который импортирует имена (`from src.worker… import
 # chat_worker_flight_busy`). Без этого расширения обход не видел зовущего вовсе, и
-# `tool_dead` уверенно назвал рабочую функцию мёртвой.
-TOOL_IMPACT_SUFFIXES = ('.py', '.js', '.mjs', '.ts', '.tsx', '.vue',
+# `code_dead` уверенно назвал рабочую функцию мёртвой.
+CODE_IMPACT_SUFFIXES = ('.py', '.js', '.mjs', '.ts', '.tsx', '.vue',
                         '.html', '.css', '.md', '.sql', '.json', '.yml',
                         '.yaml', '.toml', '.sh')
 
 
-def tool_impact(name: str, root='.') -> list[dict]:
+def code_impact(name: str, root='.') -> list[dict]:
     """Все места, где встречается имя: код, разметка, тесты, доки — сгруппированно.
 
     Ищет целое слово (границы слов): `photo_batch` не выстрелит внутри чего-то
@@ -58,7 +58,7 @@ def tool_impact(name: str, root='.') -> list[dict]:
     word = re.compile(rf'(?<!\w){re.escape(name)}(?!\w)')
     base = Path(root)
     hits = []
-    for path in file_walk(base, TOOL_IMPACT_SUFFIXES):
+    for path in file_walk(base, CODE_IMPACT_SUFFIXES):
         try:
             text = path.read_text(encoding='utf-8')
         except (UnicodeDecodeError, OSError):
@@ -68,15 +68,15 @@ def tool_impact(name: str, root='.') -> list[dict]:
             if word.search(line):
                 hits.append({'file': where, 'layer': _layer(where),
                              'line': number, 'text': line.strip()[:160]})
-    hits.sort(key=lambda h: (TOOL_IMPACT_ORDER.index(h['layer']),
+    hits.sort(key=lambda h: (CODE_IMPACT_ORDER.index(h['layer']),
                              h['file'], h['line']))
     return hits
 
 
-def tool_impact_functions(name: str, root='.') -> list[dict]:
+def code_impact_functions(name: str, root='.') -> list[dict]:
     """В каких **функциях** упомянуто имя: `{file, func, line}`.
 
-    Тот же вопрос, что у `tool_impact`, но мельче: не «в какой строке», а «внутри
+    Тот же вопрос, что у `code_impact`, но мельче: не «в какой строке», а «внутри
     какой функции». Нужно там, где строка сама по себе ответа не даёт — например,
     чтобы отличить живого читателя настройки от читателя, который сам мёртв.
 
@@ -151,10 +151,10 @@ if __name__ == '__main__':
                     'тесты, доки.')
     ap.add_argument('name', help='имя модуля, функции или ключа')
     ap.add_argument('--root', default='.', help='откуда искать')
-    ap.add_argument('--layer', default='', choices=('',) + TOOL_IMPACT_ORDER,
+    ap.add_argument('--layer', default='', choices=('',) + CODE_IMPACT_ORDER,
                     help='только слой')
     ns = ap.parse_args()
-    found = [h for h in tool_impact(ns.name, ns.root)
+    found = [h for h in code_impact(ns.name, ns.root)
              if not ns.layer or h['layer'] == ns.layer]
     last = ''
     for h in found:

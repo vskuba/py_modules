@@ -1,10 +1,10 @@
 """
-Приметы overengineering в PHP — те же, что у `tool_overengineering`, по разбору nikic/php-parser.
+Приметы overengineering в PHP — те же, что у `code_overengineering`, по разбору nikic/php-parser.
 
-    PYTHONPATH=py_modules python -m tool_.tool_overengineering src processors   # .php берутся сами
+    PYTHONPATH=py_modules python -m code_.code_overengineering src processors   # .php берутся сами
 
 Факты (классы, методы, параметры, тела-обёртки, вызовы своих методов) достаёт
-`tool_overengineering_php_dump.php` одним запуском хостового `php` на все файлы;
+`code_overengineering_php_dump.php` одним запуском хостового `php` на все файлы;
 правила судит Python — одним словарём с питоньей половиной, чтобы приметы не
 разъехались по двум языкам.
 
@@ -14,7 +14,7 @@
 | `fixed_param` | у **private**-метода параметр с умолчанием, а вызовы `$this->`/`self::`/`static::` его не меняют или всегда передают один литерал |
 | `single_impl` | interface / abstract class с ≤1 реализацией под корнем |
 
-⚠⚠ Не находка (шум первого прогона по cashier-payment-gateway, 226 → см. `docs/tool_overengineering.md`):
+⚠⚠ Не находка (шум первого прогона по cashier-payment-gateway, 226 → см. `docs/code_overengineering.md`):
 методы протоколов SPL (`current`, `offsetGet`, … — делегирование требует интерфейс),
 фабричные методы `createX(): new X(...)` — точка подмены в наследнике, и входы каркаса
 (PHP-атрибуты, `@Rest\\Route`/`@Route` в докблоке) — их зовут не по имени.
@@ -25,7 +25,7 @@
 
 ⚠⚠ Парсер берётся из **vendor проекта** (`nikic/php-parser` ставит psalm/phpunit), а не
 из composer-автозагрузчика: проектный autoload проверяет платформу и падает на хостовом
-PHP другой версии. Нет парсера или `php` — PHP молча пропускается (`tool_overengineering`
+PHP другой версии. Нет парсера или `php` — PHP молча пропускается (`code_overengineering`
 говорит об этом в отчёте).
 
 ⚠ Интерфейс с одной реализацией в Symfony часто держат ради подмены в тестах
@@ -39,16 +39,16 @@ import shutil
 import subprocess
 from pathlib import Path
 
-TOOL_OVERENGINEERING_PHP_DUMP = Path(__file__).with_name('tool_overengineering_php_dump.php')
-TOOL_OVERENGINEERING_PHP_PARSER = Path('nikic') / 'php-parser' / 'lib' / 'PhpParser' / 'ParserFactory.php'
-TOOL_OVERENGINEERING_PHP_TIMEOUT = 300
+CODE_OVERENGINEERING_PHP_DUMP = Path(__file__).with_name('code_overengineering_php_dump.php')
+CODE_OVERENGINEERING_PHP_PARSER = Path('nikic') / 'php-parser' / 'lib' / 'PhpParser' / 'ParserFactory.php'
+CODE_OVERENGINEERING_PHP_TIMEOUT = 300
 # Методы протоколов SPL/JSON — делегирование, которого требует интерфейс (как dunder в питоне).
-TOOL_OVERENGINEERING_PHP_PROTOCOL = ('current', 'key', 'next', 'rewind', 'valid', 'count', 'offsetGet',
+CODE_OVERENGINEERING_PHP_PROTOCOL = ('current', 'key', 'next', 'rewind', 'valid', 'count', 'offsetGet',
                                      'offsetSet', 'offsetExists', 'offsetUnset', 'getIterator',
                                      'jsonSerialize', 'getChildren', 'hasChildren', 'accept')
 
 
-def tool_overengineering_php(files, root, texts=None) -> tuple:
+def code_overengineering_php(files, root, texts=None) -> tuple:
     """Приметы по `.php`-файлам: (находки, причина пропуска или '').
 
     Args:
@@ -69,9 +69,9 @@ def tool_overengineering_php(files, root, texts=None) -> tuple:
     if not php or not vendor:
         return [], 'PHP пропущен: ' + ('нет `php` в PATH' if not php else 'нет nikic/php-parser в vendor')
 
-    run = subprocess.run([php, '-d', 'memory_limit=2G', str(TOOL_OVERENGINEERING_PHP_DUMP), str(vendor)],
+    run = subprocess.run([php, '-d', 'memory_limit=2G', str(CODE_OVERENGINEERING_PHP_DUMP), str(vendor)],
                          input='\n'.join(str(f) for f in files), capture_output=True, text=True,
-                         timeout=TOOL_OVERENGINEERING_PHP_TIMEOUT, check=False)
+                         timeout=CODE_OVERENGINEERING_PHP_TIMEOUT, check=False)
 
     try:
         dump = json.loads(run.stdout or '{}')
@@ -93,7 +93,7 @@ def tool_overengineering_php(files, root, texts=None) -> tuple:
 def _php_files(root) -> list:
     """`.php` под корнем без vendor и служебных — где искать реализации.
 
-    ⚠ Свой обход, а не `tool_overengineering_files`: тот модуль импортирует этот, и
+    ⚠ Свой обход, а не `code_overengineering_files`: тот модуль импортирует этот, и
     обратный импорт замкнул бы круг.
     """
     skip = ('vendor', 'node_modules', '.git', 'var', 'cache')
@@ -102,17 +102,17 @@ def _php_files(root) -> list:
 
 
 def _vendor(files, root) -> Path | None:
-    """vendor с nikic/php-parser: `TOOL_OVERENGINEERING_PHP_VENDOR`, иначе вверх от корня и от первого файла."""
-    hint = os.environ.get('TOOL_OVERENGINEERING_PHP_VENDOR')
+    """vendor с nikic/php-parser: `CODE_OVERENGINEERING_PHP_VENDOR`, иначе вверх от корня и от первого файла."""
+    hint = os.environ.get('CODE_OVERENGINEERING_PHP_VENDOR')
 
-    if hint and (Path(hint) / TOOL_OVERENGINEERING_PHP_PARSER).is_file():
+    if hint and (Path(hint) / CODE_OVERENGINEERING_PHP_PARSER).is_file():
         return Path(hint)
 
     starts = [Path(root).resolve(), Path(files[0]).resolve().parent]
 
     for start in starts:
         for one in (start, *start.parents):
-            if (one / 'vendor' / TOOL_OVERENGINEERING_PHP_PARSER).is_file():
+            if (one / 'vendor' / CODE_OVERENGINEERING_PHP_PARSER).is_file():
                 return one / 'vendor'
 
     return None
@@ -127,7 +127,7 @@ def _passthrough(cls) -> list:
         fwd = m.get('forward')
 
         if (not fwd or m['name'].startswith('__') or m['abstract'] or m.get('routed')
-                or m['name'] in TOOL_OVERENGINEERING_PHP_PROTOCOL):
+                or m['name'] in CODE_OVERENGINEERING_PHP_PROTOCOL):
             continue
 
         params = [p['name'] for p in m['params'] if not p['variadic']]

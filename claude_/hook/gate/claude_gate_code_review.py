@@ -42,7 +42,7 @@
 ## Что застава считает сама, а что решает агент
 
 Пункты, у которых есть машинная формулировка, она считает **сама** — готовыми
-`tool_typo_cyrillic` (§1.2), `function_order` (§3) и `tool_overengineering` (§4.5) по
+`tool_typo_cyrillic` (§1.2), `function_order` (§3) и `code_overengineering` (§4.5) по
 файлам партии, и кладёт находки в замечание: цена — один `ast` на файл, а без них агент
 тратит круг на то, что уже посчитано.
 
@@ -50,7 +50,7 @@
 
 Новый код редко бывает переусложнённым — им становится старый: абстракция пережила
 две из трёх реализаций, опцию больше никто не передаёт, старое имя осталось обёрткой.
-Поэтому `tool_overengineering` смотрит **весь** файл партии: зашёл в legacy ради одной
+Поэтому `code_overengineering` смотрит **весь** файл партии: зашёл в legacy ради одной
 строки — увидишь обвязку прошлых правок вокруг неё. Наследников абстракций он ищет по
 корню git-репозитория каждого файла — партия бывает в двух проектах сразу.
 
@@ -92,7 +92,7 @@ from claude_.hook.gate.claude_gate import (claude_gate_asked,                   
                                           claude_gate_noted, claude_gate_off,
                                           claude_gate_spot)
 from function_.function_order import function_order, function_order_format               # noqa: E402
-from tool_.tool_overengineering import tool_overengineering                              # noqa: E402
+from code_.code_overengineering import code_overengineering                              # noqa: E402
 from tool_.tool_typo import tool_typo_cyrillic                                            # noqa: E402
 
 # Память: `{сессия: {'asks': N, 'seen': [файлы партии], 'at': epoch}}`, сутки (`claude_gate.md`).
@@ -226,7 +226,7 @@ def claude_gate_code_review_lint(paths) -> dict:
 
     Returns:
         dict: {'cyrillic': находки `tool_typo_cyrillic`, 'order': находки
-            `function_order`, 'over': находки `tool_overengineering` — по `.py` и
+            `function_order`, 'over': находки `code_overengineering` — по `.py` и
             `.php`}. Все поля пусты — механика чистая. К находкам
             подставлено `file` — путь того файла, откуда они. Судейские пункты
             (размазан ли функционал, жив ли код, актуальны ли доки) здесь **не**
@@ -247,7 +247,7 @@ def claude_gate_code_review_lint(paths) -> dict:
         if str(spot).lower().endswith('.php'):
             try:
                 # PHP: только overengineering — кириллицу и порядок `ast` в нём не видит.
-                over.extend(one for one in tool_overengineering([spot], root=_repo_root(spot))
+                over.extend(one for one in code_overengineering([spot], root=_repo_root(spot))
                             if one['kind'] != 'skipped')
             except Exception:  # noqa: BLE001 — файл молча пропускаем, см. ⚠ выше
                 pass
@@ -264,7 +264,7 @@ def claude_gate_code_review_lint(paths) -> dict:
             # файл: в замечании от него осталось бы голое имя без каталога.
             cyr.extend(dict(one, file=str(spot)) for one in tool_typo_cyrillic(Path(spot)))
             order.extend(function_order(str(spot)))
-            over.extend(tool_overengineering([spot], root=_repo_root(spot)))
+            over.extend(code_overengineering([spot], root=_repo_root(spot)))
         except Exception:      # noqa: BLE001 — файл молча пропускаем, см. ⚠ выше
             continue
 
@@ -295,7 +295,7 @@ def claude_gate_code_review_format(verdict) -> str:
         'читает, а не весь репозиторий):',
         '1. Не размазан ли один и тот же функционал по файлам: за одну логику отвечает',
         '   один паттерн, второе похожее место — уже точка различия в нём, а не вторая',
-        '   функция (§4.2, §4.4). `python -m tool_.tool_impact "<имя>"` — кто ещё это',
+        '   функция (§4.2, §4.4). `python -m code_.code_impact "<имя>"` — кто ещё это',
         '   делает; `python -m tool_.tool_find "<что делаете>"` — нет ли этого в общем слое.',
         '2. DDD / SOLID / GRASP: имя — цепочка объектов от общего к частному, действие',
         '   только в конце, глагол первым запрещён (`log_save`, не `save_log`); в имени',
@@ -306,8 +306,8 @@ def claude_gate_code_review_format(verdict) -> str:
         '   области (§0.1, §4.1), знание проекта не протекло в общий слой (§5).',
         *_cyrillic_lines(lint),
         *_order_lines(lint),
-        '5. Мёртвое, оставленное этой правкой, удалено: `python -m tool_.tool_import',
-        '   <файл>` — непрочитанные импорты, `python -m tool_.tool_dead <каталог>',
+        '5. Мёртвое, оставленное этой правкой, удалено: `python -m code_.code_import',
+        '   <файл>` — непрочитанные импорты, `python -m code_.code_dead <каталог>',
         '   --private` — имена, которых никто не зовёт.',
         '6. Документация актуальна: новый функционал расписан детально, удалённый',
         '   больше не упоминается — строка на тронутый модуль в `docs/` или в',
@@ -392,7 +392,7 @@ def _over_lines(lint) -> list:
 
     if len(found) > CLAUDE_GATE_CODE_REVIEW_FOUND:
         lines.append(f'   … и ещё {len(found) - CLAUDE_GATE_CODE_REVIEW_FOUND}'
-                     ' — `python -m tool_.tool_overengineering <файлы>`')
+                     ' — `python -m code_.code_overengineering <файлы>`')
 
     return lines
 

@@ -1,20 +1,20 @@
 """
 Имя вычёркивают из мест — и из строк, что его описывали: хвосты не молчат.
 
-`tool_impact` отвечает, где имя стоит. Снять его — половина дела: над снятой
+`code_impact` отвечает, где имя стоит. Снять его — половина дела: над снятой
 строкой остаётся комментарий, который о ней и говорил. Так правка «имя вышло
 из подстановки» оставила трёхстрочный комментарий над уцелевшей строкой:
 последняя строка комментария слово не содержала — и блок выжил наполовину, а
 следующий читатель принял половину за живое пояснение к соседу.
 
-Здесь исполнитель над находками `tool_impact`: строка, где имя было целой
+Здесь исполнитель над находками `code_impact`: строка, где имя было целой
 записью (ключ словаря, аргумент, константа), снимается вместе с примкнувшим
 сверху комментарием об имени; всё, где имя — часть уцелевающей строки или проза,
 остаётся человеку и называется в отчёте. О проекте не знает ничего: имя и
 корень передаёт тот, кто зовёт.
 
-    PYTHONPATH=py_modules python -m tool_.tool_strip companion_id src/
-    PYTHONPATH=py_modules python -m tool_.tool_strip companion_id src/ --apply
+    PYTHONPATH=py_modules python -m code_.code_strip companion_id src/
+    PYTHONPATH=py_modules python -m code_.code_strip companion_id src/ --apply
 """
 import argparse
 import re
@@ -27,23 +27,23 @@ if __package__ in (None, ''):
     sys.path[:] = [item for item in sys.path if item not in ('', '.', _here)]
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tool_.tool_impact import tool_impact
+from code_.code_impact import code_impact
 
 # Строка, где имя — целая запись: ключ словаря (`'имя': ...`), именованный
 # аргумент (`имя=...`), присваивание константы. Только такие строки снимаются
 # целиком; прочее — уцелевающая строка с чужим именем, ей нужен человек.
-TOOL_STRIP_ENTRY = 'запись — строка снимается'
-TOOL_STRIP_BLOCK = 'хвост над снятой записью — снимается с ней'
-TOOL_STRIP_PART = 'часть уцелевающей строки — правят руками'
-TOOL_STRIP_WORD = 'слово в прозе — переписывают руками'
+CODE_STRIP_ENTRY = 'запись — строка снимается'
+CODE_STRIP_BLOCK = 'хвост над снятой записью — снимается с ней'
+CODE_STRIP_PART = 'часть уцелевающей строки — правят руками'
+CODE_STRIP_WORD = 'слово в прозе — переписывают руками'
 
 
-def tool_strip(name: str, root: str = '.', apply: bool = False) -> list[dict]:
+def code_strip(name: str, root: str = '.', apply: bool = False) -> list[dict]:
     """Снять имя из мест, где оно было целой записью, и назвать хвосты.
 
     Args:
         name: имя, ключ или константа — целое слово.
-        root: где правят; обход и слои — как у `tool_impact`.
+        root: где правят; обход и слои — как у `code_impact`.
         apply: True — вычёркивать записи и их блоки из файлов; пусто — только
             отчёт, правит тот, кто зовёт.
 
@@ -51,7 +51,7 @@ def tool_strip(name: str, root: str = '.', apply: bool = False) -> list[dict]:
         list[dict]: `{file, line, action, text}` — где стояло и что с ним
         стало: снимается записью, снимается хвостом над записью, осталось
         частью строки или словом в прозе. Порядок — слой за слоем, как у
-        `tool_impact`: код → разметка → тесты → доки.
+        `code_impact`: код → разметка → тесты → доки.
 
     ⚠⚠ Снимается **целиком** строка-запись и весь непрерывный `#`-блок над
     ней, если имя упомянуто хоть в одной его строке: половина блока без
@@ -62,7 +62,7 @@ def tool_strip(name: str, root: str = '.', apply: bool = False) -> list[dict]:
     base = Path(root)
     out = []
 
-    hits = tool_impact(name, root)
+    hits = code_impact(name, root)
     for one_file in dict.fromkeys(one['file'] for one in hits):
         # одним проходом: сначала записи и их блоки (они помечают строки),
         # затем разбор каждой находки пометкой — иначе комментарий над
@@ -79,12 +79,12 @@ def tool_strip(name: str, root: str = '.', apply: bool = False) -> list[dict]:
             i = one['line'] - 1
             said = lines[i].strip() if i < len(lines) else ''
             if i in gone:
-                action = (TOOL_STRIP_ENTRY if entry.match(said)
-                          else TOOL_STRIP_BLOCK)
+                action = (CODE_STRIP_ENTRY if entry.match(said)
+                          else CODE_STRIP_BLOCK)
             elif said.startswith('#') or one['layer'] != 'код':
-                action = TOOL_STRIP_WORD
+                action = CODE_STRIP_WORD
             else:
-                action = TOOL_STRIP_PART
+                action = CODE_STRIP_PART
             out.append({'file': one_file, 'line': one['line'],
                         'action': action, 'text': said[:160]})
 
@@ -94,7 +94,7 @@ def tool_strip(name: str, root: str = '.', apply: bool = False) -> list[dict]:
     return out
 
 
-def tool_strip_format(found: list) -> str:
+def code_strip_format(found: list) -> str:
     """Отчёт словами: что снимается, что остаётся человеку."""
     if not found:
         return 'Мест не нашлось вовсе.'
@@ -145,4 +145,4 @@ if __name__ == '__main__':
     ap.add_argument('--apply', action='store_true',
                     help='вычёркивать записи и их блоки из файлов')
     ns = ap.parse_args()
-    print(tool_strip_format(tool_strip(ns.name, ns.root, ns.apply)))
+    print(code_strip_format(code_strip(ns.name, ns.root, ns.apply)))

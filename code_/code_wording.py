@@ -1,7 +1,7 @@
 """
 Где про правку всё ещё сказано словами по-старому: комментарии, докстринги, доки.
 
-`tool_impact` ходит **по имени**: кто зовёт `send_every`, что останется мёртвым
+`code_impact` ходит **по имени**: кто зовёт `send_every`, что останется мёртвым
 при переименовании. А беда бывает и при живом имени: ключ не переименован, а
 **смысл поехал** — было «общий замок на три пула», стало «у каждого пула свой
 срок». Имена целы, зовущие целы, а проза везде старая: строка в доке про
@@ -31,7 +31,7 @@ _SKIP = ('/.venv/', '/.git/', '/__pycache__/', '/node_modules/',
          '/.git_worktree/')
 
 
-def tool_wording(names=(), root='.', base='origin/master') -> list[dict]:
+def code_wording(names=(), root='.', base='origin/master') -> list[dict]:
     """Где эти имена описаны словами — в комментариях, докстрингах, документах.
 
     Args:
@@ -43,11 +43,11 @@ def tool_wording(names=(), root='.', base='origin/master') -> list[dict]:
         [{'name', 'kind', 'where', 'text'}, ...] — `kind`: «комментарий»,
         «докстринг», «док»; `where` — файл:строка; `text` — строка прозы.
 
-    ⚠ Про зовущих тут молчит: кто **зовёт** имя — дело `tool_impact`, этот
+    ⚠ Про зовущих тут молчит: кто **зовёт** имя — дело `code_impact`, этот
     модуль отвечает только за то, где имя **описано** словами.
     """
     base_root = Path(root).resolve()
-    wanted = set(names) or tool_wording_changed(base_root, base)
+    wanted = set(names) or code_wording_changed(base_root, base)
     if not wanted:
         return []
 
@@ -70,7 +70,7 @@ def tool_wording(names=(), root='.', base='origin/master') -> list[dict]:
     return out
 
 
-def tool_wording_changed(root='.', base='origin/master') -> set:
+def code_wording_changed(root='.', base='origin/master') -> set:
     """Имена из уезжающего диффа: snake_case-токены изменённых строк.
 
     ⚠ Смотрят и **контекст** вокруг хунки (`-U3`): прозу пугает не только
@@ -128,7 +128,7 @@ def _prose(line: str, spans, num: int) -> tuple:
     """Проза ли это строка и какая: ('', '') для кода.
 
     ⚠ Код строки не считается: `send_every = ...` ниже по файлу — это код, им
-    ходит `tool_impact`. Сюда проходит только то, что написано про имя.
+    ходит `code_impact`. Сюда проходит только то, что написано про имя.
     """
     if spans is None:
         return line, 'док'                  # .md: всё в файле — проза
@@ -154,7 +154,7 @@ if __name__ == '__main__':
     ap.add_argument('--base', default='origin/master', help='база диффа')
     args = ap.parse_args()
 
-    found = tool_wording(tuple(args.names), args.root, args.base)
+    found = code_wording(tuple(args.names), args.root, args.base)
     by = {}
     for one in found:
         by.setdefault(one['name'], []).append(one)

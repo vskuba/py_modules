@@ -1,9 +1,9 @@
 <?php
 /**
- * Разбор PHP для tool_overengineering: классы, методы, параметры, тела-обёртки и
+ * Разбор PHP для code_overengineering: классы, методы, параметры, тела-обёртки и
  * вызовы своих методов — JSON в stdout. Правила судит Python, здесь только факты.
  *
- *     php tool_overengineering_php_dump.php <vendor-dir> < список-файлов
+ *     php code_overengineering_php_dump.php <vendor-dir> < список-файлов
  *
  * ⚠ Грузится только nikic/php-parser из vendor проекта, а не composer-автозагрузчик:
  * проектный autoload проверяет платформу (PHP 8.4) и падает на хостовом 7.4, а парсеру

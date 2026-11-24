@@ -1,7 +1,7 @@
 """Тесты примет overengineering на файлах-фикстурах (без сети)."""
 import textwrap
 
-from tool_.tool_overengineering import tool_overengineering, tool_overengineering_format
+from code_.code_overengineering import code_overengineering, code_overengineering_format
 
 
 def test_passthrough_wrapper_found(tmp_path):
@@ -124,7 +124,7 @@ def test_class_as_function(tmp_path):
 def test_broken_file_skipped_and_format(tmp_path):
     """Неразбираемый файл не валит прогон; пустой отчёт сказан словами."""
     assert _scan(tmp_path, 'def (:\n') == []
-    assert tool_overengineering_format([]) == 'Примет не нашлось.'
+    assert code_overengineering_format([]) == 'Примет не нашлось.'
 
 
 def _scan(tmp_path, code, name='mod.py', extra=None):
@@ -134,7 +134,7 @@ def _scan(tmp_path, code, name='mod.py', extra=None):
     for other, text in (extra or {}).items():
         (tmp_path / other).write_text(textwrap.dedent(text), encoding='utf-8')
 
-    return tool_overengineering([tmp_path / name], root=tmp_path)
+    return code_overengineering([tmp_path / name], root=tmp_path)
 
 
 def _kinds(found):

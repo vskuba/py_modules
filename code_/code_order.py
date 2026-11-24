@@ -15,7 +15,7 @@ import argparse
 from pathlib import Path
 
 
-def tool_order(paths, items: list) -> dict:
+def code_order(paths, items: list) -> dict:
     """Порядок кусков в файлах: где впервые встречается каждый, и сходится ли он с заказанным.
 
     Args:
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     ap.add_argument('--then', action='append', required=True, metavar='КУСОК',
                     help='кусок; повторяют несколько раз — раньше, позже')
     ns = ap.parse_args()
-    verdict = tool_order(ns.paths, ns.then)
+    verdict = code_order(ns.paths, ns.then)
     for p in verdict['places']:
         print(f'  {p["item"]!r}: {p["file"]}:{p["line"]}')
     for missed in verdict['missed']:

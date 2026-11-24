@@ -1,13 +1,13 @@
 # Tool overengineering — обвязка, пережившая свою причину
 
-> `tool_/tool_overengineering.py` (+ `tool_overengineering_php.py` для PHP): разбирает
+> `code_/code_overengineering.py` (+ `code_overengineering_php.py` для PHP): разбирает
 > `.py` деревом, `.php` — nikic/php-parser из vendor проекта, и ищет точные приметы
 > переусложнения, которое оставили правки: обёртки-переименования, опции без
 > пользователя, абстракции над одним случаем, класс ради одного вызова.
 
-    PYTHONPATH=py_modules python -m tool_.tool_overengineering src           # legacy-каталог целиком
-    PYTHONPATH=py_modules python -m tool_.tool_overengineering a.py b.py     # файлы партии
-    PYTHONPATH=py_modules python -m tool_.tool_overengineering src --root .  # где искать наследников
+    PYTHONPATH=py_modules python -m code_.code_overengineering src           # legacy-каталог целиком
+    PYTHONPATH=py_modules python -m code_.code_overengineering a.py b.py     # файлы партии
+    PYTHONPATH=py_modules python -m code_.code_overengineering src --root .  # где искать наследников
 
 Код возврата — число находок (0 — чисто). Правило, которое он сторожит, — `code_rules.md` §4.5.
 
@@ -49,16 +49,16 @@
 
 `fixed_param` смотрит только приватные функции: их вызывающие живут в том же файле, и
 вывод точный. Публичную функцию общего слоя зовут проекты — «здесь никто не передаёт»
-не значит ничего (та же причина, что у `tool_dead --private`).
+не значит ничего (та же причина, что у `code_dead --private`).
 
 ## 5. PHP
 
-Факты достаёт `tool_overengineering_php_dump.php` одним запуском `php` на все файлы,
+Факты достаёт `code_overengineering_php_dump.php` одним запуском `php` на все файлы,
 правила судит Python — один словарь примет на два языка.
 
 * **Парсер — из vendor проекта** (`nikic/php-parser` ставит psalm/phpunit), без
   composer-автозагрузчика: проектный autoload проверяет платформу и падает на хостовом
-  PHP другой версии. Подсказать путь — `TOOL_OVERENGINEERING_PHP_VENDOR`. Нет `php` или
+  PHP другой версии. Подсказать путь — `CODE_OVERENGINEERING_PHP_VENDOR`. Нет `php` или
   парсера — строка `skipped` в отчёте, а не тихое «чисто».
 * **`class_as_function` выключен**: в Symfony любой сервис — конструктор и один метод.
 * **Не находка** (шум первого прогона по cashier-payment-gateway, 226 → 147): методы

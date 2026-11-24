@@ -117,7 +117,7 @@ namespace-папок, которые проекты импортируют на�
 | `ssh_/ssh_fleet.py`, `ssh_/ssh_put.py` | `docs/ssh_fleet.md` — флот разом: параллельно всем целям, мёртвый узел — запись; файл на цель с правами в один поход |
 | `mysql_/mysql_remote.py` | `docs/mysql_remote.md` — разовый запрос и разведка схемы прода через ssh, учётки на той машине; ⚠ голое имя для `.` POSIX ищет по PATH |
 | `project_/project_probe_ssh.py` | `docs/project_probe_ssh.md` — домен-код внутри контейнера на том хосте; ⚠ третий способ исполнения, не путать с `project_probe` и `docker_compose_python` |
-| `tool_/tool_import.py` | `docs/tool_import.md` — импорты, которые никто в файле не читает; ⚠ `skip` в `file_walk` заменяет штатный список, а не дополняет |
+| `code_/code_import.py` | `docs/code_import.md` — импорты, которые никто в файле не читает; ⚠ `skip` в `file_walk` заменяет штатный список, а не дополняет |
 | `systemd_/` | `docs/systemd_status.md` — состояние юнита словарем, журнал хвостом с фильтром; ⚠ замороженный юнит выглядит живым |
 | `gpu_/gpu_vram.py` | `docs/gpu_vram.md` — видеопамять числами, держатели процессами; ⚠ GB10 по платам отдаёт нули |
 | `proc_/` | `docs/proc_mem.md` — память машины из /proc без колонок `free`, топ держателей по RSS |
@@ -240,8 +240,8 @@ CLI есть у модулей, которыми пользуются «рука
 | `tool_.tool_catalog` | `[--kind func\|topic --namespace adb_ --cli --json]` → опись слоя машинно |
 | `tool_.tool_typo` | `[--kind mixed\|doubled]`, `--prose`, `--cyrillic` → следы неудачной правки в прозе (py, js-семейство, md); кириллица в именах, параметрах и ключах словарей (включая `get`/`pop`/`setdefault`); чужой ключ помечается `# cyrillic-key: причина`, пустая пометка — находка; зовётся заставой выкладки; код возврата = число находок |
 | `dictionary_.dictionary_spell_check_ru` | `[--root .] [--rare N] [--distance N]` → опечатки в русской прозе: слово незнакомо словарю, а его замена — частое слово корпуса в одну букву отсюда; свои термины — в `.spell-allow` корня; словаря нет — пропуск, а не отказ; код возврата = число находок |
-| `tool_.tool_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
-| `tool_.tool_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
+| `code_.code_impact` | `«имя» [--layer code\|markup\|test\|doc]` → кто читает имя по всем слоям |
+| `code_.code_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
 | `file_.file_check` | `файл... [--size --sha] [--json]` → цел ли файл: пустышка, огрызок, подмена головы; код возврата = число нецелых |
 | `file_.file_walk` | `[корень] [--suffix .py] [--count]` → что вообще обойдёт инструмент, без служебных веток |
 | `js_.js_check` | `файл… (.js/.mjs/.html)` → распарсится ли код как браузерный ESM-модуль, адрес поломки, граф импортов |
@@ -427,7 +427,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_` (соединение и очередь RQ), `qdrant_`, `sqllite3`, `queue_`, `state` |
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/vision/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_`, `text_` |
-| Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `datetime_`, `json_`, `async_`, `thread_` |
+| Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `code_` (разбор файлов: мёртвые имена, лишние импорты, переусложнение), `datetime_`, `json_`, `async_`, `thread_` |
 | Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `apk_` (разбор APK на машине), `translator`, `flux_schnell`, `microphone` |
 
 Назначение каждого — `docs/py_modules.md`, §3; актуальный список — всегда `ls`, а не эта
