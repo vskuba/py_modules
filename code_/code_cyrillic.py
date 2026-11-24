@@ -36,7 +36,7 @@
   сравнивал список с числом и падал на утверждении, которое до правки работало.
 
 Оба раза правка выглядела механической и безопасной. Поэтому
-`variable_cyrillic_taken` есть здесь, а не оставлено на внимательность.
+`code_cyrillic_taken` есть здесь, а не оставлено на внимательность.
 
 ## Чего модуль НЕ делает
 
@@ -73,27 +73,27 @@ import sys
 from pathlib import Path
 
 # Что считаем исходником.
-VARIABLE_CYRILLIC_GLOB = '*.py'
+CODE_CYRILLIC_GLOB = '*.py'
 
 # Куда не ходим: чужое, собранное и кэш.
-VARIABLE_CYRILLIC_SKIP = ('__pycache__', '.git', '.venv', 'venv', 'node_modules',
+CODE_CYRILLIC_SKIP = ('__pycache__', '.git', '.venv', 'venv', 'node_modules',
                           'build', 'dist', 'migrations')
 
 # Признак кириллицы. ⚠ `ё` и `Ё` стоят отдельно: в диапазон `а-я` они не входят.
-VARIABLE_CYRILLIC_RE = re.compile('[а-яёА-ЯЁ]')
+CODE_CYRILLIC_RE = re.compile('[а-яёА-ЯЁ]')
 
 # Род имени, у которого `col_offset` указывает на само имя; у прочих — на
 # ключевое слово строки, и позиция имени ищется отдельно.
-VARIABLE_CYRILLIC_OFFSET_KINDS = ('name', 'arg')
+CODE_CYRILLIC_OFFSET_KINDS = ('name', 'arg')
 
 # Как род объявления подписан в отчёте.
-VARIABLE_CYRILLIC_KINDS = {'name': 'обращение', 'arg': 'параметр', 'def': 'функция',
+CODE_CYRILLIC_KINDS = {'name': 'обращение', 'arg': 'параметр', 'def': 'функция',
                            'class': 'класс', 'import': 'импорт',
                            'global': 'область', 'except': 'исключение',
                            'match': 'сопоставление'}
 
 
-def variable_cyrillic(root, skip: tuple = VARIABLE_CYRILLIC_SKIP,
+def code_cyrillic(root, skip: tuple = CODE_CYRILLIC_SKIP,
                       decls: bool = False) -> list:
     """Кириллические имена в коде; пусто — таких нет.
 
@@ -117,7 +117,7 @@ def variable_cyrillic(root, skip: tuple = VARIABLE_CYRILLIC_SKIP,
     """
     where = Path(root)
     files = ([where] if where.is_file()
-             else [p for p in sorted(where.rglob(VARIABLE_CYRILLIC_GLOB))
+             else [p for p in sorted(where.rglob(CODE_CYRILLIC_GLOB))
                    if not any(part in skip for part in p.parts)])
     out = []
     for path in files:
@@ -133,13 +133,13 @@ def variable_cyrillic(root, skip: tuple = VARIABLE_CYRILLIC_SKIP,
 
         lines = src.split('\n')
         for node, name, kind in _named(tree, decls=decls):
-            if not VARIABLE_CYRILLIC_RE.search(name):
+            if not CODE_CYRILLIC_RE.search(name):
                 continue
 
             line = lines[node.lineno - 1] if node.lineno <= len(lines) else ''
             start = len(line.encode('utf-8')[:node.col_offset].decode(
                 'utf-8', 'ignore'))
-            if kind not in VARIABLE_CYRILLIC_OFFSET_KINDS:
+            if kind not in CODE_CYRILLIC_OFFSET_KINDS:
                 # `col_offset` объявления указывает на ключевое слово, а не на имя.
                 start = _word_char(line, name, start)
             out.append({'file': str(path), 'func': _owner(tree, node),
@@ -149,7 +149,7 @@ def variable_cyrillic(root, skip: tuple = VARIABLE_CYRILLIC_SKIP,
     return out
 
 
-def variable_cyrillic_taken(path, func: str, want: str) -> bool:
+def code_cyrillic_taken(path, func: str, want: str) -> bool:
     """Занято ли имя `want` в области функции `func`. `True` — переименовывать нельзя.
 
     Args:
@@ -263,7 +263,7 @@ def _owner(tree, want) -> str:
 
 
 def main() -> int:
-    """CLI: `python -m variable_.variable_cyrillic <путь> [--decls]`; 1 — есть находки."""
+    """CLI: `python -m code_.code_cyrillic <путь> [--decls]`; 1 — есть находки."""
     parser = argparse.ArgumentParser(
         description='Кириллица в именах кода (комментарии и строки не считаются).')
     parser.add_argument('root', nargs='?', default='.', help='файл или дерево')
@@ -272,7 +272,7 @@ def main() -> int:
                              'global/nonlocal, except as, case as')
     args = parser.parse_args()
 
-    found = variable_cyrillic(args.root, decls=args.decls)
+    found = code_cyrillic(args.root, decls=args.decls)
     seen = set()
     for row in found:
         if row.get('why'):
@@ -284,7 +284,7 @@ def main() -> int:
             continue
         seen.add(key)
         kind = ('' if row['kind'] in ('name', 'arg', '')
-                else f" — {VARIABLE_CYRILLIC_KINDS.get(row['kind'], row['kind'])}")
+                else f" — {CODE_CYRILLIC_KINDS.get(row['kind'], row['kind'])}")
         print(f"  ⚠ {row['file']}:{row['line']} [{row['func']}] «{row['name']}»{kind}")
 
     print(f'кириллических имён: {len(seen)} (мест: {len(found)})'

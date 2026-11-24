@@ -20,8 +20,8 @@
 ## ⚠ Чего не решает
 
 Не решает, переезжать ли, — перенос меняет порядок чтения и иногда работу,
-это решение человека, как у `function_order`. Не сводит близнецов в паттерн —
-для этого `function_twin`.
+это решение человека, как у `code_def_order`. Не сводит близнецов в паттерн —
+для этого `code_twin`.
 """
 import argparse
 import ast
@@ -35,7 +35,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def function_move(path, name: str, *, to=None, before: str = '', after: str = '',
+def code_move(path, name: str, *, to=None, before: str = '', after: str = '',
                   apply: bool = False) -> dict:
     """Перенести верхнеуровневое определение — в файле или в другой файл.
 
@@ -99,7 +99,7 @@ def function_move(path, name: str, *, to=None, before: str = '', after: str = ''
             'added_imports': added, 'before': before_texts, 'files': texts}
 
 
-def function_move_diff(res: dict) -> str:
+def code_move_diff(res: dict) -> str:
     """Диффы переезда: что изменилось в затронутых файлах."""
     out = []
 
@@ -209,9 +209,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     try:
-        got = function_move(args.path, args.name, to=args.to,
+        got = code_move(args.path, args.name, to=args.to,
                             before=args.before, after=args.after, apply=args.apply)
-        print(function_move_diff(got))
+        print(code_move_diff(got))
         if got['needs']:
             print('нужно блоку, а в приёмнике нет:', ' '.join(got['needs']))
         if got['added_imports']:

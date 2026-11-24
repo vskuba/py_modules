@@ -21,8 +21,8 @@
 
 | Проверка       | Чем               | Почему это ломает выкладку |
 |----------------|-------------------|----------------------------|
-| `cyrillic`     | `variable_cyrillic` + `tool_typo_cyrillic` | имена **и ключи словарей** латиницей — правило `code_rules.md` §1.2 |
-| `order`        | `function_order`  | публичное выше приватного: файл читают сверху |
+| `cyrillic`     | `code_cyrillic` + `tool_typo_cyrillic` | имена **и ключи словарей** латиницей — правило `code_rules.md` §1.2 |
+| `order`        | `code_def_order`  | публичное выше приватного: файл читают сверху |
 | `js`           | `js_check`        | опечатка в модуле = мёртвая страница, и сюита молчит |
 | `migrations`   | `mysql_migration_check_check` | `ALTER` раньше `CREATE`, подкаталоги вне глаз `yoyo` |
 | `collate`      | `mysql_collate_risks` | разные сличения у прода и локально — падение на проде |
@@ -69,7 +69,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from file_.file_walk import file_walk
-from function_.function_order import function_order
+from code_.code_def_order import code_def_order
 from js_.js_check import js_check
 from mysql_.migration.mysql_migration_check import mysql_migration_check_check
 from mysql_.mysql_collate import mysql_collate_risks
@@ -77,7 +77,7 @@ from page_.page_wire import page_wire_check
 from code_.code_dead import CODE_DEAD_GONE, code_dead
 from tool_.tool_instead import tool_instead
 from tool_.tool_typo import tool_typo_cyrillic
-from variable_.variable_cyrillic import variable_cyrillic
+from code_.code_cyrillic import code_cyrillic
 
 # Строгости. ⚠ Держать выкладку вправе только `стоп`: набор, срабатывающий на
 # догадках, отключают целиком — и вместе с догадками уходят настоящие находки.
@@ -261,7 +261,7 @@ def _check_cyrillic(base: Path, going) -> list[dict]:
 
     ## ⚠⚠ Две проверки под одной строкой, и вторая появилась позже
 
-    `variable_cyrillic` судит **имена** — `ast` видит их узлами. Ключ словаря для
+    `code_cyrillic` судит **имена** — `ast` видит их узлами. Ключ словаря для
     него обычный строковый литерал, и ему он не виден вовсе: `{'текст': ''}` стояло
     в разборщике таблицы годами при зелёной заставе. Ключи судит
     `tool_typo_cyrillic`, и зовётся она здесь же — правило §1.2 одно на имена и
@@ -279,7 +279,7 @@ def _check_cyrillic(base: Path, going) -> list[dict]:
             'where': f"{_short(base, one['file'])}:{one['line']}",
             'what': f"имя `{one['name']}`"}
            for spot in spots
-           for one in variable_cyrillic(str(spot))
+           for one in code_cyrillic(str(spot))
            if _going(base, one['file'], going)]
 
     for spot in spots:
@@ -309,7 +309,7 @@ def _check_order(base: Path, going) -> list[dict]:
              'what': f"{one['name']} после {one['after']} "
                      f"(стр. {one['after_line']})"}
             for spot in spots
-            for one in function_order(str(spot))
+            for one in code_def_order(str(spot))
             if _going(base, one['file'], going)]
 
 

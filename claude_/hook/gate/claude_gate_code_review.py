@@ -42,7 +42,7 @@
 ## Что застава считает сама, а что решает агент
 
 Пункты, у которых есть машинная формулировка, она считает **сама** — готовыми
-`tool_typo_cyrillic` (§1.2), `function_order` (§3) и `code_overengineering` (§4.5) по
+`tool_typo_cyrillic` (§1.2), `code_def_order` (§3) и `code_overengineering` (§4.5) по
 файлам партии, и кладёт находки в замечание: цена — один `ast` на файл, а без них агент
 тратит круг на то, что уже посчитано.
 
@@ -91,7 +91,7 @@ from claude_.hook.gate.claude_gate import (claude_gate_asked,                   
                                           claude_gate_forget, claude_gate_note,
                                           claude_gate_noted, claude_gate_off,
                                           claude_gate_spot)
-from function_.function_order import function_order, function_order_format               # noqa: E402
+from code_.code_def_order import code_def_order, code_def_order_format                   # noqa: E402
 from code_.code_overengineering import code_overengineering                              # noqa: E402
 from tool_.tool_typo import tool_typo_cyrillic                                            # noqa: E402
 
@@ -226,13 +226,13 @@ def claude_gate_code_review_lint(paths) -> dict:
 
     Returns:
         dict: {'cyrillic': находки `tool_typo_cyrillic`, 'order': находки
-            `function_order`, 'over': находки `code_overengineering` — по `.py` и
+            `code_def_order`, 'over': находки `code_overengineering` — по `.py` и
             `.php`}. Все поля пусты — механика чистая. К находкам
             подставлено `file` — путь того файла, откуда они. Судейские пункты
             (размазан ли функционал, жив ли код, актуальны ли доки) здесь **не**
             считаются: у заставы нет контекста правки.
 
-    ⚠ Кириллицу судит `tool_typo_cyrillic`, а не `variable_cyrillic`: первому видно
+    ⚠ Кириллицу судит `tool_typo_cyrillic`, а не `code_cyrillic`: первому видно
     **само имя** функции или ключ словаря, а второй смотрит имена внутри тела — то
     есть файл с `def ai_лицо()` и латиничным телом прошёл бы мимо. Разбираются только
     `.py` — `ast`; для `.js`, `.php` и прочих остаются grep-шаблоны §1.2.
@@ -263,7 +263,7 @@ def claude_gate_code_review_lint(paths) -> dict:
             # Поле `where` у находок — путь относительно корня, а корнем здесь сам
             # файл: в замечании от него осталось бы голое имя без каталога.
             cyr.extend(dict(one, file=str(spot)) for one in tool_typo_cyrillic(Path(spot)))
-            order.extend(function_order(str(spot)))
+            order.extend(code_def_order(str(spot)))
             over.extend(code_overengineering([spot], root=_repo_root(spot)))
         except Exception:      # noqa: BLE001 — файл молча пропускаем, см. ⚠ выше
             continue
@@ -416,7 +416,7 @@ def _cyrillic_lines(lint) -> list:
 
 
 def _order_lines(lint) -> list:
-    """Пункт 4 замечания: порядок определений в файлах партии, отчёт `function_order`."""
+    """Пункт 4 замечания: порядок определений в файлах партии, отчёт `code_def_order`."""
     found = lint.get('order') or []
 
     if not found:
@@ -425,7 +425,7 @@ def _order_lines(lint) -> list:
 
     return ['4. Порядок определений в файле (§3) — застава нашла сама:',
             # Пустые строки отчёта режем: здесь они превращаются в строку из пробелов.
-            *[f'   {one.strip()}' for one in function_order_format(found).splitlines() if one.strip()]]
+            *[f'   {one.strip()}' for one in code_def_order_format(found).splitlines() if one.strip()]]
 
 
 if __name__ == '__main__':

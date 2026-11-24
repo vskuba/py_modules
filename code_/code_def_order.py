@@ -39,8 +39,8 @@ import ast
 import sys
 from pathlib import Path
 
-# Файл запускают и путём (`python3 py_modules/function_/function_order.py`).
-# Тогда первым в путях лежит каталог файла, и `import function_` нашёл бы модуль
+# Файл запускают и путём (`python3 py_modules/code_/code_def_order.py`).
+# Тогда первым в путях лежит каталог файла, и `import code_` нашёл бы модуль
 # рядом вместо пакета. Свой каталог убираем, корень ставим в начало.
 if __package__ in (None, ''):
     _here = str(Path(__file__).resolve().parent)
@@ -49,15 +49,15 @@ if __package__ in (None, ''):
 
 # Что считаем нарушением. ⚠ Слова короткие: они уезжают в `--json` и читаются
 # вызывающим кодом, а не только человеком.
-FUNCTION_ORDER_PUBLIC_LATE = 'public_after_private'
-FUNCTION_ORDER_MAIN_LATE = 'main_not_last'
+CODE_DEF_ORDER_PUBLIC_LATE = 'public_after_private'
+CODE_DEF_ORDER_MAIN_LATE = 'main_not_last'
 
 # Каталоги, которые не смотрим никогда: чужой код и следы сборки.
-FUNCTION_ORDER_SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git',
+CODE_DEF_ORDER_SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git',
                        'migrations')
 
 
-def function_order(root: str) -> list:
+def code_def_order(root: str) -> list:
     """
     Найти нарушения порядка в файле или дереве.
 
@@ -82,7 +82,7 @@ def function_order(root: str) -> list:
 
     files = [path] if path.is_file() else sorted(
         one for one in path.rglob('*.py')
-        if not any(part in FUNCTION_ORDER_SKIP for part in one.parts))
+        if not any(part in CODE_DEF_ORDER_SKIP for part in one.parts))
 
     out = []
 
@@ -92,12 +92,12 @@ def function_order(root: str) -> list:
     return out
 
 
-def function_order_format(found: list, full: bool = False) -> str:
+def code_def_order_format(found: list, full: bool = False) -> str:
     """
     Отчёт словами. Пусто — порядок верный.
 
     Args:
-        found: находки от `function_order`.
+        found: находки от `code_def_order`.
         full: показывать каждую находку; иначе по первой на файл.
 
     ⚠ По умолчанию **одна строка на файл**: нарушений в файле обычно столько,
@@ -122,7 +122,7 @@ def function_order_format(found: list, full: bool = False) -> str:
 
         seen.add(name)
 
-        if item['kind'] == FUNCTION_ORDER_MAIN_LATE:
+        if item['kind'] == CODE_DEF_ORDER_MAIN_LATE:
             lines.append(f"   хук __main__ (стр. {item['line']}) не последний:"
                          f" ниже него ещё {item['after']}")
             continue
@@ -189,7 +189,7 @@ def _body_check(body: list, path: str, scope: str) -> list:
 
         if private is not None:
             out.append({'file': path, 'line': node.lineno, 'name': name,
-                        'kind': FUNCTION_ORDER_PUBLIC_LATE,
+                        'kind': CODE_DEF_ORDER_PUBLIC_LATE,
                         'after': private[0], 'after_line': private[1],
                         'scope': scope})
 
@@ -215,7 +215,7 @@ def _main_check(body: list, path: str) -> list:
     tail = [_name_of(one) or type(one).__name__ for one in body[place[0] + 1:]]
 
     return [{'file': path, 'line': place[1], 'name': '__main__',
-             'kind': FUNCTION_ORDER_MAIN_LATE,
+             'kind': CODE_DEF_ORDER_MAIN_LATE,
              'after': ', '.join(one for one in tail if one)[:80],
              'after_line': 0, 'scope': 'module'}]
 
@@ -261,7 +261,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     try:
-        got = function_order(args.root)
+        got = code_def_order(args.root)
     except RuntimeError as err:
         raise SystemExit(f'ошибка: {err}')
 
@@ -270,7 +270,7 @@ if __name__ == '__main__':
 
         print(json.dumps(got, ensure_ascii=False, indent=2))
     else:
-        print(function_order_format(got, args.full))
+        print(code_def_order_format(got, args.full))
 
     # ⚠ Код возврата — чтобы проверку можно было поставить в хук или в CI:
     # «нашли» обязано отличаться от «не нашли» без разбора текста.

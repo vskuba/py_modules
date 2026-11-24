@@ -1,12 +1,12 @@
 # Кириллица в именах кода: найти, не спутав с комментариями и строками
 
-> `variable_cyrillic(дерево)` отвечает на вопрос, который `grep` задать не может:
+> `code_cyrillic(дерево)` отвечает на вопрос, который `grep` задать не может:
 > где кириллица **в имени**, а не в тексте. Инструмент —
-> `py_modules/variable_/variable_cyrillic.py`, CLI:
-> `python -m variable_.variable_cyrillic <путь>`; код возврата 1 — есть находки.
+> `py_modules/code_/code_cyrillic.py`, CLI:
+> `python -m code_.code_cyrillic <путь>`; код возврата 1 — есть находки.
 > Флаг `--decls` добавляет к проверке объявления — `def`, `class`, `import ... as`,
 > `global`/`nonlocal`, `except ... as`, `case ... as` (§ 5).
-> Рядом `variable_cyrillic_taken(файл, функция, имя)` — занято ли имя, которым
+> Рядом `code_cyrillic_taken(файл, функция, имя)` — занято ли имя, которым
 > собираются заменить.
 
 ## 1. Почему `grep` не годится
@@ -67,7 +67,7 @@ def test_both_online_sends():
 `const faces = faces` — там хотя бы разборщик ругнулся.
 
 Оба раза правка выглядела механической и безопасной. Отсюда
-`variable_cyrillic_taken`, а не расчёт на внимательность.
+`code_cyrillic_taken`, а не расчёт на внимательность.
 
 ## 4. Что инструмент НЕ делает
 

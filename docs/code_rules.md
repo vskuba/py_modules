@@ -45,7 +45,7 @@ PYTHONPATH=py_modules python -m tool_.tool_find "разобрать json" # из
 Это правило стояло здесь и в `CLAUDE.md` каждого проекта. Измеренный итог: за одну
 сессию поверх готового были написаны своя обёртка над `ssh` на прод (`ssh_/ssh_x.py`),
 свой разовый запрос к базе (`mysql_/mysql_query.py`), свой поиск кириллицы в именах
-(`variable_/variable_cyrillic.py`), своя репетиция миграции (`mysql_/mysql_rehearse.py`)
+(`code_/code_cyrillic.py`), своя репетиция миграции (`mysql_/mysql_rehearse.py`)
 и свой снимок страницы (`web_/web_drive_page.py`). Поиск при этом находил каждое из них
 **первой строкой** на любой формулировке — его просто не звали.
 
@@ -449,10 +449,10 @@ if __name__ == "__main__":
 проходят, а вызов через CLI падает на `NameError` — на момент запуска `main()`
 определений нижних приватных ещё нет.
 
-Проверяет и это, и порядок определений — `function_.function_order`:
+Проверяет и это, и порядок определений — `code_.code_def_order`:
 
 ```bash
-PYTHONPATH=py_modules python -m function_.function_order src/
+PYTHONPATH=py_modules python -m code_.code_def_order src/
 ```
 
 ⚠ Он видит то, чего не видит `grep`-рецепт из §«Быстрые проверки»: классы, методы
@@ -814,7 +814,7 @@ grep -rnP '\b(FROM|JOIN|INTO|UPDATE|TABLE|SELECT|WHERE|GROUP BY|ORDER BY)\s+`?\w
 
 Файлы, где приватная функция стоит выше публичной. ⚠ Рецепт грубый и оставлен
 как запасной: классов, методов и хука `__main__` он не видит — для проверки есть
-`function_.function_order` (§3).
+`code_.code_def_order` (§3).
 
 ```bash
 find <code_dirs> -name '*.py' -not -path '*/__pycache__/*' | while read -r f; do

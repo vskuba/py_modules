@@ -59,14 +59,14 @@ import sys
 from pathlib import Path
 
 # Что считаем исходником.
-VARIABLE_UNBOUND_GLOB = '*.py'
+CODE_UNBOUND_GLOB = '*.py'
 
 # Куда не ходим: чужое, собранное и кэш.
-VARIABLE_UNBOUND_SKIP = ('__pycache__', '.git', '.venv', 'venv', 'node_modules',
+CODE_UNBOUND_SKIP = ('__pycache__', '.git', '.venv', 'venv', 'node_modules',
                          'build', 'dist', 'migrations')
 
 
-def variable_unbound(root, skip: tuple = VARIABLE_UNBOUND_SKIP) -> list:
+def code_unbound(root, skip: tuple = CODE_UNBOUND_SKIP) -> list:
     """Чтения локальных имён до первого присваивания; пусто — таких нет.
 
     Args:
@@ -79,7 +79,7 @@ def variable_unbound(root, skip: tuple = VARIABLE_UNBOUND_SKIP) -> list:
     """
     where = Path(root)
     files = ([where] if where.is_file()
-             else [p for p in sorted(where.rglob(VARIABLE_UNBOUND_GLOB))
+             else [p for p in sorted(where.rglob(CODE_UNBOUND_GLOB))
                    if not any(part in skip for part in p.parts)])
     out = []
     for path in files:
@@ -402,13 +402,13 @@ def _comprehension(node, outer=()) -> list:
 
 
 def main() -> int:
-    """CLI: `python -m variable_.variable_unbound <путь>`; код 1 — есть находки."""
+    """CLI: `python -m code_.code_unbound <путь>`; код 1 — есть находки."""
     parser = argparse.ArgumentParser(
         description='Локальные имена, прочитанные раньше первого присваивания.')
     parser.add_argument('root', nargs='?', default='.', help='файл или дерево')
     args = parser.parse_args()
 
-    found = variable_unbound(args.root)
+    found = code_unbound(args.root)
     for row in found:
         if row.get('why'):
             print(f"  ⚠ {row['file']}:{row['read']} — {row['why']}", file=sys.stderr)

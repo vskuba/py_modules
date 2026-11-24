@@ -125,7 +125,7 @@ namespace-папок, которые проекты импортируют на�
 | `dsh_/dsh_api.py` | `docs/dsh_api.md` — метод хоста harness'а: cookie из секрета на диске, конверт, alive, GET/POST ручек плагинов; ⚠ `_request` с подчёркиванием |
 | `dsh_/dsh_session.py`, `dsh_/dsh_board.py`, `dsh_/dsh_board_cli.py`, `dsh_/dsh_worktree.py` | `docs/dsh_board.md` — агенты harness'а субагентами: карточки, промпт, ответ по `turn/end` журнала, раздача N задач, доска промптов и моторы (параллельные цепочки, по умолчанию 4); ⚠ журнал — `session/page` с засечкой `asOfSeq`, без вебсокета |
 | `text_/text_emoji.py` | `docs/text_emoji.md` — эмодзи, разобранные чужим кодом неверно: зовётся на границе входа; ⚠ греческий с цифрой вплотную |
-| `text_/text_cyrillic.py` | `docs/text_cyrillic.md` — кириллица в строке, есть знак или нет: весь блок, а не `[а-я]`; ⚠ марка алфавита — не язык; имена кода судит `variable_cyrillic` |
+| `text_/text_cyrillic.py` | `docs/text_cyrillic.md` — кириллица в строке, есть знак или нет: весь блок, а не `[а-я]`; ⚠ марка алфавита — не язык; имена кода судит `code_cyrillic` |
 | `project_/`, `mysql_/mysql_host.py`, `mysql_query.py`, `docker_/compose_x.py`, `docker_/docker_echo.py`, `state/state_watch.py` | `docs/project_runtime.md` |
 | `evm_/` | `docs/evm_signing.md` — ключ, EIP-712, EIP-3009 без eth-библиотек; signer==recovered на каждом вызове; ⚠ ленивый импорт не проверяет crypto-пакеты |
 | `http_/http_rest.py`, `http_/http_watch.py`, `mcp_/mcp_client.py` | `docs/rest_probe.md` — вызов чужого API с угаданным заголовком, схема из zod-ошибки, сторож JSON-эндпоинта, MCP-клиент; ⚠ MCP не пробрасывает ключ в апстрим |
@@ -427,7 +427,7 @@ from py_modules.mysql_.mysql_ import mysql_get_db_async   # так — нико�
 | Хранилища | `mysql_` (пул, репозитории, дамп, миграции), `redis_` (соединение и очередь RQ), `qdrant_`, `sqllite3`, `queue_`, `state` |
 | LLM | `ai/provider` (реестр сервисов), `ai/framework` (абстракции движка), `ai/ai_thread`, `ai/vision/ai_vision`, `mcp_` |
 | Обвязка приложения | `setting_`, `event_`, `auth_`, `uvicorn_`, `i18n_`, `text_` |
-| Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `code_` (разбор файлов: мёртвые имена, лишние импорты, переусложнение), `datetime_`, `json_`, `async_`, `thread_` |
+| Утилиты | `project_`, `tool_` (поиск инструмента по намерению), `code_` (разбор исходников: мёртвые имена, лишние импорты, переусложнение, кириллица в именах, порядок определений), `datetime_`, `json_`, `async_`, `thread_` |
 | Внешнее и файлы | `adb_` (устройство), `web_` (headless-рендер страницы), `pdf_`, `font_`, `apk_` (разбор APK на машине), `translator`, `flux_schnell`, `microphone` |
 
 Назначение каждого — `docs/py_modules.md`, §3; актуальный список — всегда `ls`, а не эта

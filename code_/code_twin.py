@@ -33,11 +33,11 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Каталоги, которые не смотрим никогда: чужой код и следы сборки.
-FUNCTION_TWIN_SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git',
+CODE_TWIN_SKIP = ('__pycache__', '.venv', 'venv', 'node_modules', '.git',
                       'migrations')
 
 
-def function_twin(root: str, min_nodes: int = 5) -> list:
+def code_twin(root: str, min_nodes: int = 5) -> list:
     """Совпавшие тела определений — группы кандидатов в один паттерн.
 
     Args:
@@ -60,7 +60,7 @@ def function_twin(root: str, min_nodes: int = 5) -> list:
 
     files = [path] if path.is_file() else sorted(
         one for one in path.rglob('*.py')
-        if not any(part in FUNCTION_TWIN_SKIP for part in one.parts))
+        if not any(part in CODE_TWIN_SKIP for part in one.parts))
 
     seen = collections.defaultdict(list)
 
@@ -83,7 +83,7 @@ def function_twin(root: str, min_nodes: int = 5) -> list:
             for group in seen.values() if len(group) > 1]
 
 
-def function_twin_format(groups: list) -> str:
+def code_twin_format(groups: list) -> str:
     """Отчёт словами: каждая группа — с одной строки на близнеца."""
     if not groups:
         return 'тел, совпавших деревом, нет'
@@ -123,7 +123,7 @@ class _Norm(ast.NodeTransformer):
         """Место имени в порядке первого появления: `_0`, `_1`…
 
         ⚠ Метода не было вовсе — три `visit_*` ниже звали его с первой версии, и
-        `function_twin` падал `AttributeError` на любом непустом теле. То есть
+        `code_twin` падал `AttributeError` на любом непустом теле. То есть
         проверка «совпавшие тела», обещанная правилами (§4.2, «Автопроверка»), не
         работала ни разу с момента написания.
 
@@ -160,7 +160,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     try:
-        print(function_twin_format(function_twin(args.root, args.min)))
+        print(code_twin_format(code_twin(args.root, args.min)))
     except RuntimeError as err:
         raise SystemExit(f'ошибка: {err}')
 
