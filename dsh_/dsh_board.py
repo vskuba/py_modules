@@ -57,27 +57,31 @@ DSH_BOARD_WAIT_TIMEOUT = 1800
 DSH_BOARD_RETRY_POLL = 2.0
 # Сколько раз продолжать круг, оборванный перезапуском хоста, и чем.
 DSH_BOARD_RESUME_TRIES = 2
-DSH_BOARD_RESUME_TEXT = ('Хост перезапустился посреди твоего круга, и он оборвался. Продолжай '
-                         'задачу с того места, где остановился, и дай полный ответ.')
+DSH_BOARD_RESUME_TEXT = ('The host restarted in the middle of your turn and cut it off. Continue the '
+                         'task from where you stopped and give the full answer.')
 # Сколько ждать, пока у хоста после перезапуска поднимутся службы, с.
 DSH_BOARD_STARTUP_WAIT = 120
 # Выжимка ответа: просьба к субагенту и пределы, которыми её режем, если он не послушал.
-DSH_BOARD_BRIEF_ASK = ('\n\nФОРМАТ ОТВЕТА ОБЯЗАТЕЛЕН: первая строка ответа — «ИТОГ:», за ней 3–5 '
-                       'коротких строк сути (не длиннее 600 символов вместе), затем пустая строка и '
-                       'подробности. Никаких вступлений до «ИТОГ:». Оркестратор читает только итог.')
+# ⚠ Тексты, уходящие субагенту, — по-английски: дешевле в токенах (~17% на Qwen3.8, замер
+# 24.11) и привычнее модели. Оркестратор пересказывает человеку по-русски сам.
+DSH_BOARD_BRIEF_ASK = ('\n\nANSWER FORMAT IS MANDATORY: write the answer in English. The first line is '
+                       '"SUMMARY:", followed by 3-5 short lines of substance (600 characters max in '
+                       'total), then an empty line and the details. Nothing before "SUMMARY:". The '
+                       'orchestrator reads only the summary.')
 DSH_BOARD_BRIEF_LINES = 5
 # Пишущей задаче в своей копии — как прогнать тесты именно на её коде: свой одноразовый
 # сервер над копией (`project_worktree_test`), не общий стенд с кодом основной выкладки.
 DSH_BOARD_WORKTREE_TEST_ASK = (
-    '\n\nТЕСТЫ НА ТВОЁМ КОДЕ. Твоя копия репозитория — {path}. Общий стенд (:8011) крутит '
-    'код основной выкладки, не твой: проверять правку на нём бессмысленно. Свой сервер над '
-    'копией и тесты против него — одной командой (сервер поднимется и снимется сам, '
-    'параллельно с соседями можно):\n'
+    '\n\nTESTS ON YOUR CODE. Your repository copy is {path}. The shared stand (:8011) runs the '
+    'main checkout, not your code: checking your change there is pointless. Your own server over '
+    'the copy and the tests against it are one command (the server starts and stops by itself, '
+    'running in parallel with others is fine):\n'
     '  PYTHONPATH={layer} {python} -m project_.project_worktree test '
-    'tests/test_<что_правил>.py --worktree {path}\n'
-    'Гоняй файлы, которые касаются твоей правки, и новые тесты, если писал. Код возврата 0 — '
-    'зелено. Общий сервер задачи (:8013, task_server.sh, project_worktree up/down) НЕ трогай: '
-    'на нём работает QA конвейера. В ответе — что прогнал и сколько прошло; не прогнал — скажи почему.')
+    'tests/test_<what_you_changed>.py --worktree {path}\n'
+    'Run the test files related to your change, plus new tests if you wrote any. Exit code 0 '
+    'means green. Do NOT touch the shared task server (:8013, task_server.sh, project_worktree '
+    'up/down): the pipeline QA works on it. In the answer: what you ran and how many passed; if '
+    'you did not run tests, say why.')
 DSH_BOARD_BRIEF_CHARS = 700
 # Уборка: сколько дней тишины у агентской карточки, чтобы её убрать, и примета копии репо.
 DSH_BOARD_GC_DAYS = 1
@@ -99,9 +103,8 @@ DSH_BOARD_WORKTREE_MARK = '/.claude/worktrees/dsh-'
 # workspace. Путь копии агенту даёт шапка промпта (`dsh_board_worktree_head`).
 DSH_BOARD_WORKTREE_WORKSPACE = 'dsh-worktrees'
 DSH_BOARD_WORKTREES = 'dsh-board.worktrees.json'   # карточка → {path, branch, root} копии
-DSH_BOARD_WORKTREE_HEAD = ('Твоя копия репозитория: {path}. Все команды в ней начинай с '
-                           '`cd {path}`; файлы открывай только абсолютными путями внутри '
-                           'неё{tail}.\n\n')
+DSH_BOARD_WORKTREE_HEAD = ('Your repository copy: {path}. Start every command in it with '
+                           '`cd {path}`; open files only by absolute paths inside it{tail}.\n\n')
 DSH_BOARD_WORKTREE_README = (
     '# dsh-worktrees\n\n'
     'Технический workspace доски `dsh-board`: здесь живут карточки всех пишущих задач '
@@ -112,12 +115,12 @@ DSH_BOARD_WORKTREE_README = (
     'удаляют — она общий дом этих карточек.\n')
 # Задание проверяющему субагенту.
 DSH_BOARD_VERIFY_ASK = (
-    'Ты — проверяющий. Другой агент получил задачу и дал ответ. Сверь КАЖДОЕ утверждение '
-    'ответа с кодом в этой папке или с первоисточником (для фактов из интернета — открой '
-    'источник). Ничего не меняй в файлах. Разложи утверждения на три группы: ✅ подтверждено, '
-    '❌ неверно (что на самом деле и где это видно), ❓ не удалось проверить (почему). '
-    'Не пересказывай ответ — только вердикты.\n\n'
-    '=== ЗАДАЧА ===\n{task}\n\n=== ОТВЕТ ===\n{answer}'
+    'You are a verifier. Another agent got a task and gave an answer. Check EVERY claim of the '
+    'answer against the code in this folder or against the primary source (for facts from the '
+    'internet, open the source). Do not change any files. Sort the claims into three groups: '
+    '✅ confirmed, ❌ wrong (what is actually true and where it is visible), ❓ could not verify '
+    '(why). Do not retell the answer, give only verdicts. Write in English.\n\n'
+    '=== TASK ===\n{task}\n\n=== ANSWER ===\n{answer}'
 )
 # Моторов у модели, которой их не назначали (как `MOTOR_COUNT_DEFAULT` плагина).
 DSH_BOARD_MOTORS_DEFAULT = 4
@@ -676,13 +679,14 @@ def dsh_board_turns(item: dict) -> int:
 def dsh_board_brief(answer: str, limit: int = DSH_BOARD_BRIEF_CHARS) -> str:
     """Выжимка ответа субагента для оркестратора — чтобы полный ответ не ел его контекст.
 
-    Если ответ начинается блоком «ИТОГ:» (так просит `DSH_BOARD_BRIEF_ASK`), берётся этот
+    Если ответ начинается блоком «SUMMARY:» (так просит `DSH_BOARD_BRIEF_ASK`; старые
+    ответы — «ИТОГ:»), берётся этот
     блок до первой пустой строки; иначе — первые строки ответа. В обоих случаях не
     длиннее `limit` символов.
     """
     text = (answer or '').strip()
     # После «ИТОГ» — только разметка (`**`, `:`), не первый знак самого итога (`код`).
-    match = re.search(r'(?im)^\W*итог[*_]*\s*:?[*_]*[ \t]*(.+?)(?:\n\s*\n|\Z)', text, re.DOTALL)
+    match = re.search(r'(?im)^\W*(?:итог|summary)[*_]*\s*:?[*_]*[ \t]*(.+?)(?:\n\s*\n|\Z)', text, re.DOTALL)
     brief = match.group(1).strip() if match else '\n'.join(text.splitlines()[:DSH_BOARD_BRIEF_LINES])
     if len(brief) <= limit:
         return brief
@@ -795,7 +799,7 @@ def dsh_board_worktree_head(tree: dict) -> str:
     if not path:
         return ''
     root = tree.get('root') or ''
-    tail = f'; основной репозиторий {root} не трогай' if root else ''
+    tail = f'; do not touch the main repository {root}' if root else ''
     return DSH_BOARD_WORKTREE_HEAD.format(path=path, tail=tail)
 
 

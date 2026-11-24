@@ -86,8 +86,8 @@ def test_cli_new_worktree_prompt_head_and_metadata(sandbox, monkeypatch, capsys)
                         lambda session, text, *a, **kw: asked.append(text) or 'ok')
     dsh_board_cli_main(['new', '/repo', 'правка', '--worktree', '--ask', 'починь баг', '--json'])
     capsys.readouterr()
-    assert asked and asked[0].startswith('Твоя копия репозитория: ' + COPY)
-    assert 'cd ' + COPY in asked[0] and '/repo не трогай' in asked[0]
+    assert asked and asked[0].startswith('Your repository copy: ' + COPY)
+    assert 'cd ' + COPY in asked[0] and 'do not touch the main repository /repo' in asked[0]
     assert json.loads(sandbox.meta.read_text())['card-1']['path'] == COPY
 
 
@@ -185,7 +185,7 @@ def test_verify_of_worktree_card_gets_head(sandbox, monkeypatch):
                         lambda session, text, *a, **kw: asked.append(text) or 'вердикт')
     _dsh_json(sandbox.meta, {'card-1': {'path': COPY, 'branch': 'dsh/pravka', 'root': '/repo'}})
     dsh_board.dsh_board_verify('card-1', base='x:1')
-    assert asked[0].startswith('Твоя копия репозитория: ' + COPY)
+    assert asked[0].startswith('Your repository copy: ' + COPY)
     assert sandbox.posts[0][1]['workspace'] == str(sandbox.technical)
 
 
