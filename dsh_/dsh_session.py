@@ -117,10 +117,28 @@ def dsh_session_prompt(session: str, text: str, mode: str = 'queue', images: lis
     Raises:
         DshApiError: `session/not-found`, `session/agent-busy`, `session/model-unavailable`.
     """
-    content = [{'type': 'text', 'text': text}] + [_image_part(path) for path in images or []]
+    content = [{'type': 'text', 'text': text}] + [dsh_session_image_part(path) for path in images or []]
     request = {'requestId': str(uuid.uuid4()), 'sessionId': session, 'mode': mode,
                'content': content}
     return dsh_api_call('session/prompt', {'request': request}, base=base) or {}
+
+
+def dsh_session_image_part(path: str) -> dict:
+    """Картинка с диска — частью промпта: `{type: 'image', mediaType, data, name}`.
+
+    Зовут там, где промпт собирают руками: так же картинку кладёт и сам
+    `dsh_session_prompt`. Цель доски картинку хранит в той же форме, но без `type`
+    — круг соберёт из неё часть промпта сам.
+
+    Raises:
+        ValueError: файл — не картинка (png, jpeg, webp, gif).
+    """
+    media = mimetypes.guess_type(path)[0] or ''
+    if media not in DSH_SESSION_IMAGE_TYPES:
+        raise ValueError(f'{path}: картинка должна быть {", ".join(DSH_SESSION_IMAGE_TYPES)}, а не {media or "?"}')
+    with open(os.path.expanduser(path), 'rb') as handle:
+        data = base64.b64encode(handle.read()).decode('ascii')
+    return {'type': 'image', 'mediaType': media, 'data': data, 'name': os.path.basename(path)}
 
 
 def dsh_session_cancel(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
@@ -360,13 +378,3 @@ def _reply_between(events: list, start: int, end: int) -> str:
             if row is not None and row['role'] == 'assistant':
                 text = row['text']
     return text
-
-
-def _image_part(path: str) -> dict:
-    """Картинка с диска — часть промпта `{type: image, mediaType, data, name}`."""
-    media = mimetypes.guess_type(path)[0] or ''
-    if media not in DSH_SESSION_IMAGE_TYPES:
-        raise ValueError(f'{path}: картинка должна быть {", ".join(DSH_SESSION_IMAGE_TYPES)}, а не {media or "?"}')
-    with open(os.path.expanduser(path), 'rb') as handle:
-        data = base64.b64encode(handle.read()).decode('ascii')
-    return {'type': 'image', 'mediaType': media, 'data': data, 'name': os.path.basename(path)}
