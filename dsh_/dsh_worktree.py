@@ -89,7 +89,12 @@ def dsh_worktree_land(path: str, message: str) -> dict:
     branch = _git(path, 'rev-parse', '--abbrev-ref', 'HEAD').strip()
     if dsh_worktree_dirty(path):
         _git(path, 'add', '-A')
-        _git(path, 'commit', '-q', '-m', message)
+        # ⚠ Ссылки наружу (`.venv`, `.env` — их ставит прогон тестов в копии) — не работа
+        # субагента: `add -A` их брал, и `.venv` дважды уехал в основную ветку.
+        for link in _outward_links(path):
+            _git(path, 'reset', '-q', '--', link)
+        if _git(path, 'diff', '--cached', '--name-only').strip():
+            _git(path, 'commit', '-q', '-m', message)
     root = os.path.dirname(_git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip())
     if not _git(root, 'log', '--oneline', f'HEAD..{branch}').strip():
         raise DshWorktreeError(f'в ветке {branch} нет новых коммитов — сливать нечего')
@@ -98,7 +103,9 @@ def dsh_worktree_land(path: str, message: str) -> dict:
     if merged.returncode != 0:
         _git(root, 'merge', '--abort', check=False)
         raise DshWorktreeError(f'слияние {branch} не прошло, откачено: {merged.stdout.strip()[-300:]}')
-    dsh_worktree_drop(path)
+    # `--force`: работа уже слита, а копию с подмодулем git без него не снимает
+    # («working trees containing submodules cannot be moved or removed»).
+    dsh_worktree_drop(path, force=True)
     _git(root, 'branch', '-d', branch, check=False)
     return {'branch': branch, 'merged': _git(root, 'rev-parse', '--short', 'HEAD').strip()}
 
@@ -130,6 +137,19 @@ def dsh_worktree_merged(path: str) -> bool:
 
 
 # ── детали реализации ──
+
+def _outward_links(path: str) -> list:
+    """Новые в индексе ссылки копии, ведущие за её пределы: хостовые пути, не правка."""
+    root = os.path.realpath(path)
+    links = []
+    for name in _git(path, 'diff', '--cached', '--name-only', '--diff-filter=A').splitlines():
+        full = os.path.join(path, name)
+        if os.path.islink(full):
+            target = os.path.realpath(full)
+            if target != root and not target.startswith(root + os.sep):
+                links.append(name)
+    return links
+
 
 def _born(path: str) -> str:
     """Коммит, с которого ветка копии родилась: самая старая запись её reflog."""
