@@ -48,8 +48,27 @@ def dsh_wait_done(session: str) -> None:
 
 def dsh_wait_pending(owner: str) -> list:
     """Карточки, ответа которых ждёт сессия `owner`; старые метки (`DSH_WAIT_MAX_AGE`) — мимо."""
+    return sorted(dsh_wait_marks(owner))
+
+
+def dsh_wait_marks(owner: str) -> dict:
+    """Метки «ждём ответ», выставленные сессией: {карточка: {'owner', 'at'}}; старые — мимо.
+
+    `at` (минута отдачи) нужен заставе «жди живого субагента» (`claude_gate_dsh_alive`),
+    чтобы сказать человеку, сколько ждёт каждая карточка.
+    """
     edge = time.time() - DSH_WAIT_MAX_AGE
-    return [key for key, row in _read().items() if row.get('owner') == owner and row.get('at', 0) > edge]
+    return {key: row for key, row in _read().items()
+            if isinstance(row, dict) and row.get('owner') == owner and row.get('at', 0) > edge}
+
+
+def dsh_wait_key(session: str) -> str:
+    """Ключ карточки в метках и во «входящих»: id без суффикса поколения (`-gN`).
+
+    Им сверяют id карточки из `dsh_board_sessions` или с занятых моторов со списком меток;
+    та же нормализация инлайном живёт в `dsh_board.py`.
+    """
+    return _key(session)
 
 
 def dsh_wait_waiter_alive(owner: str) -> bool:
@@ -62,6 +81,30 @@ def dsh_wait_waiter_alive(owner: str) -> bool:
         return False
 
 
+def dsh_wait_answered(sessions: list, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Из карточек `sessions` — те, чей ответ уже лежит непрочитанным; обрывы — мимо.
+
+    Признак «ответ есть» один у ждуна и у заставы «жди живого субагента»
+    (`claude_gate_dsh_alive`): карточка во «входящих» `dsh_board_inbox` (круг кончился,
+    ответ не забран) и последний её `turn/end` — не `interrupted`: обрыв продолжит
+    `revive --auto`, ответа нет.
+
+    ⚠ «Входящие» недоступны — пустой список: пока хост молчит, про ответ не известно.
+    ⚠ Сбой `dsh_session_history` не глотается — как в цикле ждуна до вынесения сюда.
+    """
+    from dsh_.dsh_board import dsh_board_inbox  # ленивый: цикл импорта
+    from dsh_.dsh_session import dsh_session_history
+
+    want = {_key(key) for key in sessions or []}
+
+    try:
+        rows = [row for row in dsh_board_inbox(base=base) if _key(row['session']) in want]
+    except DshApiError:
+        return []
+
+    return [row for row in rows if not _interrupted(dsh_session_history(row['session'], 2, base=base))]
+
+
 def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, *,
                  base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Дождаться ответов на все метки сессии `owner`: в файлы, метки снять.
@@ -70,23 +113,16 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, *,
         `[{session, title, out, brief}]` — забранные ответы; пусто — ждать было нечего
         или вышел срок (тогда метки остаются).
     """
-    from dsh_.dsh_board import dsh_board_brief, dsh_board_inbox, dsh_board_inbox_take  # ленивый: цикл импорта
-    from dsh_.dsh_session import dsh_session_answer_last, dsh_session_history
+    from dsh_.dsh_board import dsh_board_brief, dsh_board_inbox_take  # ленивый: цикл импорта
+    from dsh_.dsh_session import dsh_session_answer_last
     os.makedirs(out_dir, exist_ok=True)
     with open(_waiter_path(owner), 'w', encoding='utf-8') as handle:
         handle.write(str(os.getpid()))
     taken, deadline = [], time.time() + timeout
     try:
         while dsh_wait_pending(owner) and time.time() < deadline:
-            pending = set(dsh_wait_pending(owner))
-            try:
-                ready = [row for row in dsh_board_inbox(base=base) if row['session'] in pending]
-            except DshApiError:
-                ready = []
-            for row in ready:
+            for row in dsh_wait_answered(dsh_wait_pending(owner), base=base):
                 session = row['session']
-                if _interrupted(dsh_session_history(session, 2, base=base)):
-                    continue                 # обрыв — продолжит revive, это не ответ
                 answer = dsh_session_answer_last(session, base=base) or ''
                 path = os.path.join(out_dir, f'{session}.md')
                 with open(path, 'w', encoding='utf-8', errors='replace') as out:
