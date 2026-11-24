@@ -51,6 +51,20 @@ READ_COMMANDS = (
     'opensearch_search "out of memory"',
     'curl -s https://api.example.com/items',
     'curl -H "Accept: application/json" https://x.example/y',
+    # фильтры и бездействие серию не портят: `true; ls` — та же разведка, что `ls`
+    'ls -1 | sort | uniq -c',
+    'echo start; grep -c TODO a.py',
+    'true; ls',
+    'for f in *.py; do grep -l x "$f"; done',
+    'if test -f a.py; then head -5 a.py; fi',
+    'cat <<EOF | wc -l\nline\nEOF',
+    # разведка, которая именем команды не выглядит
+    'git rev-parse HEAD && git merge-base origin/main HEAD',
+    'git branch -v && git ls-tree -r HEAD --name-only | head',
+    'git worktree list && git config --get remote.origin.url',
+    'git status --short | head -20; git log --oneline -1 MERGE_HEAD 2>&1',
+    'docker ps && docker logs app --tail 50',
+    'gh pr view 3524 --json mergeableState && gh run list --limit 3',
 )
 
 # Команды, которые читают не только читают: правка, сборка, выкладка, делегирование.
@@ -71,6 +85,49 @@ NOT_READ_COMMANDS = (
     'dsh-board fanout tasks.json --out-dir /tmp/fanout',
     'cd /tmp && dsh-board wait --out-dir /tmp/w',
     'python -m dsh_.dsh_board_cli new blog "имя" --ask "что найти"',
+    # одно действие внутри составной команды делает её работой, а не разведкой
+    'git commit -q -m "x" && git log --oneline -3',
+    'git rebase origin/main',
+    'git reset --hard HEAD~1',
+    'git branch -D tmp/x',
+    'git apply p.patch',
+    'git merge --abort',
+    'git checkout main && git pull',
+    'gh pr close 3524',
+    'gh pr merge 3525 --squash',
+    'gh pr create -t "x" -b "y"',
+    'kubectl apply -f k8s/deploy.yaml',
+    # запись в файл — это действие, а не чтение
+    'echo done >> log.txt',
+    'cat a.txt > b.txt',
+    'curl -s https://x.example/y > out.json',
+    # правка, сборка, тесты — работа
+    'make test',
+    'composer install',
+    './vendor/bin/phpunit --filter x',
+    'docker compose exec app php artisan migrate',
+    'docker compose up -d',
+    'mv a.py b.py',
+    'cp a.txt b.txt',
+    'mkdir -p out',
+    'chmod +x run.sh',
+    # запрос в базу с `--write` — правка, а не разведка
+    'PYTHONPATH=. python3 -m mysql_.mysql_query sql "delete from jobs" --write',
+    # целиком нейтральная команда — чтения в ней нет, серию не двигает
+    'echo one; echo two',
+)
+
+# Живые команды с правкой внутри, на которых классификатор прежде спотыкался: в первой
+# чтением казался `git log` из тела heredoc, во второй и третьей — «читающий» кусок
+# (`grep -i conflict`, `git diff`) после `git checkout`/`git merge`.
+REPORTED_WORK_COMMANDS = (
+    "git commit -q -F - <<'EOF'\nFix conflict\n\ngit log --oneline -3\nEOF\ngit log --oneline -3",
+    'git checkout -q -B conflict-resolve/3524 origin/staging && git merge --no-ff --no-commit '
+    '61642268 2>&1 | grep -i conflict; git diff --name-only --diff-filter=U',
+    'for B in dev staging; do git checkout -q -B merge/3525-$B origin/$B && git merge -q --no-ff '
+    '"3525" -m "merge" && git push -q -u origin merge/3525-$B 2>&1 | grep -v remote; '
+    'gh pr create --base $B --head merge/3525-$B -t "x" -b "y" | tail -1; done; '
+    'gh pr close 3524 -c "done" >/dev/null; echo closed',
 )
 
 
@@ -95,6 +152,12 @@ def test_bash_read_commands_are_reads(command):
 @pytest.mark.parametrize('command', NOT_READ_COMMANDS)
 def test_bash_work_commands_are_not_reads(command):
     """Работа — не чтение: правка, сборка, выкладка, зов доски субагентов."""
+    assert not claude_hook_dsh_nudge_is_read({'name': 'Bash', 'input': {'command': command}}), command
+
+
+@pytest.mark.parametrize('command', REPORTED_WORK_COMMANDS)
+def test_reported_work_commands_are_not_reads(command):
+    """Команда с любым действием — не чтение; тело heredoc командами не разбирается."""
     assert not claude_hook_dsh_nudge_is_read({'name': 'Bash', 'input': {'command': command}}), command
 
 
@@ -149,6 +212,56 @@ def test_solo_line_in_tool_arguments_does_not_reset_series():
     """`Сам:` из аргументов инструмента серию не обнуляет — иначе счёт сбрасывал бы чужой текст."""
     rows = [_prompt('разберись', 'p1')] + [_tool('Read', {}, f'c{i}') for i in range(6)] + \
         [_bash('grep -rn "Сам: " docs/', 'c9')]
+
+    assert claude_hook_dsh_nudge_read_series(rows)['reads'] == 7
+
+
+@pytest.mark.parametrize('text', ('**Сам:** разбираю конфликт вручную.', '  Сам: сейчас поправлю',
+                                  '- **Сам:** правлю сам, контекст уже у меня', '> Сам: делаю сам',
+                                  'Готово.\n\nСам: файл маленький, дочитаю сам.',
+                                  '## Сам: причины\n- конфиг на месте'))
+def test_decorated_solo_reason_resets_series(text):
+    """`Сам:` с markdown-обёрткой, отступом или не первой строкой — та же засечка серии."""
+    rows = [_prompt('разберись', 'p1')] + [_tool('Read', {}, f'c{i}') for i in range(6)] + \
+        [_say(text, 'c9'), _tool('Read', {}, 'c10')]
+
+    series = claude_hook_dsh_nudge_read_series(rows)
+
+    assert series['reads'] == 1
+    assert series['start'] == 'c9'
+
+
+def test_solo_and_tool_use_in_one_reply_row_reset_series():
+    """Текст и tool_use на одной записи ответа: засечка — эта запись, её же вызов не считается."""
+    rows = [_prompt('разберись', 'p1')] + [_tool('Read', {}, f'c{i}') for i in range(6)] + \
+        [{'type': 'assistant', 'uuid': 'c9', 'timestamp': 't-c9',
+          'message': {'role': 'assistant', 'content': [
+              {'type': 'text', 'text': 'Сам: разбираю конфликт вручную.'},
+              {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'a.py'}}]}}]
+
+    series = claude_hook_dsh_nudge_read_series(rows)
+
+    assert series['reads'] == 0
+    assert series['start'] == 'c9'
+
+
+def test_solo_in_split_reply_rows_resets_series():
+    """Claude Code дробит ответ на записи: обнуление — по текстовой строке того же ответа."""
+    rows = [_prompt('разберись', 'p1')] + [_tool('Read', {}, f'c{i}') for i in range(6)] + \
+        [_say('**Сам:** смотрю диффы руками.', 'c9'), _tool('Read', {}, 'c10'), _tool('Read', {}, 'c11')]
+
+    series = claude_hook_dsh_nudge_read_series(rows)
+
+    assert series['reads'] == 2
+    assert series['start'] == 'c9'
+
+
+def test_solo_in_thinking_and_prose_does_not_reset_series():
+    """`Сам:` в блоке размышлений и «сам:» внутри фразы — не обоснование: серия на месте."""
+    rows = [_prompt('разберись', 'p1')] + [_tool('Read', {}, f'c{i}') for i in range(6)] + \
+        [{'type': 'assistant', 'uuid': 'c9', 'timestamp': 't-c9',
+          'message': {'role': 'assistant', 'content': [{'type': 'thinking', 'thinking': 'Сам: проверю'}]}},
+         _say('Резюме: строка `Сам:` в прозе счётчик не сбрасывает.', 'c10'), _tool('Read', {}, 'c11')]
 
     assert claude_hook_dsh_nudge_read_series(rows)['reads'] == 7
 

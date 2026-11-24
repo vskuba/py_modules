@@ -77,6 +77,30 @@ def test_solo_reason_after_threshold_of_its_own(tmp_path):
     assert _check(rows, tmp_path)['block'] is True
 
 
+def test_decorated_solo_reason_passes_without_denial(tmp_path):
+    """`**Сам:**` с markdown-обёрткой — то же обоснование: серия с неё, отмены нет."""
+    rows = _rows(6) + [_say('**Сам:** разбираю конфликт вручную.', 'z1')]
+
+    assert _check(rows, tmp_path)['block'] is False
+
+
+def test_work_chain_rows_do_not_feed_counter(tmp_path):
+    """Цепочки слияния — не чтения: длинная их вереница отмены не даёт."""
+    rows = [_prompt('разберись с слиянием', 'p1')] + \
+        [_bash('git checkout -q -B t origin/staging && git merge --no-ff --no-commit f '
+               '2>&1 | grep -i conflict; git diff --name-only --diff-filter=U', f'b{i}') for i in range(30)]
+
+    assert _check(rows, tmp_path)['block'] is False
+
+
+def test_heredoc_commit_is_not_a_read(tmp_path):
+    """`git commit -F - <<EOF` серию не двигает, даже если в тексте коммита есть `git log`."""
+    rows = _rows(2) + [_bash("git commit -q -F - <<'EOF'\nFix\n\ngit log --oneline -3\nEOF", 'b1'),
+                       _tool('Read', 'x.py', 'c5')]
+
+    assert _check(rows, tmp_path)['block'] is False     # четвертое чтение — ниже порога
+
+
 def test_silent_in_free_and_off(tmp_path):
     """Вне HIGH заставы нет: в FREE работает напоминание, в OFF субагентов не зовут."""
     rows = _rows(40)
