@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.parse
 
+from claude_.session.claude_session_close import claude_session_close_armed, claude_session_close_click
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
 from dsh_.dsh_motor_badge import dsh_motor_badge
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
@@ -131,6 +132,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     """
     # Только то, на что можно переключиться: фоновые и отсоединённые от экрана — мимо.
     sessions = [row for row in claude_session_live_list() if row['visible']]
+    armed = claude_session_close_armed()
     lines = []
     for row in sessions[:rows]:
         color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
@@ -142,11 +144,14 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
         padded = _claude_session_switch_link(url, name, row['host']) + padded[len(name):]
         radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO, row['host'])
+        close = _claude_session_switch_link(url.replace('/switch/', '/close/'),
+                                            _claude_session_switch_cross(row['sessionId'] in armed),
+                                            row['host'])
         bg = ' bg' if row['kind'] == 'bg' else ''
         host = _claude_session_switch_badge(row['host'])
         # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
         # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
-        lines.append(f"\x1b[0m  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
+        lines.append(f"\x1b[0m {close} {radio} {padded} {host} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_spent(row['tokens_in'], row['tokens_out'])} "
                      f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m"
                      f"  {_claude_session_switch_agents(row['agents'])}")
@@ -168,6 +173,11 @@ def _claude_session_switch_badge(host: str) -> str:
     letters, left, right = badge
     return (f'\x1b[1;38;5;16;48;5;{left}m {letters[0]}'
             f'\x1b[48;5;{right}m{letters[1]} \x1b[0m')
+
+
+def _claude_session_switch_cross(armed: bool) -> str:
+    # «✕» закрытия: тусклый в покое, белый на красном — взведён, ждёт второго клика.
+    return '\x1b[1;97;41m✕\x1b[0m' if armed else '\x1b[38;5;239m✕\x1b[0m'
 
 
 def _claude_session_switch_link(url: str, text: str, host: str = '') -> str:
@@ -225,6 +235,11 @@ class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
         if url.path.startswith('/switch/'):
             target = url.path[len('/switch/'):].strip('/')
             error = claude_session_switch_to(target)
+        elif url.path.startswith('/close/'):
+            target = 'close ' + url.path[len('/close/'):].strip('/')
+            answer = claude_session_close_click(target[6:])
+            error = '' if answer in ('armed', 'closed') else answer
+            target += f' {answer}' if not error else ''
         elif url.path == '/new':
             query = urllib.parse.parse_qs(url.query)
             cwd, tmux_session = (query.get('cwd') or [''])[0], (query.get('tmux') or [''])[0]

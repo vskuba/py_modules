@@ -111,6 +111,12 @@ def tmux_window_new(session: str, cwd: str, command: list, name: str = '') -> bo
     return _tmux_ok(*args, *command)
 
 
+def tmux_pane_kill(target: str) -> bool:
+    """Закрыть панель tmux вместе с её программой (SIGHUP всему, что в ней); окно без панелей
+    закрывается само."""
+    return _tmux_ok('kill-pane', '-t', target)
+
+
 def tmux_session_enter(base: str, cwd: str, command: list, name: str = '') -> list:
     """Запустить программу в tmux прямо в этом терминале — команда, которую надо `exec`.
 
