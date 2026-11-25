@@ -148,7 +148,7 @@ def _claude_session_live_agents() -> dict:
     # Хост лёг или медлит — колонка пустеет, таблица из-за него не ломается.
     try:
         working = dsh_board_motors_busy()['working']
-        asking = dsh_session_asking()
+        asking = dsh_session_asking([item.get('session') or '' for item in working])
     except Exception:
         return {}
     agents = {}

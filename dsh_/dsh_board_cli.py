@@ -131,7 +131,7 @@ def _run(args) -> int:
             status['saving'] = dsh_saving_badge(args.session, base=base)
             # Кто из работающих ждёт ответа человека — «?» за цифрой мотора.
             try:
-                status['asking'] = dsh_session_asking(base=base)
+                status['asking'] = dsh_session_asking([row['session'] for row in status['working']], base=base)
             except DshApiError:
                 status['asking'] = {}
             if args.links:

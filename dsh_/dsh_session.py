@@ -101,21 +101,35 @@ def dsh_session_title(item: dict) -> str:
     return (((item.get('projections') or {}).get('values') or {}).get('title')) or ''
 
 
-def dsh_session_asking(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
-    """Карточки, которые стоят и ждут ответа человека: `{session: текст вопроса}`.
+def dsh_session_asking(sessions: list, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Какие из карточек стоят и ждут ответа человека: `{session: текст вопроса}`.
 
     Субагент спросил (`ask_user_question`) — его работа на паузе, пока не ответят. Признак —
-    непустой `userQuestions.active` в проекциях карточки. Берётся из общего кэша списка
-    (`dsh_session_list`, не старше `DSH_SESSION_LIST_TTL`) — хост лишним вызовом не грузится,
-    поэтому вопрос виден с задержкой до минуты.
-    ⚠ Вид элемента `active` вживую не встречался: текст ищется по вероятным полям, не
-    нашёлся — «вопрос».
+    в хвосте журнала карточки (`session/page`, доли секунды): `tool/call` вопроса, на который
+    ещё нет `tool/result` с тем же `callId` (`data.message.source.callId`).
+
+    Args:
+        sessions: какие карточки смотреть — обычно работающие (их не больше числа моторов).
+
+    ⚠ Не по проекции `userQuestions.active` из списка карточек: список — общий кэш до 60 с
+    (`session/list` — самый дорогой вызов хоста), и живой вопрос в нём не появлялся —
+    замер на карточке, ждущей ответа.
     """
     asking = {}
-    for item in dsh_session_list(base=base):
-        active = ((((item.get('projections') or {}).get('values') or {}).get('userQuestions')) or {}).get('active')
-        if active:
-            asking[item.get('sessionId') or ''] = _question_text(active[-1])
+    for session in sessions:
+        try:
+            events = dsh_session_history(session, 2, base=base)
+        except DshApiError:
+            continue
+        pending = {}
+        for event in events:
+            data = event.get('data') or {}
+            if event.get('type') == 'tool/call' and data.get('name') == 'ask_user_question':
+                pending[data.get('callId')] = _question_text(data.get('arguments'))
+            elif event.get('type') == 'tool/result':
+                pending.pop((((data.get('message') or {}).get('source')) or {}).get('callId'), None)
+        if pending:
+            asking[session] = list(pending.values())[-1]
     return asking
 
 
@@ -342,7 +356,10 @@ def dsh_session_message_text(message: dict) -> str:
 
 def _question_text(entry) -> str:
     if isinstance(entry, str):
-        return entry
+        try:
+            entry = json.loads(entry)          # аргументы вызова приходят строкой JSON
+        except ValueError:
+            return entry
     if not isinstance(entry, dict):
         return 'вопрос'
     for key in ('question', 'title', 'prompt', 'text', 'header'):

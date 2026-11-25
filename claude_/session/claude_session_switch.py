@@ -185,11 +185,14 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
                      f"{_claude_session_switch_question(row['question'])}")
     # Моторы, чей хозяин закрыт или скрыт, — внизу, тусклым: иначе работа пропала бы с глаз.
     for orphan in claude_session_live_orphans(every):
+        # Та же сетка, что у строки сессии: крестика, радиокнопки, значка IDE и токенов нет —
+        # пустые клетки их ширины; «закрыта»/«скрыта» — в колонке состояния.
         name = _claude_session_switch_short(
-            f"{orphan['project'] or '—'}: {orphan['title'] or CLAUDE_SESSION_SWITCH_UNTITLED} ({orphan['state']})",
+            f"{orphan['project'] or '—'}: {orphan['title'] or CLAUDE_SESSION_SWITCH_UNTITLED}",
             CLAUDE_SESSION_SWITCH_NAME)
-        lines.append(f"\x1b[0m       \x1b[38;5;244m{name:<{CLAUDE_SESSION_SWITCH_NAME}}\x1b[0m  "
-                     f"{_claude_session_switch_agents(orphan['agents'])}")
+        lines.append(f"\x1b[0m      \x1b[38;5;244m {name:<{CLAUDE_SESSION_SWITCH_NAME}} \x1b[0m"
+                     f"{' ' * 7}\x1b[90m{orphan['state']:<8}\x1b[0m {' ' * 12} {' ' * 4}"
+                     f"  {_claude_session_switch_agents(orphan['agents'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
     return '\n'.join(lines)
