@@ -34,6 +34,9 @@ python -m text_.text_grammar apply site/index.html --fixes fixes.json --dry-run
 идёт **только внутри перечисленных выше мест**: тег, URL, имя класса, код JS
 не трогаются, даже если в них то же слово. `word` (по умолчанию да) — границы
 слова с учётом кириллицы и апострофа: `вопрос` не заденет `вопроси`.
+Замена экранируется по месту: в литерале JS — его кавычка и `\\`
+(прямой апостроф `зв'язує` в `'…'` иначе ломает весь скрипт — случилось
+на первом же прогоне), в атрибуте — его кавычка, в тексте HTML — `< > &`.
 Фраза, разорванная тегом (`без <b>всякій</b>`), одной заменой не найдётся —
 делите на части. Каждая правка печатает число попаданий; ноль — выход с
 кодом 1, чтобы молчаливый промах не прошёл.
@@ -190,8 +193,8 @@ def text_grammar_check(text: str, lang: str = "uk", url: str | None = None,
 
 # --- места с текстом в HTML -----------------------------------------------
 
-def _js_literals(src: str, base: int) -> list[tuple[int, int]]:
-    """Смещения (start, end) содержимого строковых литералов JS; комментарии пропускаются."""
+def _js_literals(src: str, base: int) -> list[tuple[int, int, str]]:
+    """Смещения (start, end, кавычка) содержимого строковых литералов JS; комментарии пропускаются."""
     spans, i, n = [], 0, len(src)
     while i < n:
         c = src[i]
@@ -209,7 +212,7 @@ def _js_literals(src: str, base: int) -> list[tuple[int, int]]:
                 elif c != "`" and src[j] == "\n":
                     break
                 j += 1
-            spans.append((base + i + 1, base + j))
+            spans.append((base + i + 1, base + j, c))
             i = j + 1
         else:
             i += 1
@@ -228,10 +231,10 @@ def text_grammar_regions(raw: str) -> list[dict]:
         pos = m.end()
         if m.group("js") is not None:
             block += 1
-            for s, e in _js_literals(m.group("js"), m.start("js")):
+            for s, e, q in _js_literals(m.group("js"), m.start("js")):
                 if CYR.search(raw[s:e]):
                     block += 1
-                    regions.append({"kind": "js", "start": s, "end": e, "block": block})
+                    regions.append({"kind": "js", "start": s, "end": e, "block": block, "quote": q})
             block += 1
             continue
         tag = (m.group("tag") or "").lower()
@@ -249,7 +252,8 @@ def text_grammar_regions(raw: str) -> list[dict]:
                     e = m.start("attrs") + a.end(g)
                     if CYR.search(raw[s:e]):
                         block += 1
-                        regions.append({"kind": "attr", "start": s, "end": e, "block": block})
+                        regions.append({"kind": "attr", "start": s, "end": e, "block": block,
+                                        "quote": '"' if g == 3 else "'"})
                         block += 1
     if pos < len(raw) and not skip:
         regions.append({"kind": "text", "start": pos, "end": len(raw), "block": block})
@@ -310,11 +314,26 @@ def text_grammar_file(path: str, lang: str = "uk", url: str | None = None,
 
 # --- правка ---------------------------------------------------------------
 
+def _escape_for(region: dict, to: str) -> str:
+    """Замена должна остаться тем же видом текста: кавычка литерала JS или атрибута её не закрывает."""
+    kind, q = region.get("kind"), region.get("quote")
+    if kind == "js":
+        to = to.replace("\\", "\\\\").replace(q, "\\" + q)
+        return to.replace("${", "\\${") if q == "`" else to
+    if kind == "attr":
+        return to.replace("&", "&amp;").replace("<", "&lt;").replace(q, "&quot;" if q == '"' else "&#39;")
+    return html_mod.escape(to, quote=False) if path_is_html(region) else to
+
+
+def path_is_html(region: dict) -> bool:
+    return region.get("html", True)
+
+
 def text_grammar_apply(path: str, fixes: list[dict], dry_run: bool = False) -> list[dict]:
     """Заменить from→to только в видимом тексте HTML (узлы, атрибуты, литералы JS); вернуть число попаданий на каждую правку."""
     raw = open(path, encoding="utf-8").read()
     regions = text_grammar_regions(raw) if path.endswith((".html", ".htm")) else \
-        [{"kind": "text", "start": 0, "end": len(raw)}]
+        [{"kind": "text", "start": 0, "end": len(raw), "html": False}]
     pats = []
     for f in fixes:
         variants = {f["from"], html_mod.escape(f["from"], quote=False)}
@@ -328,7 +347,8 @@ def text_grammar_apply(path: str, fixes: list[dict], dry_run: bool = False) -> l
         parts.append(raw[pos:r["start"]])
         seg = raw[r["start"]:r["end"]]
         for k, (f, pat) in enumerate(zip(fixes, pats)):
-            seg, n = pat.subn(lambda _m, to=f["to"]: to, seg)
+            to = _escape_for(r, f["to"])
+            seg, n = pat.subn(lambda _m, to=to: to, seg)
             counts[k] += n
         parts.append(seg)
         pos = r["end"]
