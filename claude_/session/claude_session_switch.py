@@ -147,7 +147,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.
         url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
         padded = _claude_session_switch_link(url, name, row['host'], row['pid'], row['job']) + padded[len(name):]
-        # Название — на тёмной плашке во всю колонку, как кнопка «＋»: видно, куда кликать;
+        # Название — на тёмной плашке во всю колонку, как кнопка «+»: видно, куда кликать;
         # по пробелу внутри слева и справа — отступы (сверху и снизу их в терминале нет).
         padded = f'\x1b[38;5;252;48;5;235m {padded} \x1b[0m'
         radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO, row['host'], row['pid'], row['job'])
