@@ -18,7 +18,9 @@ PYTHONPATH=. python -m claude_.session.claude_session_switch table [--rows N]
 import argparse
 import http.server
 import html
+import os
 import sys
+import time
 
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
 from claude_.session.claude_session_transcript import claude_session_transcript_title
@@ -28,6 +30,9 @@ from tmux_.tmux_ import tmux_focus
 # Адрес сервера переключения: только петля.
 CLAUDE_SESSION_SWITCH_HOST = '127.0.0.1'
 CLAUDE_SESSION_SWITCH_PORT = 8797
+
+# Журнал кликов: что пришло и чем кончилось — «клик ничего не сделал» разбирается по нему.
+CLAUDE_SESSION_SWITCH_LOG = '~/.cache/claude-session-switch.log'
 
 # Сколько строк таблицы в статусной строке.
 CLAUDE_SESSION_SWITCH_ROWS = 8
@@ -115,13 +120,24 @@ def _claude_session_switch_tokens(value: int) -> str:
     return f'{value / 1000:.0f}k' if value >= 1000 else str(value)
 
 
+def _claude_session_switch_log(line: str) -> None:
+    try:
+        with open(os.path.expanduser(CLAUDE_SESSION_SWITCH_LOG), 'a', encoding='utf-8') as handle:
+            handle.write(f"{time.strftime('%F %T')} {line}\n")
+    except OSError:
+        pass
+
+
 class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.path.startswith('/switch/'):
             self.send_response(404)
             self.end_headers()
             return
-        error = claude_session_switch_to(self.path[len('/switch/'):].strip('/'))
+        session_id = self.path[len('/switch/'):].strip('/')
+        error = claude_session_switch_to(session_id)
+        _claude_session_switch_log(f"{session_id} {self.headers.get('User-Agent', '-')[:60]} "
+                                   f"→ {error or 'переключено'}")
         if not error:
             self.send_response(204)
             self.end_headers()
