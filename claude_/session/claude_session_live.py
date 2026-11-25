@@ -20,6 +20,7 @@ import os
 from claude_.session.claude_session_tokens import claude_session_tokens
 from claude_.session.claude_session_transcript import claude_session_transcript_cwd
 from claude_.session.claude_session_host import claude_session_host
+from proc_.proc_ps import proc_ps_ancestors
 from dsh_.dsh_board import dsh_board_motors_busy
 from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
 from dsh_.dsh_session import dsh_session_asking
@@ -55,8 +56,9 @@ def claude_session_live_list() -> list:
         фоновой (`_claude_session_live_viewers`); нет — пусто;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
-        `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
-        и не в отсоединённом tmux (процесс жив, но смотреть его неоткуда).
+        `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет),
+        не в отсоединённом tmux (процесс жив, но смотреть его неоткуда) и не вложенный
+        запуск (`_claude_session_live_nested`).
     """
     rows = []
     for path in glob.glob(os.path.join(os.path.expanduser(CLAUDE_SESSION_LIVE_DIR), '*.json')):
@@ -71,7 +73,7 @@ def claude_session_live_list() -> list:
         status = data.get('status') or '?'
         rows.append({'sessionId': data['sessionId'], 'pid': pid,
                      'name': data.get('name') or data['sessionId'][:8], 'status': status,
-                     'kind': data.get('kind') or '',
+                     'kind': data.get('kind') or '', 'entrypoint': data.get('entrypoint') or '',
                      # ⚠ Вопрос виден только здесь: в транскрипт строку вопроса Claude Code
                      # дописывает вместе с ответом, пока она висит — её в файле нет.
                      'question': (data.get('waitingFor') or 'вопрос') if status == 'waiting' else '',
@@ -80,6 +82,7 @@ def claude_session_live_list() -> list:
     panes = tmux_panes()
     digest = claude_session_tokens(rows)
     attached = {pane['target'] for pane in panes if pane['attached']}
+    pids = {row['pid'] for row in rows}
     agents = _claude_session_live_agents()
     clients = tmux_clients() if panes else []
     for row in rows:
@@ -90,7 +93,8 @@ def claude_session_live_list() -> list:
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['title'] = (_claude_session_live_pane_title(row['pane'], panes)
                         or digest.get(row['sessionId'], {}).get('title', ''))
-        row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
+        row['visible'] = (row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
+                          and not _claude_session_live_nested(row, pids))
         tmux_session = row['pane'].split(':', 1)[0] if row['pane'] else ''
         row['host'] = claude_session_host(row['pid'], tmux_session, clients) if row['visible'] else ''
     _claude_session_live_viewers(rows)
@@ -185,6 +189,15 @@ def _claude_session_live_viewers(rows: list) -> None:
         row['job'] = job['sessionId']
         for key in ('status', 'question', 'tokens_in', 'tokens_out', 'window_pct', 'agents', 'updated'):
             row[key] = job[key]
+
+
+def _claude_session_live_nested(row: dict, pids: set) -> bool:
+    # Вложенный запуск — не сессия человека: Agent SDK (`entrypoint: sdk-py` — ревьюер
+    # заставы и т. п.) или процесс-потомок другой живой сессии. Иначе его панель находится
+    # по предкам — панель хозяина, и с ней заголовок: в таблице выходил двойник.
+    if row['entrypoint'].startswith('sdk'):
+        return True
+    return any(ancestor in pids for ancestor in proc_ps_ancestors(row['pid']))
 
 if __name__ == '__main__':
     for item in claude_session_live_list():
