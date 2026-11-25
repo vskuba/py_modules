@@ -17,7 +17,8 @@ import json
 import os
 
 from claude_.session.claude_session_tokens import claude_session_tokens
-from tmux_.tmux_ import tmux_pane_of_pid, tmux_panes
+from claude_.session.claude_session_host import claude_session_host
+from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 
 # Где сессии держат свои файлы.
 CLAUDE_SESSION_LIVE_DIR = '~/.claude/sessions'
@@ -32,6 +33,7 @@ def claude_session_live_list() -> list:
     Returns:
         `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens, pane, visible}]`;
         `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
+        `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
         и не в отсоединённом tmux (процесс жив, но смотреть его неоткуда).
@@ -55,11 +57,14 @@ def claude_session_live_list() -> list:
     panes = tmux_panes()
     digest = claude_session_tokens(rows)
     attached = {pane['target'] for pane in panes if pane['attached']}
+    clients = tmux_clients() if panes else []
     for row in rows:
         row['tokens'] = digest.get(row['sessionId'], {}).get('tokens', 0)
         row['title'] = digest.get(row['sessionId'], {}).get('title', '')
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
+        tmux_session = row['pane'].split(':', 1)[0] if row['pane'] else ''
+        row['host'] = claude_session_host(row['pid'], tmux_session, clients) if row['visible'] else ''
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
     return rows

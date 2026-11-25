@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import sys
 
+from proc_.proc_ps import proc_ps_ancestors
+
 # Сколько шагов вверх по родителям искать панель: дальше — уже не потомок панели.
 TMUX_PARENT_DEPTH = 12
 
@@ -51,14 +53,27 @@ def tmux_pane_of_pid(pid: int, panes: list = None) -> str:
         Цель `session:window.pane` или пустая строка, если процесс не в tmux.
     """
     by_pid = {row['pane_pid']: row['target'] for row in (tmux_panes() if panes is None else panes)}
-    current = int(pid)
-    for _ in range(TMUX_PARENT_DEPTH):
+    for current in [int(pid), *proc_ps_ancestors(pid, TMUX_PARENT_DEPTH)]:
         if current in by_pid:
             return by_pid[current]
-        current = _tmux_parent(current)
-        if current <= 1:
-            break
     return ''
+
+
+def tmux_clients() -> list:
+    """Подключённые клиенты tmux — окна терминалов, где tmux на экране, свежие сверху.
+
+    Returns:
+        `[{pid, name, session, activity}]`: `pid` — процесс клиента (его предки — терминал
+        или IDE, где он открыт), `session` — какую сессию tmux он показывает.
+    """
+    rows = []
+    for line in _tmux_run('list-clients', '-F',
+                          '#{client_pid}\t#{client_name}\t#{session_name}\t#{client_activity}').splitlines():
+        parts = line.split('\t')
+        if len(parts) == 4 and parts[0].isdigit():
+            rows.append({'pid': int(parts[0]), 'name': parts[1], 'session': parts[2],
+                         'activity': int(parts[3]) if parts[3].isdigit() else 0})
+    return sorted(rows, key=lambda row: -row['activity'])
 
 
 def tmux_focus(target: str) -> bool:
@@ -67,12 +82,11 @@ def tmux_focus(target: str) -> bool:
     Returns:
         True — переключено; False — нет клиента или нет такой цели.
     """
-    clients = _tmux_run('list-clients', '-F', '#{client_activity}\t#{client_name}').splitlines()
-    clients = sorted((line.split('\t') for line in clients if '\t' in line), reverse=True)
+    clients = tmux_clients()
     if not clients:
         return False
     session_window = target.rsplit('.', 1)[0]
-    ok = _tmux_ok('switch-client', '-c', clients[0][1], '-t', session_window)
+    ok = _tmux_ok('switch-client', '-c', clients[0]['name'], '-t', session_window)
     ok = _tmux_ok('select-window', '-t', session_window) and ok
     return _tmux_ok('select-pane', '-t', target) and ok
 
@@ -102,17 +116,6 @@ def _tmux_ok(*args) -> bool:
         return subprocess.run(['tmux', *args], capture_output=True, timeout=5).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
-
-
-def _tmux_parent(pid: int) -> int:
-    try:
-        with open(f'/proc/{pid}/stat', encoding='utf-8', errors='replace') as handle:
-            stat = handle.read()
-    except OSError:
-        return 0
-    # Имя процесса в скобках может содержать пробелы — поля считаются после последней «)».
-    fields = stat.rsplit(')', 1)[-1].split()
-    return int(fields[1]) if len(fields) > 1 and fields[1].isdigit() else 0
 
 
 if __name__ == '__main__':

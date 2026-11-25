@@ -10,7 +10,8 @@
 | `claude_/session/claude_session_live.py` | живые сессии из `~/.claude/sessions/<pid>.json`: имя, статус, вид, панель tmux |
 | `claude_/session/claude_session_tokens.py` | сводка сессии по транскрипту, с дочитыванием: токены и заголовок |
 | `claude_/session/claude_session_switch.py` | таблица со ссылками и сервер `GET /switch/<sessionId>` на `127.0.0.1:8797` |
-| `tmux_/tmux_.py` | панели tmux, панель процесса, вывести панель на экран |
+| `tmux_/tmux_.py` | панели и клиенты tmux, панель процесса, вывести панель на экран, новое окно |
+| `claude_/session/claude_session_host.py` | где видна сессия: PyCharm, PhpStorm, терминал — по предкам процесса |
 
 ```bash
 PYTHONPATH=. python -m claude_.session.claude_session_live                 # список
@@ -105,3 +106,10 @@ PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # с
   проверку `#{mouse_hyperlink}`; ссылка сервера сессий — tmux зовёт её `curl`-ом сам, мимо
   браузера; любой другой клик — как по умолчанию. ⚠ Вне tmux Ctrl+клик требует сам
   терминал JetBrains, и ссылка идёт через браузер.
+
+## 8. Колонка «где открыта»
+
+PyCharm, PhpStorm, … — `claude_/session/claude_session_host.py`: предки процесса сессии
+(`proc_ps_ancestors`), приложение — по пути исполняемого файла предка
+(`/snap/phpstorm/733/bin/phpstorm` → PhpStorm). ⚠ Сессия в tmux — потомок сервера tmux,
+не IDE: смотрятся предки **клиента** tmux её сессии (`tmux_clients`). Не узнано — «—».

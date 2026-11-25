@@ -43,6 +43,9 @@ CLAUDE_SESSION_SWITCH_ROWS = 8
 # Ширина колонки имени.
 CLAUDE_SESSION_SWITCH_NAME = 34
 
+# Ширина колонки «где открыта» (PyCharm, PhpStorm, …).
+CLAUDE_SESSION_SWITCH_HOST = 9
+
 # Радиокнопка строки: пустая у всех; своё окно статусная строка меняет на полную.
 CLAUDE_SESSION_SWITCH_RADIO = '○'
 
@@ -126,7 +129,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         padded = _claude_session_switch_link(url, name) + padded[len(name):]
         radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO)
         bg = ' bg' if row['kind'] == 'bg' else ''
-        lines.append(f"  {radio} {padded} {color}{state:<8}\x1b[0m "
+        host = f"\x1b[38;5;110m{(row['host'] or '—')[:CLAUDE_SESSION_SWITCH_HOST]:<{CLAUDE_SESSION_SWITCH_HOST}}\x1b[0m"
+        lines.append(f"  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_tokens(row['tokens']):>6}\x1b[90m{bg}\x1b[0m")
     if len(sessions) > rows:
         lines.append(f'  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')

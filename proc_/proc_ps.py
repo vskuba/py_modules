@@ -89,6 +89,21 @@ def proc_ps_stat(pid: int, root: str = '/proc') -> tuple:
     return info, None
 
 
+def proc_ps_ancestors(pid: int, depth: int = 16, root: str = '/proc') -> list:
+    """Цепочка предков процесса — от родителя вверх: кто его запустил (терминал, IDE, tmux).
+
+    Returns:
+        `[pid родителя, pid деда, …]` без init (1); процесс исчез — обрывается.
+    """
+    chain, current = [], int(pid)
+    for _ in range(depth):
+        current = _proc_ps_ppid(root, current)
+        if current <= 1 or current in chain:
+            break
+        chain.append(current)
+    return chain
+
+
 def proc_ps_tree(pid: int, root: str = '/proc') -> tuple:
     """Дерево потомков pid: кто породился от него — по PPID из `/proc/<pid>/stat`.
 
