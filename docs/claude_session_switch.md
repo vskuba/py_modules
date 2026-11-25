@@ -66,6 +66,7 @@ PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # с
 |--------|-----------|
 | `claude_/session/claude_session_transcript.py` | путь к транскрипту сессии |
 | `jetbrains_/jetbrains_tab.py` | `GET /api/claude-tab?title=…` во все IDE на портах 63342… — выбрать вкладку |
+| `gnome_/gnome_window.py` | вывести окно вперёд по заголовку — через расширение GNOME `claude-window@local` |
 
 - Вкладка ищется **по заголовку**: Claude Code ставит его в шапку вкладки сам. Связь с
   процессом не ищется намеренно — внутренности терминала меняются от версии к версии
@@ -248,3 +249,16 @@ tmux, `-p`, роли конвейера, без терминала, `CLAUDE_SHEL
   — на стороне `jetbrains_tab_select` (по списку вкладок плагина, сравнение по началу и
   концу вокруг «…»), плагину уходит точное имя найденной: правка без пересборки и
   перезапуска IDE.
+
+## 20. Окно другой IDE — вперёд (Wayland)
+
+На Wayland программа не может поднять ни своё окно, ни чужое: `ProjectUtil.focusProjectWindow`
+плагина выбирает вкладку, но окно другой IDE остаётся позади; окна IDE — родные Wayland,
+`xdotool` их не видит. Поднимает оболочка: расширение GNOME Shell `claude-window@local`
+(`claude-shell/gnome/`, D-Bus `Activate(заголовок, класс)`), вызов —
+`gnome_/gnome_window.py`. После выбора вкладки сервер поднимает окно с классом `jetbrains`
+и именем проекта в заголовке.
+
+- ⚠ Новое расширение оболочка на Wayland видит только после выхода из сеанса и входа
+  заново: `claude-shell/gnome/install.sh`, затем `gnome-extensions enable claude-window@local`.
+- Нет расширения — вкладка выбирается, окно остаётся на месте; отказа нет.

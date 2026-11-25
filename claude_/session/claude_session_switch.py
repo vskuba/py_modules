@@ -26,6 +26,7 @@ import urllib.parse
 from claude_.session.claude_session_close import claude_session_close_armed, claude_session_close_click
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
 from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
+from gnome_.gnome_window import gnome_window_activate
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus, tmux_pane_title, tmux_window_new
 
@@ -100,9 +101,9 @@ def claude_session_switch_to(session_id: str) -> str:
         # tmux во вкладке JetBrains: её шапка — заголовок текущей панели (`set-titles`),
         # и после переключения она уже его носит. Не нашлась — tmux не в IDE, это не отказ.
         time.sleep(CLAUDE_SESSION_SWITCH_TITLE_DELAY)
-        jetbrains_tab_select(tmux_pane_title(row['pane']) or title, project)
+        _claude_session_switch_raise(jetbrains_tab_select(tmux_pane_title(row['pane']) or title, project))
         return ''
-    if jetbrains_tab_select(title, project):
+    if _claude_session_switch_raise(jetbrains_tab_select(title, project)):
         return ''
     return (f"вкладки «{title}» нет ни в одной IDE с плагином Claude Tab Switch "
             f"и сессия «{row['name']}» не в tmux")
@@ -198,6 +199,15 @@ def _claude_session_switch_badge(host: str) -> str:
     letters, left, right = badge
     return (f'\x1b[1;38;5;16;48;5;{left}m {letters[0]}'
             f'\x1b[48;5;{right}m{letters[1]} \x1b[0m')
+
+
+def _claude_session_switch_raise(ide_project: str) -> str:
+    # Вкладка выбрана — окно IDE вперёд: на Wayland это может только оболочка, через
+    # расширение claude-window@local (`gnome_window_activate`). Заголовок окна IDE содержит
+    # имя проекта. Расширения нет — вкладка всё равно выбрана, окно остаётся, где было.
+    if ide_project:
+        gnome_window_activate(ide_project, 'jetbrains')
+    return ide_project
 
 
 def _claude_session_switch_project(name: str, project: str) -> str:
