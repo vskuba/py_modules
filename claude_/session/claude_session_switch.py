@@ -25,7 +25,7 @@ import urllib.parse
 
 from claude_.session.claude_session_close import claude_session_close_armed, claude_session_close_click
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
-from dsh_.dsh_motor_badge import dsh_motor_badge
+from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus, tmux_window_new
 
@@ -181,7 +181,7 @@ def _claude_session_switch_badge(host: str) -> str:
 
 def _claude_session_switch_ask(question: str) -> str:
     # Значок «сессия ждёт ответа» — сразу за именем: «?» на оранжевой плашке; нет — пробел.
-    return '\x1b[1;38;5;16;48;5;208m?\x1b[0m' if question else ' '
+    return dsh_motor_badge_ask() if question else ' '
 
 
 def _claude_session_switch_question(question: str) -> str:
@@ -220,7 +220,7 @@ def _claude_session_switch_agents(agents: list) -> str:
     # подписи там, здесь только «чьи». Последняя колонка — ширина своя. Нет — прочерк.
     if not agents:
         return '\x1b[90m–\x1b[0m'
-    return ' '.join(dsh_motor_badge(agent['motor'])
+    return ' '.join(dsh_motor_badge(agent['motor']) + (dsh_motor_badge_ask() if agent.get('question') else '')
                     for agent in sorted(agents, key=lambda agent: str(agent['motor'])))
 
 

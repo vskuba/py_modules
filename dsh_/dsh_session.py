@@ -101,6 +101,24 @@ def dsh_session_title(item: dict) -> str:
     return (((item.get('projections') or {}).get('values') or {}).get('title')) or ''
 
 
+def dsh_session_asking(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Карточки, которые стоят и ждут ответа человека: `{session: текст вопроса}`.
+
+    Субагент спросил (`ask_user_question`) — его работа на паузе, пока не ответят. Признак —
+    непустой `userQuestions.active` в проекциях карточки. Берётся из общего кэша списка
+    (`dsh_session_list`, не старше `DSH_SESSION_LIST_TTL`) — хост лишним вызовом не грузится,
+    поэтому вопрос виден с задержкой до минуты.
+    ⚠ Вид элемента `active` вживую не встречался: текст ищется по вероятным полям, не
+    нашёлся — «вопрос».
+    """
+    asking = {}
+    for item in dsh_session_list(base=base):
+        active = ((((item.get('projections') or {}).get('values') or {}).get('userQuestions')) or {}).get('active')
+        if active:
+            asking[item.get('sessionId') or ''] = _question_text(active[-1])
+    return asking
+
+
 def dsh_session_prompt(session: str, text: str, mode: str = 'queue', images: list = None, *,
                        base: str = DSH_API_ADDR_DEFAULT) -> dict:
     """Отправить текст в карточку — как строку, набранную человеком.
@@ -321,6 +339,23 @@ def dsh_session_message_text(message: dict) -> str:
 
 
 # ── детали реализации ──
+
+def _question_text(entry) -> str:
+    if isinstance(entry, str):
+        return entry
+    if not isinstance(entry, dict):
+        return 'вопрос'
+    for key in ('question', 'title', 'prompt', 'text', 'header'):
+        if isinstance(entry.get(key), str) and entry[key]:
+            return entry[key]
+    for key in ('questions', 'request', 'items'):
+        nested = entry.get(key)
+        if isinstance(nested, list) and nested:
+            return _question_text(nested[0])
+        if isinstance(nested, dict):
+            return _question_text(nested)
+    return 'вопрос'
+
 
 def _cache_path(base: str) -> str:
     home = os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT)

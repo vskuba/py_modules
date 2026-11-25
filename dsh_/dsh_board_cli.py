@@ -38,9 +38,9 @@ from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh
 from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_run
 from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
-from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
+from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_asking, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
-from dsh_.dsh_motor_badge import dsh_motor_badge
+from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
 from dsh_.dsh_working_log import dsh_working_log_link, dsh_working_log_write
 from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_land, dsh_worktree_new
 
@@ -129,6 +129,11 @@ def _run(args) -> int:
         status = dsh_board_motors_busy(base=base)
         if args.line:
             status['saving'] = dsh_saving_badge(args.session, base=base)
+            # Кто из работающих ждёт ответа человека — «?» за цифрой мотора.
+            try:
+                status['asking'] = dsh_session_asking(base=base)
+            except DshApiError:
+                status['asking'] = {}
             if args.links:
                 status['links'] = dsh_working_log_write(status['working'], args.links, base=base)
             return _print(args, status, _working_line)
@@ -484,7 +489,9 @@ def _working_line(status: dict) -> str:
              for row, part in zip(rows, parts)]
     # Номер мотора — значком перед подписью: тот же значок стоит в таблице сессий Claude
     # напротив хозяина работы.
-    parts = [f"{dsh_motor_badge(row.get('motor'))} {part}" for row, part in zip(rows, parts)]
+    asking = status.get('asking') or {}
+    parts = [f"{dsh_motor_badge(row.get('motor'))}{dsh_motor_badge_ask() if row['session'] in asking else ''} {part}"
+             for row, part in zip(rows, parts)]
     return f"{head}: {' · '.join(parts)}"
 
 

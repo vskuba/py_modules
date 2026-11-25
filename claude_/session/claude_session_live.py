@@ -20,6 +20,7 @@ from claude_.session.claude_session_tokens import claude_session_tokens
 from claude_.session.claude_session_host import claude_session_host
 from dsh_.dsh_board import dsh_board_motors_busy
 from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
+from dsh_.dsh_session import dsh_session_asking
 from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 
 # Где сессии держат свои файлы.
@@ -39,7 +40,8 @@ def claude_session_live_list() -> list:
         процент экономии субагентов: взвешенные токены / цена 1% окна её аккаунта);
         `None` — калибровки ещё нет;
         `agents` — субагенты DSH, работающие сейчас по заданиям этой сессии:
-        `[{motor, name}]` (мотор и подпись — как в строке «DSH 4/4: …»); хост DSH не
+        `[{motor, name, question}]` (мотор и подпись — как в строке «DSH 4/4: …»;
+        `question` — субагент стоит и ждёт ответа человека); хост DSH не
         отвечает — пусто у всех;
         `question` — вопрос `AskUserQuestion`, который ждёт ответа человека; нет — пусто;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
@@ -106,6 +108,7 @@ def _claude_session_live_agents() -> dict:
     # Хост лёг или медлит — колонка пустеет, таблица из-за него не ломается.
     try:
         working = dsh_board_motors_busy()['working']
+        asking = dsh_session_asking()
     except Exception:
         return {}
     agents = {}
@@ -114,6 +117,7 @@ def _claude_session_live_agents() -> dict:
         if owner:
             agents.setdefault(owner, []).append({
                 'motor': item.get('motor'),
+                'question': asking.get(item.get('session') or '', ''),
                 'name': item.get('goal') or item.get('title') or item.get('session')})
     return agents
 
