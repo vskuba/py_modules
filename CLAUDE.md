@@ -122,6 +122,7 @@ namespace-папок, которые проекты импортируют на�
 | `gpu_/gpu_vram.py` | `docs/gpu_vram.md` — видеопамять числами, держатели процессами; ⚠ GB10 по платам отдаёт нули |
 | `proc_/` | `docs/proc_mem.md` — память машины из /proc без колонок `free`, топ держателей по RSS |
 | `net_/net_port.py` | `docs/net_port.md` — порт свободен ли, дождаться занятия/освобождения; ⚠ `up` ≠ «сервис здоров» |
+| `claude_/session/`, `tmux_/tmux_.py` | `docs/claude_session_switch.md` — сессии Claude Code таблицей (статус, токены) и переключение кликом через tmux; ⚠ терминал JetBrains открывает только `http://`-ссылки |
 | `dsh_/dsh_api.py` | `docs/dsh_api.md` — метод хоста harness'а: cookie из секрета на диске, конверт, alive, GET/POST ручек плагинов; ⚠ `_request` с подчёркиванием |
 | `dsh_/dsh_session.py`, `dsh_/dsh_board.py`, `dsh_/dsh_board_cli.py`, `dsh_/dsh_worktree.py` | `docs/dsh_board.md` — агенты harness'а субагентами: карточки, промпт, ответ по `turn/end` журнала, раздача N задач, доска промптов и моторы (параллельные цепочки, по умолчанию 4); ⚠ журнал — `session/page` с засечкой `asOfSeq`, без вебсокета |
 | `text_/text_emoji.py` | `docs/text_emoji.md` — эмодзи, разобранные чужим кодом неверно: зовётся на границе входа; ⚠ греческий с цифрой вплотную |
