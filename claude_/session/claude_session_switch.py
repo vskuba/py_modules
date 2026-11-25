@@ -146,11 +146,11 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         # Ссылка — у каждой строки: сессия не в tmux на клик ответит страницей с причиной,
         # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.
         url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
-        padded = _claude_session_switch_link(url, name, row['host']) + padded[len(name):]
-        radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO, row['host'])
+        padded = _claude_session_switch_link(url, name, row['host'], row['pid']) + padded[len(name):]
+        radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO, row['host'], row['pid'])
         close = _claude_session_switch_link(url.replace('/switch/', '/close/'),
                                             _claude_session_switch_cross(row['sessionId'] in armed),
-                                            row['host'])
+                                            row['host'], row['pid'])
         bg = ' bg' if row['kind'] == 'bg' else ''
         host = _claude_session_switch_badge(row['host'])
         # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
@@ -198,10 +198,13 @@ def _claude_session_switch_cross(armed: bool) -> str:
     return '\x1b[1;97;41m✖\x1b[0m' if armed else '\x1b[1;38;5;242m✖\x1b[0m'
 
 
-def _claude_session_switch_link(url: str, text: str, host: str = '') -> str:
-    # `host=` — параметр ссылки OSC 8: на экран не выходит, а статусная строка окна по нему
-    # ставит вперёд сессии своей IDE. Разделители параметров (`;`, `:`) в имени недопустимы.
-    params = 'host=' + host.replace(' ', '_') if host else ''
+def _claude_session_switch_link(url: str, text: str, host: str = '', pid: int = 0) -> str:
+    # Параметры ссылки OSC 8 — на экран не выходят: `host=` — по нему окно ставит вперёд
+    # сессии своей IDE; `pid=` — по нему окно узнаёт свою строку. ⚠ Не по `sessionId`:
+    # после `/resume` внутри сессии Claude Code отдаёт статусной строке id нового разговора,
+    # а файл сессии хранит прежний; процесс же тот же. Разделители `;`, `:` в имени нельзя.
+    params = ':'.join(part for part in (f"host={host.replace(' ', '_')}" if host else '',
+                                         f'pid={pid}' if pid else '') if part)
     return f'\x1b]8;{params};{url}\x1b\\{text}\x1b]8;;\x1b\\'
 
 
