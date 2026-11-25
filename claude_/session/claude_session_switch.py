@@ -43,6 +43,9 @@ CLAUDE_SESSION_SWITCH_ROWS = 8
 # Ширина колонки имени.
 CLAUDE_SESSION_SWITCH_NAME = 34
 
+# Ширина подписи одного субагента в колонке субагентов (как в строке «DSH 4/4: …»).
+CLAUDE_SESSION_SWITCH_AGENT = 28
+
 # Значок приложения, где открыта сессия, — как логотип JetBrains: две буквы на плашке с
 # переходом двух фирменных цветов (256-цветная палитра; картинок статусная строка не
 # показывает). Ширина — 4 клетки у всех, чтобы колонка не плыла.
@@ -142,7 +145,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
         lines.append(f"\x1b[0m  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_spent(row['tokens_in'], row['tokens_out'])} "
-                     f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m")
+                     f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m"
+                     f"  {_claude_session_switch_agents(row['agents'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
     return '\n'.join(lines)
@@ -179,6 +183,16 @@ def _claude_session_switch_spent(tokens_in: int, tokens_out: int) -> str:
     # «вход/выход»: вход голубым, выход оранжевым; ширины постоянные — колонка не плывёт.
     return (f"\x1b[38;5;117m{_claude_session_switch_tokens(tokens_in):>6}\x1b[90m/"
             f"\x1b[38;5;215m{_claude_session_switch_tokens(tokens_out):<5}\x1b[0m")
+
+
+def _claude_session_switch_agents(agents: list) -> str:
+    # Субагенты DSH этой сессии — как в строке «DSH 4/4: …», тем же лиловым; последняя
+    # колонка, потому что ширина у неё своя. Нет — серый прочерк.
+    if not agents:
+        return '\x1b[90m–\x1b[0m'
+    names = ' · '.join(_claude_session_switch_short(name, CLAUDE_SESSION_SWITCH_AGENT) for name in agents)
+    count = f'{len(agents)}: ' if len(agents) > 1 else ''
+    return f'\x1b[35m{count}{names}\x1b[0m'
 
 
 def _claude_session_switch_pct(pct) -> str:

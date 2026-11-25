@@ -18,7 +18,8 @@ import os
 
 from claude_.session.claude_session_tokens import claude_session_tokens
 from claude_.session.claude_session_host import claude_session_host
-from dsh_.dsh_saving import dsh_saving_calibrate
+from dsh_.dsh_board import dsh_board_motors_busy
+from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
 from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 
 # Где сессии держат свои файлы.
@@ -32,11 +33,13 @@ def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, pane, visible}]`;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, pane, visible}]`;
         `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
         `window_pct` — сколько процентов 5-часового окна подписки обошлась сессия (как
         процент экономии субагентов: взвешенные токены / цена 1% окна её аккаунта);
         `None` — калибровки ещё нет;
+        `agents` — подписи субагентов DSH, работающих сейчас по заданиям этой сессии
+        (как в строке «DSH 4/4: …»); хост DSH не отвечает — пусто у всех;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
@@ -61,10 +64,12 @@ def claude_session_live_list() -> list:
     panes = tmux_panes()
     digest = claude_session_tokens(rows)
     attached = {pane['target'] for pane in panes if pane['attached']}
+    agents = _claude_session_live_agents()
     clients = tmux_clients() if panes else []
     for row in rows:
         row['tokens_in'] = digest.get(row['sessionId'], {}).get('tokens_in', 0)
         row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
+        row['agents'] = agents.get(row['sessionId'], [])
         row['window_pct'] = _claude_session_live_pct(row['sessionId'], digest.get(row['sessionId'], {}))
         row['title'] = digest.get(row['sessionId'], {}).get('title', '')
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
@@ -91,6 +96,21 @@ def _claude_session_live_pct(session_id: str, digest: dict):
     if not per_pct or not digest.get('units'):
         return None
     return digest['units'] / per_pct
+
+
+def _claude_session_live_agents() -> dict:
+    # Занятые моторы DSH и чья это работа: хозяин карточки — сессия Claude, что её завела.
+    # Хост лёг или медлит — колонка пустеет, таблица из-за него не ломается.
+    try:
+        working = dsh_board_motors_busy()['working']
+    except Exception:
+        return {}
+    agents = {}
+    for item in working:
+        owner = dsh_saving_owner_of(item.get('session') or '')
+        if owner:
+            agents.setdefault(owner, []).append(item.get('goal') or item.get('title') or item.get('session'))
+    return agents
 
 if __name__ == '__main__':
     for item in claude_session_live_list():

@@ -76,6 +76,11 @@ def dsh_saving_owner_mark(session: str, owner: str = None) -> None:
     _json_write(_dsh_home(DSH_SAVING_OWNERS), owners)
 
 
+def dsh_saving_owner_of(session: str) -> str:
+    """Сессия Claude Code, которая завела карточку субагента (`dsh_saving_owner_mark`); нет — пусто."""
+    return str((_owners_read().get(_key(session)) or {}).get('owner') or '')
+
+
 def dsh_saving_sent(session: str, text: str) -> None:
     """Учесть промпт, отправленный карточке: его длина — расход оркестратора на делегирование."""
     owners = _owners_read()
