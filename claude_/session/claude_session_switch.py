@@ -138,10 +138,12 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO)
         bg = ' bg' if row['kind'] == 'bg' else ''
         host = _claude_session_switch_badge(row['host'])
-        lines.append(f"  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
+        # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
+        # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
+        lines.append(f"\x1b[0m  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_tokens(row['tokens']):>6}\x1b[90m{bg}\x1b[0m")
     if len(sessions) > rows:
-        lines.append(f'  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
+        lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
     return '\n'.join(lines)
 
 
