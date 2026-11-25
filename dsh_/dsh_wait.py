@@ -62,6 +62,18 @@ def dsh_wait_marks(owner: str) -> dict:
             if isinstance(row, dict) and row.get('owner') == owner and row.get('at', 0) > edge}
 
 
+def dsh_wait_owner_of(session: str) -> str:
+    """Сессия, которая сейчас ждёт ответа карточки (последней дала ей задание `ask`); нет
+    свежей метки — пусто.
+
+    ⚠ Не то же, что `dsh_saving_owner_of` («кто завёл»): другая сессия может отправить
+    карточке новое задание — тогда ответ её, а заводила прежняя.
+    """
+    row = _read().get(_key(session))
+    edge = time.time() - DSH_WAIT_MAX_AGE
+    return str(row.get('owner') or '') if isinstance(row, dict) and row.get('at', 0) > edge else ''
+
+
 def dsh_wait_key(session: str) -> str:
     """Ключ карточки в метках и во «входящих»: id без суффикса поколения (`-gN`).
 

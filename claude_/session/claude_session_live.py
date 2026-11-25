@@ -24,6 +24,7 @@ from proc_.proc_ps import proc_ps_ancestors
 from dsh_.dsh_board import dsh_board_motors_busy
 from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
 from dsh_.dsh_session import dsh_session_asking
+from dsh_.dsh_wait import dsh_wait_owner_of
 from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 
 # Где сессии держат свои файлы.
@@ -157,7 +158,8 @@ def _claude_session_live_agents() -> dict:
         return {}
     agents = {}
     for item in working:
-        owner = dsh_saving_owner_of(item.get('session') or '')
+        # Хозяин — кто сейчас ждёт ответа (последним дал задание), иначе — кто завёл карточку.
+        owner = dsh_wait_owner_of(item.get('session') or '') or dsh_saving_owner_of(item.get('session') or '')
         if owner:
             agents.setdefault(owner, []).append({
                 'motor': item.get('motor'),
