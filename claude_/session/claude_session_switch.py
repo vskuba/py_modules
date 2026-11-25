@@ -141,7 +141,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
         # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
         lines.append(f"\x1b[0m  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
-                     f"{_claude_session_switch_tokens(row['tokens']):>6}\x1b[90m{bg}\x1b[0m")
+                     f"{_claude_session_switch_spent(row['tokens_in'], row['tokens_out'])}\x1b[90m{bg}\x1b[0m")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
     return '\n'.join(lines)
@@ -172,6 +172,12 @@ def _claude_session_switch_link(url: str, text: str, host: str = '') -> str:
 def _claude_session_switch_short(text: str, limit: int) -> str:
     text = ' '.join(str(text).split())
     return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def _claude_session_switch_spent(tokens_in: int, tokens_out: int) -> str:
+    # «вход/выход»: вход голубым, выход оранжевым; ширины постоянные — колонка не плывёт.
+    return (f"\x1b[38;5;117m{_claude_session_switch_tokens(tokens_in):>6}\x1b[90m/"
+            f"\x1b[38;5;215m{_claude_session_switch_tokens(tokens_out):<5}\x1b[0m")
 
 
 def _claude_session_switch_tokens(value: int) -> str:

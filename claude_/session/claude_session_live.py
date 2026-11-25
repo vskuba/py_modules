@@ -31,7 +31,7 @@ def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens, pane, visible}]`;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, pane, visible}]`;
         `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
@@ -59,7 +59,8 @@ def claude_session_live_list() -> list:
     attached = {pane['target'] for pane in panes if pane['attached']}
     clients = tmux_clients() if panes else []
     for row in rows:
-        row['tokens'] = digest.get(row['sessionId'], {}).get('tokens', 0)
+        row['tokens_in'] = digest.get(row['sessionId'], {}).get('tokens_in', 0)
+        row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
         row['title'] = digest.get(row['sessionId'], {}).get('title', '')
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
@@ -81,4 +82,4 @@ def claude_session_live_find(session_id: str) -> dict:
 if __name__ == '__main__':
     for item in claude_session_live_list():
         print(f"{'●' if item['status'] == 'busy' else '○'} {item['name'][:34]:<34} {item['status']:<6} "
-              f"{item['tokens']:>10,}  {item['pane'] or '—'}")
+              f"{item['tokens_in']:>10,} / {item['tokens_out']:<8,} {item['pane'] or '—'}")
