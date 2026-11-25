@@ -112,4 +112,8 @@ PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # с
 PyCharm, PhpStorm, … — `claude_/session/claude_session_host.py`: предки процесса сессии
 (`proc_ps_ancestors`), приложение — по пути исполняемого файла предка
 (`/snap/phpstorm/733/bin/phpstorm` → PhpStorm). ⚠ Сессия в tmux — потомок сервера tmux,
-не IDE: смотрятся предки **клиента** tmux её сессии (`tmux_clients`). Не узнано — «—».
+не IDE: смотрятся предки **клиента** tmux её сессии (`tmux_clients`).
+
+В таблице приложение — **значком** под логотип JetBrains: две буквы на плашке с переходом
+двух фирменных цветов (PyCharm — `PC` зелёный→жёлтый, PhpStorm — `PS` фиолетовый→розовый);
+картинок статусная строка не показывает. Не узнано — серое `··`.

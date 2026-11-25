@@ -43,8 +43,16 @@ CLAUDE_SESSION_SWITCH_ROWS = 8
 # Ширина колонки имени.
 CLAUDE_SESSION_SWITCH_NAME = 34
 
-# Ширина колонки «где открыта» (PyCharm, PhpStorm, …).
-CLAUDE_SESSION_SWITCH_HOST = 9
+# Значок приложения, где открыта сессия, — как логотип JetBrains: две буквы на плашке с
+# переходом двух фирменных цветов (256-цветная палитра; картинок статусная строка не
+# показывает). Ширина — 4 клетки у всех, чтобы колонка не плыла.
+_CLAUDE_SESSION_SWITCH_BADGE = {
+    'PyCharm': ('PC', 35, 220), 'PhpStorm': ('PS', 99, 205), 'GoLand': ('GO', 33, 135),
+    'WebStorm': ('WS', 45, 33), 'IDEA': ('IJ', 205, 208), 'Rider': ('RD', 208, 161),
+    'CLion': ('CL', 41, 33), 'RustRover': ('RR', 208, 45), 'VS Code': ('VS', 33, 39),
+    'Cursor': ('CU', 245, 252), 'Терминал': ('>_', 240, 244), 'Konsole': ('>_', 240, 244),
+    'kitty': ('>_', 240, 244), 'Alacritty': ('>_', 240, 244), 'WezTerm': ('>_', 240, 244),
+}
 
 # Радиокнопка строки: пустая у всех; своё окно статусная строка меняет на полную.
 CLAUDE_SESSION_SWITCH_RADIO = '○'
@@ -129,7 +137,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         padded = _claude_session_switch_link(url, name) + padded[len(name):]
         radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO)
         bg = ' bg' if row['kind'] == 'bg' else ''
-        host = f"\x1b[38;5;110m{(row['host'] or '—')[:CLAUDE_SESSION_SWITCH_HOST]:<{CLAUDE_SESSION_SWITCH_HOST}}\x1b[0m"
+        host = _claude_session_switch_badge(row['host'])
         lines.append(f"  {radio} {padded} {host} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_tokens(row['tokens']):>6}\x1b[90m{bg}\x1b[0m")
     if len(sessions) > rows:
@@ -141,6 +149,15 @@ def claude_session_switch_serve(port: int = CLAUDE_SESSION_SWITCH_PORT) -> None:
     """Поднять сервер переключения на петле: `GET /switch/<sessionId>`, `GET /new?cwd=…`."""
     http.server.ThreadingHTTPServer((CLAUDE_SESSION_SWITCH_HOST, port),
                                     _ClaudeSessionSwitchHandler).serve_forever()
+
+
+def _claude_session_switch_badge(host: str) -> str:
+    badge = _CLAUDE_SESSION_SWITCH_BADGE.get(host)
+    if not badge:
+        return '\x1b[90m ·· \x1b[0m'
+    letters, left, right = badge
+    return (f'\x1b[1;38;5;16;48;5;{left}m {letters[0]}'
+            f'\x1b[48;5;{right}m{letters[1]} \x1b[0m')
 
 
 def _claude_session_switch_link(url: str, text: str) -> str:
