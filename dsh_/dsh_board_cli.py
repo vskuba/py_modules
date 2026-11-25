@@ -40,6 +40,7 @@ from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
+from dsh_.dsh_working_log import dsh_working_log_link, dsh_working_log_write
 from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_land, dsh_worktree_new
 
 
@@ -127,6 +128,8 @@ def _run(args) -> int:
         status = dsh_board_motors_busy(base=base)
         if args.line:
             status['saving'] = dsh_saving_badge(args.session, base=base)
+            if args.links:
+                status['links'] = dsh_working_log_write(status['working'], args.links, base=base)
             return _print(args, status, _working_line)
         return _print(args, status['working'], _working_text)
 
@@ -321,6 +324,8 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     working.add_argument('--line', action='store_true', help='одной строкой — для статусной строки')
     working.add_argument('--session', default='', metavar='ID',
                          help='сессия Claude Code: к строке — её экономия «(-5%%)»')
+    working.add_argument('--links', default='', metavar='КАТАЛОГ',
+                         help='с --line: журнал карточки файлом в КАТАЛОГ и ссылка OSC 8 на него')
     mode = command('mode', 'режим работы с субагентами: high (умолчание), free, off')
     mode.add_argument('mode', nargs='?', choices=DSH_MODE_ALL, help='новый режим; без него — показать')
     mode.add_argument('--session', default='', help='сессия Claude Code (иначе CLAUDE_CODE_SESSION_ID)')
@@ -472,7 +477,10 @@ def _working_line(status: dict) -> str:
         head += f" {status['saving']}"
     if not rows:
         return head
+    links = status.get('links') or {}
     parts = [_short(row['goal'] or row['title'] or row['session'], 28) for row in rows]
+    parts = [dsh_working_log_link(links[row['session']], part) if row['session'] in links else part
+             for row, part in zip(rows, parts)]
     return f"{head}: {' · '.join(parts)}"
 
 
