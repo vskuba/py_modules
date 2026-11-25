@@ -33,7 +33,7 @@ def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, pane, visible}]`;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, question, pane, visible}]`;
         `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
         `window_pct` — сколько процентов 5-часового окна подписки обошлась сессия (как
         процент экономии субагентов: взвешенные токены / цена 1% окна её аккаунта);
@@ -41,6 +41,7 @@ def claude_session_live_list() -> list:
         `agents` — субагенты DSH, работающие сейчас по заданиям этой сессии:
         `[{motor, name}]` (мотор и подпись — как в строке «DSH 4/4: …»); хост DSH не
         отвечает — пусто у всех;
+        `question` — вопрос `AskUserQuestion`, который ждёт ответа человека; нет — пусто;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
@@ -70,6 +71,7 @@ def claude_session_live_list() -> list:
     for row in rows:
         row['tokens_in'] = digest.get(row['sessionId'], {}).get('tokens_in', 0)
         row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
+        row['question'] = digest.get(row['sessionId'], {}).get('question', '')
         row['agents'] = agents.get(row['sessionId'], [])
         row['window_pct'] = _claude_session_live_pct(row['sessionId'], digest.get(row['sessionId'], {}))
         row['title'] = digest.get(row['sessionId'], {}).get('title', '')

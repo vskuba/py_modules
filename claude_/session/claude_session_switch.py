@@ -48,6 +48,9 @@ CLAUDE_SESSION_SWITCH_ROWS = 8
 # Ширина колонки имени.
 CLAUDE_SESSION_SWITCH_NAME = 34
 
+# Сколько знаков вопроса сессии показывать в конце строки.
+CLAUDE_SESSION_SWITCH_QUESTION = 60
+
 # Значок приложения, где открыта сессия, — как логотип JetBrains: две буквы на плашке с
 # переходом двух фирменных цветов (256-цветная палитра; картинок статусная строка не
 # показывает). Ширина — 4 клетки у всех, чтобы колонка не плыла.
@@ -151,10 +154,11 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         host = _claude_session_switch_badge(row['host'])
         # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
         # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
-        lines.append(f"\x1b[0m {close} {radio} {padded} {host} {color}{state:<8}\x1b[0m "
+        lines.append(f"\x1b[0m {close}  {radio} {padded}{_claude_session_switch_ask(row['question'])} {host} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_spent(row['tokens_in'], row['tokens_out'])} "
                      f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m"
-                     f"  {_claude_session_switch_agents(row['agents'])}")
+                     f"  {_claude_session_switch_agents(row['agents'])}"
+                     f"{_claude_session_switch_question(row['question'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
     return '\n'.join(lines)
@@ -175,9 +179,22 @@ def _claude_session_switch_badge(host: str) -> str:
             f'\x1b[48;5;{right}m{letters[1]} \x1b[0m')
 
 
+def _claude_session_switch_ask(question: str) -> str:
+    # Значок «сессия ждёт ответа» — сразу за именем: «?» на оранжевой плашке; нет — пробел.
+    return '\x1b[1;38;5;16;48;5;208m?\x1b[0m' if question else ' '
+
+
+def _claude_session_switch_question(question: str) -> str:
+    # Текст вопроса — в конце строки, оранжевым: ширина у него своя.
+    if not question:
+        return ''
+    return f"  \x1b[38;5;208m{_claude_session_switch_short(question, CLAUDE_SESSION_SWITCH_QUESTION)}\x1b[0m"
+
+
 def _claude_session_switch_cross(armed: bool) -> str:
-    # «✕» закрытия: тусклый в покое, белый на красном — взведён, ждёт второго клика.
-    return '\x1b[1;97;41m✕\x1b[0m' if armed else '\x1b[38;5;239m✕\x1b[0m'
+    # «✖» закрытия (жирный — крупнее тонкого ✕): тусклый в покое, белый на красном —
+    # взведён, ждёт второго клика.
+    return '\x1b[1;97;41m✖\x1b[0m' if armed else '\x1b[1;38;5;242m✖\x1b[0m'
 
 
 def _claude_session_switch_link(url: str, text: str, host: str = '') -> str:
