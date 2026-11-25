@@ -23,15 +23,28 @@ JETBRAINS_TAB_PORT = 63342
 JETBRAINS_TAB_PORTS = 10
 
 
-def jetbrains_tab_select(title: str) -> str:
+def jetbrains_tab_select(title: str, project: str = '') -> str:
     """Выбрать вкладку терминала с этим заголовком в той IDE, где она открыта.
+
+    Сопоставление — здесь, по списку вкладок плагина, а плагину уходит точное имя найденной:
+    так оно правится без пересборки плагина и перезапуска IDE.
+
+    Args:
+        project: проект сессии (имя папки) — среди одинаковых вкладок («Claude Code» у всех
+            свежих сессий) берётся вкладка этого проекта.
+
+    ⚠ Шапку вкладки сокращают и **посередине** («Площадки для…ажи IT-проектов») — сравнение
+    по началу и концу вокруг «…».
 
     Returns:
         Имя проекта, где вкладка нашлась и выбрана; пусто — ни в одной IDE её нет.
     """
-    query = urllib.parse.urlencode({'title': title})
-    for port in _jetbrains_tab_ports():
-        answer = _jetbrains_tab_get(port, f'/api/claude-tab?{query}')
+    want = _jetbrains_tab_norm(title)
+    found = [tab for tab in jetbrains_tab_list() if _jetbrains_tab_match(_jetbrains_tab_norm(tab['title']), want)]
+    found.sort(key=lambda tab: tab['project'] != project)
+    for tab in found:
+        query = urllib.parse.urlencode({'title': tab['title']})
+        answer = _jetbrains_tab_get(tab['port'], f'/api/claude-tab?{query}')
         if answer.startswith('selected '):
             return answer[len('selected '):]
     return ''
@@ -63,6 +76,26 @@ def jetbrains_tab_list() -> list:
             project, _, title = line.partition('\t')
             rows.append({'port': port, 'project': project, 'title': title})
     return rows
+
+
+def _jetbrains_tab_norm(text: str) -> str:
+    # Без значков Claude Code в начале (✳, крутилка) и пробелов по краям.
+    text = text or ''
+    start = 0
+    while start < len(text) and not text[start].isalnum():
+        start += 1
+    return text[start:].strip()
+
+
+def _jetbrains_tab_match(tab: str, want: str) -> bool:
+    if not tab or not want:
+        return False
+    if tab == want:
+        return True
+    if '…' not in tab:
+        return False
+    head, tail = tab.split('…', 1)
+    return len(head) + len(tail) >= 6 and want.startswith(head) and want.endswith(tail)
 
 
 def _jetbrains_tab_ports() -> range:

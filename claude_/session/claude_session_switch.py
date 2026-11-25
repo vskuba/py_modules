@@ -27,7 +27,7 @@ from claude_.session.claude_session_close import claude_session_close_armed, cla
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
 from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
-from tmux_.tmux_ import tmux_focus, tmux_window_new
+from tmux_.tmux_ import tmux_focus, tmux_pane_title, tmux_window_new
 
 # Адрес сервера переключения: только петля.
 CLAUDE_SESSION_SWITCH_HOST = '127.0.0.1'
@@ -90,19 +90,19 @@ def claude_session_switch_to(session_id: str) -> str:
     row = claude_session_live_find(session_id)
     if not row:
         return f'сессии {session_id} нет среди живых'
-    title = row['title']
+    # Шапка вкладки — та, что стоит сейчас: у сессии без заголовка Claude Code пишет «Claude
+    # Code»; среди одинаковых вкладок берётся вкладка проекта сессии.
+    title = row['title'] or 'Claude Code'
+    project = os.path.basename(row['cwd'].rstrip('/'))
     if row['pane']:
         if not tmux_focus(row['pane']):
             return f"tmux не переключил на {row['pane']}: нет подключённого клиента?"
         # tmux во вкладке JetBrains: её шапка — заголовок текущей панели (`set-titles`),
         # и после переключения она уже его носит. Не нашлась — tmux не в IDE, это не отказ.
-        if title:
-            time.sleep(CLAUDE_SESSION_SWITCH_TITLE_DELAY)
-            jetbrains_tab_select(title)
+        time.sleep(CLAUDE_SESSION_SWITCH_TITLE_DELAY)
+        jetbrains_tab_select(tmux_pane_title(row['pane']) or title, project)
         return ''
-    if not title:
-        return f"у сессии «{row['name']}» нет заголовка — вкладку не по чему искать"
-    if jetbrains_tab_select(title):
+    if jetbrains_tab_select(title, project):
         return ''
     return (f"вкладки «{title}» нет ни в одной IDE с плагином Claude Tab Switch "
             f"и сессия «{row['name']}» не в tmux")

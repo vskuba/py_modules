@@ -114,6 +114,11 @@ def tmux_window_new(session: str, cwd: str, command: list, name: str = '') -> bo
     return _tmux_ok(*args, *command)
 
 
+def tmux_pane_title(target: str) -> str:
+    """Заголовок панели сейчас — как его поставила программа в ней; нет панели — пусто."""
+    return _tmux_run('display-message', '-p', '-t', target, '#{pane_title}').strip()
+
+
 def tmux_pane_kill(target: str) -> bool:
     """Закрыть панель tmux вместе с её программой (SIGHUP всему, что в ней); окно без панелей
     закрывается само."""
