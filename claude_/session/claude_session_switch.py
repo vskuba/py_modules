@@ -24,6 +24,7 @@ import time
 import urllib.parse
 
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
+from dsh_.dsh_motor_badge import dsh_motor_badge
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus, tmux_window_new
 
@@ -42,9 +43,6 @@ CLAUDE_SESSION_SWITCH_ROWS = 8
 
 # Ширина колонки имени.
 CLAUDE_SESSION_SWITCH_NAME = 34
-
-# Ширина подписи одного субагента в колонке субагентов (как в строке «DSH 4/4: …»).
-CLAUDE_SESSION_SWITCH_AGENT = 28
 
 # Значок приложения, где открыта сессия, — как логотип JetBrains: две буквы на плашке с
 # переходом двух фирменных цветов (256-цветная палитра; картинок статусная строка не
@@ -186,13 +184,12 @@ def _claude_session_switch_spent(tokens_in: int, tokens_out: int) -> str:
 
 
 def _claude_session_switch_agents(agents: list) -> str:
-    # Субагенты DSH этой сессии — как в строке «DSH 4/4: …», тем же лиловым; последняя
-    # колонка, потому что ширина у неё своя. Нет — серый прочерк.
+    # Субагенты DSH этой сессии — значками их моторов, теми же, что в строке «DSH 4/4: …»:
+    # подписи там, здесь только «чьи». Последняя колонка — ширина своя. Нет — прочерк.
     if not agents:
         return '\x1b[90m–\x1b[0m'
-    names = ' · '.join(_claude_session_switch_short(name, CLAUDE_SESSION_SWITCH_AGENT) for name in agents)
-    count = f'{len(agents)}: ' if len(agents) > 1 else ''
-    return f'\x1b[35m{count}{names}\x1b[0m'
+    return ' '.join(dsh_motor_badge(agent['motor'])
+                    for agent in sorted(agents, key=lambda agent: str(agent['motor'])))
 
 
 def _claude_session_switch_pct(pct) -> str:

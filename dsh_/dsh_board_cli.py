@@ -40,6 +40,7 @@ from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, \
     dsh_session_cancel, dsh_session_dialog, dsh_session_find
+from dsh_.dsh_motor_badge import dsh_motor_badge
 from dsh_.dsh_working_log import dsh_working_log_link, dsh_working_log_write
 from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_land, dsh_worktree_new
 
@@ -471,7 +472,7 @@ def _working_text(rows: list) -> str:
 
 def _working_line(status: dict) -> str:
     """`DSH 0/4` в простое, `DSH 2/4: ревью dsh_board · Часовая сверка…` в работе."""
-    rows = status['working']
+    rows = sorted(status['working'], key=lambda row: str(row.get('motor')))
     head = f"DSH {len(rows)}/{status['capacity']}"
     if status.get('saving'):
         head += f" {status['saving']}"
@@ -481,6 +482,9 @@ def _working_line(status: dict) -> str:
     parts = [_short(row['goal'] or row['title'] or row['session'], 28) for row in rows]
     parts = [dsh_working_log_link(links[row['session']], part) if row['session'] in links else part
              for row, part in zip(rows, parts)]
+    # Номер мотора — значком перед подписью: тот же значок стоит в таблице сессий Claude
+    # напротив хозяина работы.
+    parts = [f"{dsh_motor_badge(row.get('motor'))} {part}" for row, part in zip(rows, parts)]
     return f"{head}: {' · '.join(parts)}"
 
 

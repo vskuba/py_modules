@@ -38,8 +38,9 @@ def claude_session_live_list() -> list:
         `window_pct` — сколько процентов 5-часового окна подписки обошлась сессия (как
         процент экономии субагентов: взвешенные токены / цена 1% окна её аккаунта);
         `None` — калибровки ещё нет;
-        `agents` — подписи субагентов DSH, работающих сейчас по заданиям этой сессии
-        (как в строке «DSH 4/4: …»); хост DSH не отвечает — пусто у всех;
+        `agents` — субагенты DSH, работающие сейчас по заданиям этой сессии:
+        `[{motor, name}]` (мотор и подпись — как в строке «DSH 4/4: …»); хост DSH не
+        отвечает — пусто у всех;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
@@ -109,7 +110,9 @@ def _claude_session_live_agents() -> dict:
     for item in working:
         owner = dsh_saving_owner_of(item.get('session') or '')
         if owner:
-            agents.setdefault(owner, []).append(item.get('goal') or item.get('title') or item.get('session'))
+            agents.setdefault(owner, []).append({
+                'motor': item.get('motor'),
+                'name': item.get('goal') or item.get('title') or item.get('session')})
     return agents
 
 if __name__ == '__main__':
