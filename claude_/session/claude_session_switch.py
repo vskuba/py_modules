@@ -46,10 +46,10 @@ CLAUDE_SESSION_SWITCH_LOG = '~/.cache/claude-session-switch.log'
 CLAUDE_SESSION_SWITCH_ROWS = 8
 
 # Ширина колонки имени.
-CLAUDE_SESSION_SWITCH_NAME = 40
+CLAUDE_SESSION_SWITCH_NAME = 80
 
 # Сколько знаков имени проекта перед заголовком.
-CLAUDE_SESSION_SWITCH_PROJECT = 16
+CLAUDE_SESSION_SWITCH_PROJECT = 32
 
 # Название свежей сессии, пока Claude Code не дал ей заголовок.
 CLAUDE_SESSION_SWITCH_UNTITLED = 'Новая сессия'
