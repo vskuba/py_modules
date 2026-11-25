@@ -24,7 +24,6 @@ import time
 import urllib.parse
 
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
-from claude_.session.claude_session_transcript import claude_session_transcript_title
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus, tmux_window_new
 
@@ -65,7 +64,7 @@ def claude_session_switch_to(session_id: str) -> str:
     row = claude_session_live_find(session_id)
     if not row:
         return f'сессии {session_id} нет среди живых'
-    title = claude_session_transcript_title(row['sessionId'], row['cwd'])
+    title = row['title']
     if row['pane']:
         if not tmux_focus(row['pane']):
             return f"tmux не переключил на {row['pane']}: нет подключённого клиента?"
@@ -118,7 +117,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     lines = []
     for row in sessions[:rows]:
         color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
-        name = _claude_session_switch_short(row['name'], CLAUDE_SESSION_SWITCH_NAME)
+        # Заголовок — тот же, что в шапке вкладки; пока его нет — служебное имя сессии.
+        name = _claude_session_switch_short(row['title'] or row['name'], CLAUDE_SESSION_SWITCH_NAME)
         padded = name + ' ' * (CLAUDE_SESSION_SWITCH_NAME - len(name))
         # Ссылка — у каждой строки: сессия не в tmux на клик ответит страницей с причиной,
         # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.

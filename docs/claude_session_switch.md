@@ -8,7 +8,7 @@
 | Модуль | Что делает |
 |--------|-----------|
 | `claude_/session/claude_session_live.py` | живые сессии из `~/.claude/sessions/<pid>.json`: имя, статус, вид, панель tmux |
-| `claude_/session/claude_session_tokens.py` | токены сессии по транскрипту, с дочитыванием |
+| `claude_/session/claude_session_tokens.py` | сводка сессии по транскрипту, с дочитыванием: токены и заголовок |
 | `claude_/session/claude_session_switch.py` | таблица со ссылками и сервер `GET /switch/<sessionId>` на `127.0.0.1:8797` |
 | `tmux_/tmux_.py` | панели tmux, панель процесса, вывести панель на экран |
 
@@ -62,7 +62,7 @@ PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # с
 
 | Модуль | Что делает |
 |--------|-----------|
-| `claude_/session/claude_session_transcript.py` | путь к транскрипту и заголовок сессии (`custom-title`, иначе `ai-title`) |
+| `claude_/session/claude_session_transcript.py` | путь к транскрипту сессии |
 | `jetbrains_/jetbrains_tab.py` | `GET /api/claude-tab?title=…` во все IDE на портах 63342… — выбрать вкладку |
 
 - Вкладка ищется **по заголовку**: Claude Code ставит его в шапку вкладки сам. Связь с
@@ -94,3 +94,14 @@ PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # с
   терминала меняет содержимое, а не множит вкладки.
 - ⚠ Уже запущенную сессию в tmux не перенести: процесс к другому терминалу не пересадить.
   Схема «одна вкладка» — для сессий, начатых через `claude-tmux`.
+
+## 7. Заголовок в таблице и обычный клик
+
+- В колонке имени — **заголовок сессии**, тот же, что в шапке вкладки (`custom-title`,
+  иначе `ai-title`); пока модель его не дала — служебное имя (`rhapsodyai-07`). Заголовок
+  собирает тот же дочитывающий проход, что и токены: перечитывать транскрипты целиком
+  раз в 2 с дорого.
+- **Клик без Ctrl** — только внутри tmux: `~/.tmux.conf` вешает на `MouseDown1Pane`
+  проверку `#{mouse_hyperlink}`; ссылка сервера сессий — tmux зовёт её `curl`-ом сам, мимо
+  браузера; любой другой клик — как по умолчанию. ⚠ Вне tmux Ctrl+клик требует сам
+  терминал JetBrains, и ссылка идёт через браузер.

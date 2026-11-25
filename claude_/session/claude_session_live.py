@@ -26,11 +26,12 @@ CLAUDE_SESSION_LIVE_DIR = '~/.claude/sessions'
 CLAUDE_SESSION_LIVE_ORDER = ('busy', 'shell', 'idle')
 
 
-def claude_session_live_list(tokens: bool = True) -> list:
+def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, status, kind, cwd, updated, tokens, pane, visible}]`;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens, pane, visible}]`;
+        `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
         и не в отсоединённом tmux (процесс жив, но смотреть его неоткуда).
@@ -52,10 +53,11 @@ def claude_session_live_list(tokens: bool = True) -> list:
                      'cwd': data.get('cwd') or '',
                      'updated': data.get('statusUpdatedAt') or data.get('updatedAt') or 0})
     panes = tmux_panes()
-    spent = claude_session_tokens(rows) if tokens else {}
+    digest = claude_session_tokens(rows)
     attached = {pane['target'] for pane in panes if pane['attached']}
     for row in rows:
-        row['tokens'] = spent.get(row['sessionId'], 0)
+        row['tokens'] = digest.get(row['sessionId'], {}).get('tokens', 0)
+        row['title'] = digest.get(row['sessionId'], {}).get('title', '')
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
@@ -64,8 +66,8 @@ def claude_session_live_list(tokens: bool = True) -> list:
 
 
 def claude_session_live_find(session_id: str) -> dict:
-    """Живая сессия по `sessionId` (или его началу) — без счёта токенов; нет — пустой словарь."""
-    for row in claude_session_live_list(tokens=False):
+    """Живая сессия по `sessionId` (или его началу), с заголовком; нет — пустой словарь."""
+    for row in claude_session_live_list():
         if session_id and row['sessionId'].startswith(session_id):
             return row
     return {}

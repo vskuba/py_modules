@@ -1,4 +1,4 @@
-"""Сколько токенов потратила сессия Claude Code — по её транскрипту, с дочитыванием.
+"""Сводка сессии Claude Code по её транскрипту, с дочитыванием: токены и заголовок.
 
 Транскрипт находит `claude_session_transcript_path`; у каждого ответа модели
 `message.usage`. Считается «потрачено»: вход без кэша + запись в кэш + выход.
@@ -7,6 +7,11 @@
 
 ⚠ Один ответ модели пишется в транскрипт несколькими строками (по блоку содержимого) с
 одним `message.id` и одинаковым `usage` — без отбора по `id` счёт выходит в разы больше.
+Заголовок — то, что Claude Code ставит в шапку вкладки терминала: последняя запись
+`custom-title` (сессию переименовал человек), иначе последняя `ai-title`.
+⚠ Запись `custom-title` вживую не встречалась: имя поля (`customTitle` или `title`) —
+по аналогии с `ai-title`/`aiTitle`, принимаются оба.
+
 ⚠ Транскрипты длинные (десятки МБ), а статусная строка зовёт счёт раз в секунду: файл
 дочитывается с места прошлой остановки, состояние — в `CLAUDE_SESSION_TOKENS_CACHE`.
 """
@@ -15,7 +20,7 @@ import os
 
 from claude_.session.claude_session_transcript import claude_session_transcript_path
 
-# Состояние дочитывания: {sessionId: {path, offset, total, ids_tail}}.
+# Состояние дочитывания: {sessionId: {path, offset, total, ids_tail, ai, custom}}.
 CLAUDE_SESSION_TOKENS_CACHE = '~/.cache/claude-session-tokens.json'
 
 # Сколько последних id ответов помнить, чтобы не счесть хвост ответа дважды.
@@ -23,12 +28,13 @@ CLAUDE_SESSION_TOKENS_IDS = 64
 
 
 def claude_session_tokens(sessions: list) -> dict:
-    """Потраченные токены сессий Claude Code: `{sessionId: число}`.
+    """Потраченные токены и заголовок сессий Claude Code: `{sessionId: {tokens, title}}`.
 
     Args:
         sessions: `[{sessionId, cwd}]` — `cwd` нужен, чтобы найти транскрипт без обхода.
 
-    Сессия без транскрипта — 0. Счёт дочитывается с прошлого места, общий кэш на диске.
+    Сессия без транскрипта — `{tokens: 0, title: ''}`. Дочитывается с прошлого места,
+    общий кэш на диске.
     """
     cache = _claude_session_tokens_load()
     result = {}
@@ -39,11 +45,11 @@ def claude_session_tokens(sessions: list) -> dict:
         state = cache.get(sid) or {}
         path = state.get('path') or claude_session_transcript_path(sid, row.get('cwd') or '')
         if not path:
-            result[sid] = 0
+            result[sid] = {'tokens': 0, 'title': ''}
             continue
         state = _claude_session_tokens_read(path, state)
         cache[sid] = state
-        result[sid] = state['total']
+        result[sid] = {'tokens': state['total'], 'title': state['custom'] or state['ai']}
     _claude_session_tokens_save(cache)
     return result
 
@@ -51,23 +57,32 @@ def claude_session_tokens(sessions: list) -> dict:
 def _claude_session_tokens_read(path: str, state: dict) -> dict:
     offset, total = int(state.get('offset') or 0), int(state.get('total') or 0)
     seen = list(state.get('ids_tail') or [])
+    titles = {'ai': state.get('ai') or '', 'custom': state.get('custom') or ''}
     try:
         size = os.path.getsize(path)
-        if size < offset:  # файл переписан — считать заново
-            offset, total, seen = 0, 0, []
+        # Файл переписан или запись кэша старше заголовков — считать заново.
+        if size < offset or 'ai' not in state:
+            offset, total, seen, titles = 0, 0, [], {'ai': '', 'custom': ''}
         with open(path, 'rb') as handle:
             handle.seek(offset)
             chunk = handle.read()
     except OSError:
-        return {'path': path, 'offset': offset, 'total': total, 'ids_tail': seen}
+        return {'path': path, 'offset': offset, 'total': total, 'ids_tail': seen, **titles}
     end = chunk.rfind(b'\n') + 1  # недописанную строку оставить до следующего раза
     for line in chunk[:end].splitlines():
-        if b'"usage"' not in line:
+        if b'"usage"' not in line and b'-title"' not in line:
             continue
         try:
-            message = json.loads(line).get('message') or {}
+            entry = json.loads(line)
         except ValueError:
             continue
+        if entry.get('type') == 'ai-title':
+            titles['ai'] = entry.get('aiTitle') or titles['ai']
+            continue
+        if entry.get('type') == 'custom-title':
+            titles['custom'] = entry.get('customTitle') or entry.get('title') or titles['custom']
+            continue
+        message = entry.get('message') or {}
         usage, mid = message.get('usage') or {}, message.get('id')
         if not usage or (mid and mid in seen):
             continue
@@ -75,7 +90,7 @@ def _claude_session_tokens_read(path: str, state: dict) -> dict:
             seen = (seen + [mid])[-CLAUDE_SESSION_TOKENS_IDS:]
         total += sum(int(usage.get(key) or 0) for key in
                      ('input_tokens', 'cache_creation_input_tokens', 'output_tokens'))
-    return {'path': path, 'offset': offset + end, 'total': total, 'ids_tail': seen}
+    return {'path': path, 'offset': offset + end, 'total': total, 'ids_tail': seen, **titles}
 
 
 def _claude_session_tokens_load() -> dict:
