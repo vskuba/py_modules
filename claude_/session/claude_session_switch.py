@@ -88,7 +88,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     Таблица общая на все окна: радиокнопку своей строки (`○` → `◉`) отмечает статусная
     строка окна сама — по `sessionId`, который есть в ссылке каждой строки.
     """
-    sessions = claude_session_live_list()
+    # Только то, на что можно переключиться: фоновые и отсоединённые от экрана — мимо.
+    sessions = [row for row in claude_session_live_list() if row['visible']]
     lines = []
     for row in sessions[:rows]:
         color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])

@@ -30,8 +30,10 @@ def claude_session_live_list(tokens: bool = True) -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, status, kind, cwd, updated, tokens, pane}]`;
-        `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux.
+        `[{sessionId, pid, name, status, kind, cwd, updated, tokens, pane, visible}]`;
+        `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
+        `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
+        и не в отсоединённом tmux (процесс жив, но смотреть его неоткуда).
     """
     rows = []
     for path in glob.glob(os.path.join(os.path.expanduser(CLAUDE_SESSION_LIVE_DIR), '*.json')):
@@ -51,9 +53,11 @@ def claude_session_live_list(tokens: bool = True) -> list:
                      'updated': data.get('statusUpdatedAt') or data.get('updatedAt') or 0})
     panes = tmux_panes()
     spent = claude_session_tokens(rows) if tokens else {}
+    attached = {pane['target'] for pane in panes if pane['attached']}
     for row in rows:
         row['tokens'] = spent.get(row['sessionId'], 0)
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
+        row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
     return rows
