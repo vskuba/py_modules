@@ -2,16 +2,16 @@
 
 Терминал JetBrains отдаёт наружу только `http://`-ссылки (свою схему вроде
 `claude-session://` молча глотает — проверено), поэтому клик идёт так:
-ссылка в статусной строке → браузер → `GET /switch/<sessionId>` этого сервера →
-`tmux_focus` панели, где живёт сессия.
+ссылка в статусной строке → браузер (или плагин IDE, без браузера) →
+`GET /switch/<sessionId>` этого сервера → панель tmux сессии, а если она не в tmux —
+вкладка терминала JetBrains с её заголовком (`jetbrains_tab_select`).
 
 ```bash
 PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # сервер
 PYTHONPATH=. python -m claude_.session.claude_session_switch table [--rows N]
 ```
 
-⚠ Переключить можно только сессию, запущенную внутри tmux; клик по остальным открывает
-страницу с причиной.
+⚠ Не нашлось ни панели, ни вкладки — клик открывает страницу с причиной.
 ⚠ Ответ на клик — `204 No Content`: часть браузеров тогда не оставляет пустую вкладку.
 Не вышло переключить — страница с причиной, иначе клик «ничего не делает» молча.
 """
@@ -21,6 +21,8 @@ import html
 import sys
 
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
+from claude_.session.claude_session_transcript import claude_session_transcript_title
+from jetbrains_.jetbrains_tab import jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus
 
 # Адрес сервера переключения: только петля.
@@ -43,7 +45,10 @@ _CLAUDE_SESSION_SWITCH_LOOK = {'busy': ('\x1b[33m', 'работает'),
 
 
 def claude_session_switch_to(session_id: str) -> str:
-    """Вывести на экран панель tmux сессии `session_id`.
+    """Вывести сессию `session_id` на экран: панель tmux, а не в tmux — вкладку JetBrains.
+
+    Вкладка IDE ищется по заголовку сессии (он же — шапка вкладки) плагином Claude Tab
+    Switch (`jetbrains_tab_select`).
 
     Returns:
         Пусто — переключено; иначе причина отказа словами.
@@ -51,11 +56,17 @@ def claude_session_switch_to(session_id: str) -> str:
     row = claude_session_live_find(session_id)
     if not row:
         return f'сессии {session_id} нет среди живых'
-    if not row['pane']:
-        return f"сессия «{row['name']}» запущена не в tmux — переключать некуда"
-    if not tmux_focus(row['pane']):
+    if row['pane']:
+        if tmux_focus(row['pane']):
+            return ''
         return f"tmux не переключил на {row['pane']}: нет подключённого клиента?"
-    return ''
+    title = claude_session_transcript_title(row['sessionId'], row['cwd'])
+    if not title:
+        return f"у сессии «{row['name']}» нет заголовка — вкладку не по чему искать"
+    if jetbrains_tab_select(title):
+        return ''
+    return (f"вкладки «{title}» нет ни в одной IDE с плагином Claude Tab Switch "
+            f"и сессия «{row['name']}» не в tmux")
 
 
 def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:

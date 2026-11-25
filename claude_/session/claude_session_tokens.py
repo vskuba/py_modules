@@ -1,7 +1,7 @@
 """Сколько токенов потратила сессия Claude Code — по её транскрипту, с дочитыванием.
 
-Транскрипт — `~/.claude/projects/<папка-слагом>/<sessionId>.jsonl`, у каждого ответа
-модели `message.usage`. Считается «потрачено»: вход без кэша + запись в кэш + выход.
+Транскрипт находит `claude_session_transcript_path`; у каждого ответа модели
+`message.usage`. Считается «потрачено»: вход без кэша + запись в кэш + выход.
 Чтение из кэша (`cache_read_input_tokens`) не входит: оно повторяет весь контекст на
 каждом шаге и за час набегает в десятки миллионов, ничего не говоря о работе.
 
@@ -10,13 +10,10 @@
 ⚠ Транскрипты длинные (десятки МБ), а статусная строка зовёт счёт раз в секунду: файл
 дочитывается с места прошлой остановки, состояние — в `CLAUDE_SESSION_TOKENS_CACHE`.
 """
-import glob
 import json
 import os
-import re
 
-# Где лежат транскрипты.
-CLAUDE_SESSION_TOKENS_PROJECTS = '~/.claude/projects'
+from claude_.session.claude_session_transcript import claude_session_transcript_path
 
 # Состояние дочитывания: {sessionId: {path, offset, total, ids_tail}}.
 CLAUDE_SESSION_TOKENS_CACHE = '~/.cache/claude-session-tokens.json'
@@ -40,7 +37,7 @@ def claude_session_tokens(sessions: list) -> dict:
         if not sid:
             continue
         state = cache.get(sid) or {}
-        path = state.get('path') or _claude_session_tokens_path(sid, row.get('cwd') or '')
+        path = state.get('path') or claude_session_transcript_path(sid, row.get('cwd') or '')
         if not path:
             result[sid] = 0
             continue
@@ -49,15 +46,6 @@ def claude_session_tokens(sessions: list) -> dict:
         result[sid] = state['total']
     _claude_session_tokens_save(cache)
     return result
-
-
-def _claude_session_tokens_path(sid: str, cwd: str) -> str:
-    root = os.path.expanduser(CLAUDE_SESSION_TOKENS_PROJECTS)
-    guess = os.path.join(root, re.sub(r'[^A-Za-z0-9]', '-', cwd), f'{sid}.jsonl')
-    if os.path.exists(guess):
-        return guess
-    found = glob.glob(os.path.join(root, '*', f'{sid}.jsonl'))
-    return found[0] if found else ''
 
 
 def _claude_session_tokens_read(path: str, state: dict) -> dict:
