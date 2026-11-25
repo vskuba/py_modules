@@ -35,8 +35,11 @@ def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, question, pane, visible}]`;
-        `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, question, job, pane, visible}]`;
+        `title` — как в шапке вкладки: у сессии в tmux — заголовок её панели (его ставит
+        сам Claude Code), иначе — из транскрипта; пусто — заголовка ещё нет.
+        ⚠ Заголовок панели верен и после `/resume` внутри сессии: файл сессии хранит прежний
+        `sessionId`, и транскрипт по нему — пустой новый, без заголовка;
         `window_pct` — сколько процентов 5-часового окна подписки обошлась сессия (как
         процент экономии субагентов: взвешенные токены / цена 1% окна её аккаунта);
         `None` — калибровки ещё нет;
@@ -46,6 +49,9 @@ def claude_session_live_list() -> list:
         отвечает — пусто у всех;
         `question` — сессия стоит и ждёт ввода (`status: waiting`): причина из
         `waitingFor` («input needed»); нет — пусто;
+        `job` — окно смотрит в фоновую сессию (`/resume` фоновой изнутри сессии): её
+        `sessionId`; строка окна тогда несёт название, состояние, токены и субагентов
+        фоновой (`_claude_session_live_viewers`); нет — пусто;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
@@ -80,11 +86,13 @@ def claude_session_live_list() -> list:
         row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
         row['agents'] = agents.get(row['sessionId'], [])
         row['window_pct'] = _claude_session_live_pct(row['sessionId'], digest.get(row['sessionId'], {}))
-        row['title'] = digest.get(row['sessionId'], {}).get('title', '')
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
+        row['title'] = (_claude_session_live_pane_title(row['pane'], panes)
+                        or digest.get(row['sessionId'], {}).get('title', ''))
         row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
         tmux_session = row['pane'].split(':', 1)[0] if row['pane'] else ''
         row['host'] = claude_session_host(row['pid'], tmux_session, clients) if row['visible'] else ''
+    _claude_session_live_viewers(rows)
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
     return rows
@@ -124,6 +132,31 @@ def _claude_session_live_agents() -> dict:
                 'question': asking.get(item.get('session') or '', ''),
                 'name': item.get('goal') or item.get('title') or item.get('session')})
     return agents
+
+
+def _claude_session_live_pane_title(pane: str, panes: list) -> str:
+    # Заголовок панели без значков Claude Code в начале (✳, крутилка) и служебного
+    # «Claude Code» — его ставит свежая сессия, пока своего заголовка нет.
+    title = next((row['title'] for row in panes if row['target'] == pane), '') if pane else ''
+    title = title.lstrip(' ✳·✻✽✶✢*⠁⠂⠄⡀⢀⠠⠐⠈◐◑◒◓').strip()
+    return '' if title in ('Claude Code', 'claude') else title
+
+
+def _claude_session_live_viewers(rows: list) -> None:
+    # Окно, смотрящее в фоновую сессию: Claude Code в нём держит свою пустую сессию, а
+    # работу ведёт фоновая (скрыта — терминала у неё нет), и статусную строку окну рисует
+    # она. Окно подключено к управляющему процессу фоновых сессий, а в какую именно оно
+    # смотрит, по сокету не видно — связь по заголовку: шапку панели окна и заголовок
+    # фоновой ставит сам Claude Code. Строка окна берёт данные фоновой.
+    jobs = {row['title']: row for row in rows if row['kind'] == 'bg' and row['title']}
+    for row in rows:
+        row.setdefault('job', '')
+        job = jobs.get(row['title']) if row['kind'] != 'bg' and row['pane'] else None
+        if not job:
+            continue
+        row['job'] = job['sessionId']
+        for key in ('status', 'question', 'tokens_in', 'tokens_out', 'window_pct', 'agents', 'updated'):
+            row[key] = job[key]
 
 if __name__ == '__main__':
     for item in claude_session_live_list():

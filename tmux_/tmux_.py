@@ -25,7 +25,10 @@ TMUX_PARENT_DEPTH = 12
 
 
 def tmux_panes() -> list:
-    """Все панели tmux: `[{pane_pid, target, session, window, name, attached}]`.
+    """Все панели tmux: `[{pane_pid, target, session, window, name, attached, title}]`.
+
+    `title` — заголовок панели: его ставит программа в ней (OSC 0/2), он же — шапка вкладки
+    терминала (`set-titles-string "#T"`).
 
     `attached` — к сессии tmux подключён хоть один клиент, то есть панель где-то на экране.
 
@@ -35,16 +38,16 @@ def tmux_panes() -> list:
         return []
     out = _tmux_run('list-panes', '-a', '-F',
                     '#{pane_pid}\t#{session_name}\t#{window_index}\t#{pane_index}\t'
-                    '#{window_name}\t#{session_attached}')
+                    '#{window_name}\t#{session_attached}\t#{pane_title}')
     rows = []
     for line in out.splitlines():
         parts = line.split('\t')
-        if len(parts) != 6 or not parts[0].isdigit():
+        if len(parts) != 7 or not parts[0].isdigit():
             continue
-        pid, session, window, pane, name, attached = parts
+        pid, session, window, pane, name, attached, title = parts
         rows.append({'pane_pid': int(pid), 'target': f'{session}:{window}.{pane}',
                      'session': session, 'window': window, 'name': name,
-                     'attached': attached not in ('', '0')})
+                     'attached': attached not in ('', '0'), 'title': title})
     return rows
 
 
