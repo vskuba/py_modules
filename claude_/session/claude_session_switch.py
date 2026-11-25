@@ -46,7 +46,13 @@ CLAUDE_SESSION_SWITCH_LOG = '~/.cache/claude-session-switch.log'
 CLAUDE_SESSION_SWITCH_ROWS = 8
 
 # Ширина колонки имени.
-CLAUDE_SESSION_SWITCH_NAME = 34
+CLAUDE_SESSION_SWITCH_NAME = 40
+
+# Сколько знаков имени проекта перед заголовком.
+CLAUDE_SESSION_SWITCH_PROJECT = 16
+
+# Название свежей сессии, пока Claude Code не дал ей заголовок.
+CLAUDE_SESSION_SWITCH_UNTITLED = 'Новая сессия'
 
 # Сколько знаков вопроса сессии показывать в конце строки.
 CLAUDE_SESSION_SWITCH_QUESTION = 60
@@ -140,13 +146,19 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     lines = []
     for row in sessions[:rows]:
         color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
-        # Заголовок — тот же, что в шапке вкладки; пока его нет — служебное имя сессии.
-        name = _claude_session_switch_short(row['title'] or row['name'], CLAUDE_SESSION_SWITCH_NAME)
+        # «Проект: заголовок» — заголовок тот же, что в шапке вкладки; пока его нет (свежая
+        # сессия) — «Новая сессия», а не служебное имя вроде «cyberai-61». Проект — имя папки.
+        # Длинное имя проекта (cashier-service-payment-gateway) съело бы заголовок — короче.
+        project = _claude_session_switch_short(os.path.basename(row['cwd'].rstrip('/')) or '—',
+                                               CLAUDE_SESSION_SWITCH_PROJECT)
+        name = _claude_session_switch_short(f"{project}: {row['title'] or CLAUDE_SESSION_SWITCH_UNTITLED}",
+                                            CLAUDE_SESSION_SWITCH_NAME)
         padded = name + ' ' * (CLAUDE_SESSION_SWITCH_NAME - len(name))
         # Ссылка — у каждой строки: сессия не в tmux на клик ответит страницей с причиной,
         # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.
         url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
-        padded = _claude_session_switch_link(url, name, row['host'], row['pid'], row['job']) + padded[len(name):]
+        padded = (_claude_session_switch_link(url, _claude_session_switch_project(name, project),
+                                              row['host'], row['pid'], row['job']) + padded[len(name):])
         # Название — на тёмной плашке во всю колонку, как кнопка «+»: видно, куда кликать;
         # по пробелу внутри слева и справа — отступы (сверху и снизу их в терминале нет).
         padded = f'\x1b[38;5;252;48;5;235m {padded} \x1b[0m'
@@ -181,6 +193,14 @@ def _claude_session_switch_badge(host: str) -> str:
     letters, left, right = badge
     return (f'\x1b[1;38;5;16;48;5;{left}m {letters[0]}'
             f'\x1b[48;5;{right}m{letters[1]} \x1b[0m')
+
+
+def _claude_session_switch_project(name: str, project: str) -> str:
+    # Проект в начале названия — своим цветом (голубовато-серым), дальше цвет плашки.
+    prefix = f'{project}:'
+    if not name.startswith(prefix):
+        return name
+    return f'\x1b[38;5;110m{prefix}\x1b[38;5;252m{name[len(prefix):]}'
 
 
 def _claude_session_switch_ask(question: str) -> str:
