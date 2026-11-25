@@ -21,10 +21,11 @@ import html
 import os
 import sys
 import time
+import urllib.parse
 
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
 from claude_.session.claude_session_transcript import claude_session_transcript_title
-from jetbrains_.jetbrains_tab import jetbrains_tab_select
+from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus
 
 # Адрес сервера переключения: только петля.
@@ -82,6 +83,17 @@ def claude_session_switch_to(session_id: str) -> str:
             f"и сессия «{row['name']}» не в tmux")
 
 
+def claude_session_switch_new(cwd: str) -> str:
+    """Новая сессия Claude Code: вкладка терминала в IDE, где открыт проект папки `cwd`.
+
+    Returns:
+        Пусто — открыта; иначе причина отказа словами.
+    """
+    if jetbrains_tab_new(cwd):
+        return ''
+    return 'ни одной IDE с плагином Claude Tab Switch — открыть вкладку негде'
+
+
 def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     """Таблица сессий для статусной строки: радиокнопка и имя — ссылками на переключение.
 
@@ -109,7 +121,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
 
 
 def claude_session_switch_serve(port: int = CLAUDE_SESSION_SWITCH_PORT) -> None:
-    """Поднять сервер переключения на петле — держит `GET /switch/<sessionId>`."""
+    """Поднять сервер переключения на петле: `GET /switch/<sessionId>`, `GET /new?cwd=…`."""
     http.server.ThreadingHTTPServer((CLAUDE_SESSION_SWITCH_HOST, port),
                                     _ClaudeSessionSwitchHandler).serve_forever()
 
@@ -139,14 +151,19 @@ def _claude_session_switch_log(line: str) -> None:
 
 class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        if not self.path.startswith('/switch/'):
+        url = urllib.parse.urlsplit(self.path)
+        if url.path.startswith('/switch/'):
+            target = url.path[len('/switch/'):].strip('/')
+            error = claude_session_switch_to(target)
+        elif url.path == '/new':
+            target = 'new ' + (urllib.parse.parse_qs(url.query).get('cwd') or [''])[0]
+            error = claude_session_switch_new(target[4:])
+        else:
             self.send_response(404)
             self.end_headers()
             return
-        session_id = self.path[len('/switch/'):].strip('/')
-        error = claude_session_switch_to(session_id)
-        _claude_session_switch_log(f"{session_id} {self.headers.get('User-Agent', '-')[:60]} "
-                                   f"→ {error or 'переключено'}")
+        _claude_session_switch_log(f"{target} {self.headers.get('User-Agent', '-')[:60]} "
+                                   f"→ {error or 'готово'}")
         if not error:
             self.send_response(204)
             self.end_headers()
