@@ -490,7 +490,7 @@ def _working_line(status: dict) -> str:
     # Номер мотора — значком перед подписью: тот же значок стоит в таблице сессий Claude
     # напротив хозяина работы.
     asking = status.get('asking') or {}
-    parts = [f"{dsh_motor_badge(row.get('motor'))}{dsh_motor_badge_ask() if row['session'] in asking else ''} {part}"
+    parts = [f"{dsh_motor_badge(row.get('motor'))}{' ' + dsh_motor_badge_ask() if row['session'] in asking else ''} {part}"
              for row, part in zip(rows, parts)]
     return f"{head}: {' · '.join(parts)}"
 

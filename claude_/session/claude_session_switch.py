@@ -280,7 +280,8 @@ def _claude_session_switch_agents(agents: list) -> str:
     # подписи там, здесь только «чьи». Последняя колонка — ширина своя. Нет — прочерк.
     if not agents:
         return '\x1b[90m–\x1b[0m'
-    return ' '.join(dsh_motor_badge(agent['motor']) + (dsh_motor_badge_ask() if agent.get('question') else '')
+    # Между цифрой мотора и «?» — пробел: вплотную две плашки сливаются в одну.
+    return ' '.join(dsh_motor_badge(agent['motor']) + (' ' + dsh_motor_badge_ask() if agent.get('question') else '')
                     for agent in sorted(agents, key=lambda agent: str(agent['motor'])))
 
 
