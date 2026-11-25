@@ -96,7 +96,10 @@ def claude_session_switch_new(cwd: str, tmux_session: str = '') -> str:
         Пусто — открыта; иначе причина отказа словами.
     """
     if tmux_session:
-        if tmux_window_new(tmux_session, cwd, ['claude'], os.path.basename(cwd.rstrip('/'))):
+        # Через интерактивную оболочку: окно берёт PATH того, кто его создаёт (служба без
+        # nvm), и голый `claude` в нём не находился — окно молча закрывалось.
+        shell = os.environ.get('SHELL') or '/bin/bash'
+        if tmux_window_new(tmux_session, cwd, [shell, '-ic', 'claude'], os.path.basename(cwd.rstrip('/'))):
             return ''
         return f'tmux не открыл окно в сессии «{tmux_session}»'
     if jetbrains_tab_new(cwd):
