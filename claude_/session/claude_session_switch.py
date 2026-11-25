@@ -7,11 +7,11 @@
 
 ```bash
 PYTHONPATH=. python -m claude_.session.claude_session_switch serve          # сервер
-PYTHONPATH=. python -m claude_.session.claude_session_switch table [--current ID]
+PYTHONPATH=. python -m claude_.session.claude_session_switch table [--rows N]
 ```
 
-⚠ Переключить можно только сессию, запущенную внутри tmux; остальные в таблице есть,
-но без ссылки.
+⚠ Переключить можно только сессию, запущенную внутри tmux; клик по остальным открывает
+страницу с причиной.
 ⚠ Ответ на клик — `204 No Content`: часть браузеров тогда не оставляет пустую вкладку.
 Не вышло переключить — страница с причиной, иначе клик «ничего не делает» молча.
 """
@@ -55,22 +55,22 @@ def claude_session_switch_to(session_id: str) -> str:
     return ''
 
 
-def claude_session_switch_table(current: str = '', rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
+def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     """Таблица сессий для статусной строки: строка на сессию, имя — ссылкой на переключение.
 
-    Args:
-        current: `sessionId` окна, которое рисует строку, — помечается `▶`.
+    Таблица общая на все окна: свою строку (`▶`) помечает статусная строка окна сама —
+    по `sessionId`, который есть в ссылке каждой строки.
     """
     sessions = claude_session_live_list()
     lines = []
     for row in sessions[:rows]:
         color, mark, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
-        mark = '▶' if row['sessionId'] == current else mark
         name = _claude_session_switch_short(row['name'], CLAUDE_SESSION_SWITCH_NAME)
         padded = name + ' ' * (CLAUDE_SESSION_SWITCH_NAME - len(name))
-        if row['pane']:
-            url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
-            padded = f'\x1b]8;;{url}\x1b\\{name}\x1b]8;;\x1b\\' + padded[len(name):]
+        # Ссылка — у каждой строки: сессия не в tmux на клик ответит страницей с причиной,
+        # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.
+        url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
+        padded = f'\x1b]8;;{url}\x1b\\{name}\x1b]8;;\x1b\\' + padded[len(name):]
         bg = ' bg' if row['kind'] == 'bg' else ''
         lines.append(f"  {color}{mark}\x1b[0m {padded} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_tokens(row['tokens']):>6}\x1b[90m{bg}\x1b[0m")
@@ -122,14 +122,13 @@ if __name__ == '__main__':
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('serve').add_argument('--port', type=int, default=CLAUDE_SESSION_SWITCH_PORT)
     table = sub.add_parser('table')
-    table.add_argument('--current', default='')
     table.add_argument('--rows', type=int, default=CLAUDE_SESSION_SWITCH_ROWS)
     sub.add_parser('to').add_argument('session')
     args = parser.parse_args()
     if args.command == 'serve':
         claude_session_switch_serve(args.port)
     elif args.command == 'table':
-        print(claude_session_switch_table(args.current, args.rows))
+        print(claude_session_switch_table(args.rows))
     else:
         reason = claude_session_switch_to(args.session)
         print(reason or 'переключено')

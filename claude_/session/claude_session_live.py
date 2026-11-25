@@ -30,7 +30,7 @@ def claude_session_live_list(tokens: bool = True) -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, status, busy, kind, cwd, updated, tokens, pane}]`;
+        `[{sessionId, pid, name, status, kind, cwd, updated, tokens, pane}]`;
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux.
     """
     rows = []
@@ -46,7 +46,7 @@ def claude_session_live_list(tokens: bool = True) -> list:
         status = data.get('status') or '?'
         rows.append({'sessionId': data['sessionId'], 'pid': pid,
                      'name': data.get('name') or data['sessionId'][:8], 'status': status,
-                     'busy': status == 'busy', 'kind': data.get('kind') or '',
+                     'kind': data.get('kind') or '',
                      'cwd': data.get('cwd') or '',
                      'updated': data.get('statusUpdatedAt') or data.get('updatedAt') or 0})
     panes = tmux_panes()
@@ -69,5 +69,5 @@ def claude_session_live_find(session_id: str) -> dict:
 
 if __name__ == '__main__':
     for item in claude_session_live_list():
-        print(f"{'●' if item['busy'] else '○'} {item['name'][:34]:<34} {item['status']:<6} "
+        print(f"{'●' if item['status'] == 'busy' else '○'} {item['name'][:34]:<34} {item['status']:<6} "
               f"{item['tokens']:>10,}  {item['pane'] or '—'}")
