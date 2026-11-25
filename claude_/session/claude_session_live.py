@@ -18,6 +18,7 @@ import json
 import os
 
 from claude_.session.claude_session_tokens import claude_session_tokens
+from claude_.session.claude_session_transcript import claude_session_transcript_cwd
 from claude_.session.claude_session_host import claude_session_host
 from dsh_.dsh_board import dsh_board_motors_busy
 from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
@@ -96,6 +97,33 @@ def claude_session_live_list() -> list:
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
     return rows
+
+
+def claude_session_live_orphans(rows: list) -> list:
+    """Субагенты DSH, чей хозяин не виден в таблице: сессия закрыта или скрыта (фоновая,
+    в отсоединённом tmux). Их моторы иначе пропали бы из таблицы, хотя работают.
+
+    Args:
+        rows: `claude_session_live_list()` целиком — по нему видно, жив ли хозяин.
+
+    Returns:
+        `[{owner, title, project, state, agents}]`: `state` — «скрыта» (процесс жив, но
+        строки у него нет) или «закрыта»; `project` — проект хозяина (по его транскрипту).
+        ⚠ Не папка карточки субагента: она — его рабочая (`scratchpad/…/t4`, копия репо).
+    """
+    shown = {row['sessionId'] for row in rows if row['visible']} | {row['job'] for row in rows if row['visible']}
+    alive = {row['sessionId']: row for row in rows}
+    orphans = {}
+    for owner, agents in _claude_session_live_agents().items():
+        if owner in shown:
+            continue
+        cwd = alive[owner]['cwd'] if owner in alive else claude_session_transcript_cwd(owner)
+        orphans[owner] = {'owner': owner, 'agents': agents, 'state': 'скрыта' if owner in alive else 'закрыта',
+                          'project': os.path.basename(cwd.rstrip('/'))}
+    titles = claude_session_tokens([{'sessionId': owner, 'cwd': ''} for owner in orphans])
+    for owner, item in orphans.items():
+        item['title'] = titles.get(owner, {}).get('title', '')
+    return list(orphans.values())
 
 
 def claude_session_live_find(session_id: str) -> dict:

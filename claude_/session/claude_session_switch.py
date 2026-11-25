@@ -24,7 +24,8 @@ import time
 import urllib.parse
 
 from claude_.session.claude_session_close import claude_session_close_armed, claude_session_close_click
-from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
+from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list, \
+    claude_session_live_orphans
 from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
 from gnome_.gnome_window import gnome_window_activate
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
@@ -142,7 +143,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     строка окна сама — по `sessionId`, который есть в ссылке каждой строки.
     """
     # Только то, на что можно переключиться: фоновые и отсоединённые от экрана — мимо.
-    sessions = [row for row in claude_session_live_list() if row['visible']]
+    every = claude_session_live_list()
+    sessions = [row for row in every if row['visible']]
     # По алфавиту «проект: название»; группы — свой проект, своя IDE, чужая IDE — раскладывает
     # статусная строка окна (по `proj=`/`host=` в ссылке), порядок внутри группы — этот.
     sessions.sort(key=lambda row: (os.path.basename(row['cwd'].rstrip('/')).lower(),
@@ -181,6 +183,13 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
                      f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m"
                      f"  {_claude_session_switch_agents(row['agents'])}"
                      f"{_claude_session_switch_question(row['question'])}")
+    # Моторы, чей хозяин закрыт или скрыт, — внизу, тусклым: иначе работа пропала бы с глаз.
+    for orphan in claude_session_live_orphans(every):
+        name = _claude_session_switch_short(
+            f"{orphan['project'] or '—'}: {orphan['title'] or CLAUDE_SESSION_SWITCH_UNTITLED} ({orphan['state']})",
+            CLAUDE_SESSION_SWITCH_NAME)
+        lines.append(f"\x1b[0m       \x1b[38;5;244m{name:<{CLAUDE_SESSION_SWITCH_NAME}}\x1b[0m  "
+                     f"{_claude_session_switch_agents(orphan['agents'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
     return '\n'.join(lines)
