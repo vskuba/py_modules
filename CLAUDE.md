@@ -223,7 +223,11 @@ PYTHONPATH=. .venv/bin/python -m ai.vision.ai_vision describe <файл>  # пр
 pip install -r requirements.txt          # ядро: Pillow, numpy — картинки и пиксельные замеры
 pip install -r requirements-vision.txt   # + зрение через ai_vision (pydantic-ai)
 pip install -r requirements-doc.txt      # + документы: pdf_ (pypdf, pypdfium2), font_ (fontTools)
+pip install -r requirements-tools.txt    # всё для инструментов агента (http, mysql, dotenv, pytest…) без torch
 ```
+
+venv самого слоя (`.venv`, его зовут `bin/cai` проектов и хуки) пересоздаётся одной командой:
+`python3 -m venv .venv && .venv/bin/pip install -r requirements-tools.txt`.
 
 В requirements проекта — одна строка `-r py_modules/requirements.txt`; половину, которая
 нужна этому проекту, он добирает своей строкой.
