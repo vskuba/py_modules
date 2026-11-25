@@ -19,11 +19,17 @@
 """
 import json
 import os
+import time
+from datetime import datetime
 
 from claude_.session.claude_session_transcript import claude_session_transcript_path
 from dsh_.dsh_saving import DSH_SAVING_WEIGHTS
 
-# Состояние дочитывания: {sessionId: {path, offset, tin, tout, units, ids_tail, ai, custom}}.
+# Состояние дочитывания: {sessionId: {path, offset, tin, tout, units, buckets, ids_tail, ai, custom}}.
+
+# Корзины взвешенных токенов по времени записи: ширина и сколько хранить (окно подписки — 5 ч).
+CLAUDE_SESSION_TOKENS_BUCKET = 600
+CLAUDE_SESSION_TOKENS_KEEP = 6 * 3600
 CLAUDE_SESSION_TOKENS_CACHE = '~/.cache/claude-session-tokens.json'
 
 # Сколько последних id ответов помнить, чтобы не счесть хвост ответа дважды.
@@ -33,7 +39,9 @@ CLAUDE_SESSION_TOKENS_IDS = 64
 def claude_session_tokens(sessions: list) -> dict:
     """Токены и заголовок сессий Claude Code: `{sessionId: {tokens_in, tokens_out, units, title}}`.
 
-    `units` — взвешенная цена во входных токенах (с чтением кэша), для процента окна.
+    `units` — взвешенная цена во входных токенах (с чтением кэша), за всю жизнь сессии;
+    `buckets` — та же цена по 10-минутным корзинам (`{начало корзины: units}`, последние
+    6 ч) — для доли **текущего** 5-часового окна (`claude_session_tokens_since`).
 
     Args:
         sessions: `[{sessionId, cwd}]` — `cwd` нужен, чтобы найти транскрипт без обхода.
@@ -50,32 +58,50 @@ def claude_session_tokens(sessions: list) -> dict:
         state = cache.get(sid) or {}
         path = state.get('path') or claude_session_transcript_path(sid, row.get('cwd') or '')
         if not path:
-            result[sid] = {'tokens_in': 0, 'tokens_out': 0, 'units': 0.0, 'title': ''}
+            result[sid] = {'tokens_in': 0, 'tokens_out': 0, 'units': 0.0, 'buckets': {}, 'title': ''}
             continue
         state = _claude_session_tokens_read(path, state)
         cache[sid] = state
         result[sid] = {'tokens_in': state['tin'], 'tokens_out': state['tout'], 'units': state['units'],
+                       'buckets': state['buckets'],
                        'title': state['custom'] or state['ai']}
     _claude_session_tokens_save(cache)
     return result
 
 
+def claude_session_tokens_since(buckets: dict, since: float) -> float:
+    """Взвешенная цена сессии с момента `since` (начала окна подписки) — по корзинам сводки."""
+    edge = since - since % CLAUDE_SESSION_TOKENS_BUCKET
+    return sum(value for key, value in (buckets or {}).items() if int(key) >= edge)
+
+
+def _claude_session_tokens_bucket(stamp) -> int:
+    # Начало 10-минутной корзины по метке записи (ISO, `…Z`); метки нет — сейчас.
+    try:
+        moment = datetime.fromisoformat(str(stamp).replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        moment = time.time()
+    return int(moment - moment % CLAUDE_SESSION_TOKENS_BUCKET)
+
+
 def _claude_session_tokens_read(path: str, state: dict) -> dict:
     offset, tin, tout = int(state.get('offset') or 0), int(state.get('tin') or 0), int(state.get('tout') or 0)
     units = float(state.get('units') or 0)
+    buckets = dict(state.get('buckets') or {})
     seen = list(state.get('ids_tail') or [])
     titles = {'ai': state.get('ai') or '', 'custom': state.get('custom') or ''}
     try:
         size = os.path.getsize(path)
         # Файл переписан или запись кэша старше раздельного счёта — считать заново.
-        if size < offset or 'units' not in state:
+        if size < offset or 'buckets' not in state:
             offset, tin, tout, units, seen, titles = 0, 0, 0, 0.0, [], {'ai': '', 'custom': ''}
+            buckets = {}
         with open(path, 'rb') as handle:
             handle.seek(offset)
             chunk = handle.read()
     except OSError:
         return {'path': path, 'offset': offset, 'tin': tin, 'tout': tout, 'units': units,
-                'ids_tail': seen, **titles}
+                'buckets': buckets, 'ids_tail': seen, **titles}
     end = chunk.rfind(b'\n') + 1  # недописанную строку оставить до следующего раза
     for line in chunk[:end].splitlines():
         if b'"usage"' not in line and b'-title"' not in line:
@@ -99,9 +125,15 @@ def _claude_session_tokens_read(path: str, state: dict) -> dict:
         fresh, write = int(usage.get('input_tokens') or 0), int(usage.get('cache_creation_input_tokens') or 0)
         out, read = int(usage.get('output_tokens') or 0), int(usage.get('cache_read_input_tokens') or 0)
         tin, tout = tin + fresh + write, tout + out
-        units += (fresh * DSH_SAVING_WEIGHTS['input'] + write * DSH_SAVING_WEIGHTS['cache_write']
-                  + out * DSH_SAVING_WEIGHTS['output'] + read * DSH_SAVING_WEIGHTS['cache_read'])
+        cost = (fresh * DSH_SAVING_WEIGHTS['input'] + write * DSH_SAVING_WEIGHTS['cache_write']
+                + out * DSH_SAVING_WEIGHTS['output'] + read * DSH_SAVING_WEIGHTS['cache_read'])
+        units += cost
+        bucket = str(_claude_session_tokens_bucket(entry.get('timestamp')))
+        buckets[bucket] = buckets.get(bucket, 0.0) + cost
+    edge = time.time() - CLAUDE_SESSION_TOKENS_KEEP
+    buckets = {key: value for key, value in buckets.items() if int(key) >= edge}
     return {'path': path, 'offset': offset + end, 'tin': tin, 'tout': tout, 'units': units,
+            'buckets': buckets,
             'ids_tail': seen, **titles}
 
 

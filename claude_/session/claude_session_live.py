@@ -17,7 +17,7 @@ import glob
 import json
 import os
 
-from claude_.session.claude_session_tokens import claude_session_tokens
+from claude_.session.claude_session_tokens import claude_session_tokens, claude_session_tokens_since
 from claude_.session.claude_session_transcript import claude_session_transcript_cwd
 from claude_.session.claude_session_host import claude_session_host
 from claude_.session.claude_session_name import claude_session_name_get
@@ -149,10 +149,30 @@ def claude_session_live_find(session_id: str) -> dict:
 def _claude_session_live_pct(session_id: str, digest: dict):
     # Калибровка — по аккаунту самой сессии (снимок её `rate_limits`): на машине бывают
     # сессии разных аккаунтов, и цена процента у них своя. Кэш калибровки — 5 минут.
+    # ⚠ Только расход в **текущем** 5-часовом окне (с `resets_at` − 5 ч, по корзинам сводки):
+    # за всю жизнь долгая сессия набирала сотни процентов — цену многих окон и аккаунтов.
     per_pct = (dsh_saving_calibrate(session_id).get('five_hour') or {}).get('per_pct')
-    if not per_pct or not digest.get('units'):
+    start = _claude_session_live_window_start(session_id)
+    if not per_pct or not start:
         return None
-    return digest['units'] / per_pct
+    units = claude_session_tokens_since(digest.get('buckets'), start)
+    return units / per_pct if units else None
+
+
+def _claude_session_live_window_start(session_id: str) -> float:
+    # Начало текущего 5-часового окна — из снимка `rate_limits`, который статусная строка
+    # кладёт на сессию; своего снимка нет — свежайший (окно у аккаунта общее).
+    snapshots = []
+    for path in glob.glob(os.path.expanduser('~/.cache/claude-rate/*.json')):
+        try:
+            with open(path, encoding='utf-8') as handle:
+                snapshots.append(json.load(handle))
+        except (OSError, ValueError):
+            continue
+    mine = [row for row in snapshots if row.get('session_id') == session_id]
+    pool = mine or sorted(snapshots, key=lambda row: -float(row.get('at') or 0))[:1]
+    resets = (((pool[0].get('rate_limits') or {}).get('five_hour') or {}).get('resets_at')) if pool else None
+    return float(resets) - 5 * 3600 if resets else 0.0
 
 
 def _claude_session_live_agents() -> dict:
