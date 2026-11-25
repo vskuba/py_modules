@@ -20,6 +20,8 @@ import os
 from claude_.session.claude_session_tokens import claude_session_tokens
 from claude_.session.claude_session_transcript import claude_session_transcript_cwd
 from claude_.session.claude_session_host import claude_session_host
+from claude_.session.claude_session_name import claude_session_name_get
+from claude_.session.claude_session_ready import claude_session_ready_mark
 from proc_.proc_ps import proc_ps_ancestors
 from dsh_.dsh_board import dsh_board_motors_busy
 from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
@@ -39,7 +41,7 @@ def claude_session_live_list() -> list:
 
     Returns:
         `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, question, job, pane, visible}]`;
-        `title` — как в шапке вкладки: у сессии в tmux — заголовок её панели (его ставит
+        `title` — своё название (`t …`, `claude_session_name`), иначе как в шапке вкладки: у сессии в tmux — заголовок её панели (его ставит
         сам Claude Code), иначе — из транскрипта; пусто — заголовка ещё нет.
         ⚠ Заголовок панели верен и после `/resume` внутри сессии: файл сессии хранит прежний
         `sessionId`, и транскрипт по нему — пустой новый, без заголовка;
@@ -55,6 +57,7 @@ def claude_session_live_list() -> list:
         `job` — окно смотрит в фоновую сессию (`/resume` фоновой изнутри сессии): её
         `sessionId`; строка окна тогда несёт название, состояние, токены и субагентов
         фоновой (`_claude_session_live_viewers`); нет — пусто;
+        `ready` — отработала, пока на неё не смотрели (`claude_session_ready`);
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет),
@@ -99,6 +102,10 @@ def claude_session_live_list() -> list:
         tmux_session = row['pane'].split(':', 1)[0] if row['pane'] else ''
         row['host'] = claude_session_host(row['pid'], tmux_session, clients) if row['visible'] else ''
     _claude_session_live_viewers(rows)
+    for row in rows:
+        # Своё название (`t …` в сессии) — сильнее заголовка, что дал Claude Code.
+        row['title'] = claude_session_name_get(row['sessionId'], f"pid:{row['pid']}", row['job']) or row['title']
+    claude_session_ready_mark(rows, {pane['target'] for pane in panes if pane['shown']})
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
     return rows

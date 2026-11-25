@@ -24,6 +24,7 @@ import time
 import urllib.parse
 
 from claude_.session.claude_session_close import claude_session_close_armed, claude_session_close_click
+from claude_.session.claude_session_ready import claude_session_ready_seen
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list, \
     claude_session_live_orphans
 from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
@@ -74,7 +75,8 @@ _CLAUDE_SESSION_SWITCH_BADGE = {
 CLAUDE_SESSION_SWITCH_RADIO = '○'
 
 # Вид статуса в таблице: цвет и слово.
-_CLAUDE_SESSION_SWITCH_LOOK = {'waiting': ('\x1b[38;5;208m', 'вопрос'),
+_CLAUDE_SESSION_SWITCH_LOOK = {'ready': ('\x1b[1;92m', 'Ready'),
+                               'waiting': ('\x1b[38;5;208m', 'вопрос'),
                                'busy': ('\x1b[33m', 'работает'),
                                'shell': ('\x1b[36m', 'фон'),
                                'idle': ('\x1b[90m', 'ждёт')}
@@ -92,6 +94,7 @@ def claude_session_switch_to(session_id: str) -> str:
     row = claude_session_live_find(session_id)
     if not row:
         return f'сессии {session_id} нет среди живых'
+    claude_session_ready_seen(row['sessionId'], row['pid'])  # перешли на неё — «Ready» снят
     # Шапка вкладки — та, что стоит сейчас: у сессии без заголовка Claude Code пишет «Claude
     # Code»; среди одинаковых вкладок берётся вкладка проекта сессии.
     title = row['title'] or 'Claude Code'
@@ -153,6 +156,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     lines = []
     for row in sessions[:rows]:
         color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
+        if row.get('ready'):
+            color, state = _CLAUDE_SESSION_SWITCH_LOOK['ready']
         # «Проект: заголовок» — заголовок тот же, что в шапке вкладки; пока его нет (свежая
         # сессия) — «Новая сессия», а не служебное имя вроде «cyberai-61». Проект — имя папки.
         # Длинное имя проекта (cashier-service-payment-gateway) съело бы заголовок — короче.
@@ -178,7 +183,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         host = _claude_session_switch_badge(row['host'])
         # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
         # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
-        lines.append(f"\x1b[0m {close}  {radio} {padded}{_claude_session_switch_ask(row['question'])} {host} {color}{state:<8}\x1b[0m "
+        lines.append(f"\x1b[0m {close}  {radio} {padded}{_claude_session_switch_ask(row['question'])} {host}   {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_spent(row['tokens_in'], row['tokens_out'])} "
                      f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m"
                      f"  {_claude_session_switch_agents(row['agents'])}"
@@ -191,7 +196,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
             f"{orphan['project'] or '—'}: {orphan['title'] or CLAUDE_SESSION_SWITCH_UNTITLED}",
             CLAUDE_SESSION_SWITCH_NAME)
         lines.append(f"\x1b[0m      \x1b[38;5;244m {name:<{CLAUDE_SESSION_SWITCH_NAME}} \x1b[0m"
-                     f"{' ' * 7}\x1b[90m{orphan['state']:<8}\x1b[0m {' ' * 12} {' ' * 4}"
+                     f"{' ' * 9}\x1b[90m{orphan['state']:<8}\x1b[0m {' ' * 12} {' ' * 4}"
                      f"  {_claude_session_switch_agents(orphan['agents'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')

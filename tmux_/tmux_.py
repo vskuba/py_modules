@@ -25,7 +25,9 @@ TMUX_PARENT_DEPTH = 12
 
 
 def tmux_panes() -> list:
-    """Все панели tmux: `[{pane_pid, target, session, window, name, attached, title}]`.
+    """Все панели tmux: `[{pane_pid, target, session, window, name, attached, title, shown}]`.
+
+    `shown` — панель сейчас на экране: активная панель активного окна в сессии с клиентом.
 
     `title` — заголовок панели: его ставит программа в ней (OSC 0/2), он же — шапка вкладки
     терминала (`set-titles-string "#T"`).
@@ -38,16 +40,17 @@ def tmux_panes() -> list:
         return []
     out = _tmux_run('list-panes', '-a', '-F',
                     '#{pane_pid}\t#{session_name}\t#{window_index}\t#{pane_index}\t'
-                    '#{window_name}\t#{session_attached}\t#{pane_title}')
+                    '#{window_name}\t#{session_attached}\t#{pane_title}\t#{pane_active}#{window_active}')
     rows = []
     for line in out.splitlines():
         parts = line.split('\t')
-        if len(parts) != 7 or not parts[0].isdigit():
+        if len(parts) != 8 or not parts[0].isdigit():
             continue
-        pid, session, window, pane, name, attached, title = parts
+        pid, session, window, pane, name, attached, title, active = parts
         rows.append({'pane_pid': int(pid), 'target': f'{session}:{window}.{pane}',
                      'session': session, 'window': window, 'name': name,
-                     'attached': attached not in ('', '0'), 'title': title})
+                     'attached': attached not in ('', '0'), 'title': title,
+                     'shown': active == '11' and attached not in ('', '0')})
     return rows
 
 
