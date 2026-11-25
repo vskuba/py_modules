@@ -33,10 +33,13 @@ CLAUDE_SESSION_SWITCH_ROWS = 8
 # Ширина колонки имени.
 CLAUDE_SESSION_SWITCH_NAME = 34
 
-# Вид статуса в таблице: цвет, значок, слово.
-_CLAUDE_SESSION_SWITCH_LOOK = {'busy': ('\x1b[33m', '●', 'работает'),
-                               'shell': ('\x1b[36m', '◐', 'фон'),
-                               'idle': ('\x1b[90m', '○', 'ждёт')}
+# Радиокнопка строки: пустая у всех; своё окно статусная строка меняет на полную.
+CLAUDE_SESSION_SWITCH_RADIO = '○'
+
+# Вид статуса в таблице: цвет и слово.
+_CLAUDE_SESSION_SWITCH_LOOK = {'busy': ('\x1b[33m', 'работает'),
+                               'shell': ('\x1b[36m', 'фон'),
+                               'idle': ('\x1b[90m', 'ждёт')}
 
 
 def claude_session_switch_to(session_id: str) -> str:
@@ -56,23 +59,24 @@ def claude_session_switch_to(session_id: str) -> str:
 
 
 def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
-    """Таблица сессий для статусной строки: строка на сессию, имя — ссылкой на переключение.
+    """Таблица сессий для статусной строки: радиокнопка и имя — ссылками на переключение.
 
-    Таблица общая на все окна: свою строку (`▶`) помечает статусная строка окна сама —
-    по `sessionId`, который есть в ссылке каждой строки.
+    Таблица общая на все окна: радиокнопку своей строки (`○` → `◉`) отмечает статусная
+    строка окна сама — по `sessionId`, который есть в ссылке каждой строки.
     """
     sessions = claude_session_live_list()
     lines = []
     for row in sessions[:rows]:
-        color, mark, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
+        color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
         name = _claude_session_switch_short(row['name'], CLAUDE_SESSION_SWITCH_NAME)
         padded = name + ' ' * (CLAUDE_SESSION_SWITCH_NAME - len(name))
         # Ссылка — у каждой строки: сессия не в tmux на клик ответит страницей с причиной,
         # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.
         url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
-        padded = f'\x1b]8;;{url}\x1b\\{name}\x1b]8;;\x1b\\' + padded[len(name):]
+        padded = _claude_session_switch_link(url, name) + padded[len(name):]
+        radio = _claude_session_switch_link(url, CLAUDE_SESSION_SWITCH_RADIO)
         bg = ' bg' if row['kind'] == 'bg' else ''
-        lines.append(f"  {color}{mark}\x1b[0m {padded} {color}{state:<8}\x1b[0m "
+        lines.append(f"  {radio} {padded} {color}{state:<8}\x1b[0m "
                      f"{_claude_session_switch_tokens(row['tokens']):>6}\x1b[90m{bg}\x1b[0m")
     if len(sessions) > rows:
         lines.append(f'  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
@@ -83,6 +87,10 @@ def claude_session_switch_serve(port: int = CLAUDE_SESSION_SWITCH_PORT) -> None:
     """Поднять сервер переключения на петле — держит `GET /switch/<sessionId>`."""
     http.server.ThreadingHTTPServer((CLAUDE_SESSION_SWITCH_HOST, port),
                                     _ClaudeSessionSwitchHandler).serve_forever()
+
+
+def _claude_session_switch_link(url: str, text: str) -> str:
+    return f'\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\'
 
 
 def _claude_session_switch_short(text: str, limit: int) -> str:
