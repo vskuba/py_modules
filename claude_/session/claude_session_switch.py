@@ -183,7 +183,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         host = _claude_session_switch_badge(row['host'])
         # Строка начинается невидимым сбросом цвета: Claude Code срезает пробелы в начале
         # строки статуса, и без него отступ пропадал у всех строк, кроме подсвеченной своей.
-        lines.append(f"\x1b[0m {close}  {radio} {padded}{_claude_session_switch_ask(row['question'])} {host}   {color}{state:<8}\x1b[0m "
+        lines.append(f"\x1b[0m {close}  {radio} {padded}  {host}     {_claude_session_switch_state(color, state, row['question'])}\x1b[0m "
                      f"{_claude_session_switch_spent(row['tokens_in'], row['tokens_out'])} "
                      f"{_claude_session_switch_spent(row['window_in'], row['window_out'])} "
                      f"{_claude_session_switch_pct(row['window_pct'])}\x1b[90m{bg}\x1b[0m"
@@ -197,7 +197,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
             f"{orphan['project'] or '—'}: {orphan['title'] or CLAUDE_SESSION_SWITCH_UNTITLED}",
             CLAUDE_SESSION_SWITCH_NAME)
         lines.append(f"\x1b[0m      \x1b[38;5;244m {name:<{CLAUDE_SESSION_SWITCH_NAME}} \x1b[0m"
-                     f"{' ' * 9}\x1b[90m{orphan['state']:<8}\x1b[0m {' ' * 12} {' ' * 12} {' ' * 4}"
+                     f"{' ' * 11}\x1b[90m{orphan['state']:<8}\x1b[0m {' ' * 12} {' ' * 12} {' ' * 4}"
                      f"  {_claude_session_switch_agents(orphan['agents'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
@@ -236,9 +236,12 @@ def _claude_session_switch_project(name: str, project: str) -> str:
     return f'\x1b[38;5;110m{prefix}\x1b[38;5;252m{name[len(prefix):]}'
 
 
-def _claude_session_switch_ask(question: str) -> str:
-    # Значок «сессия ждёт ответа» — сразу за именем: «?» на оранжевой плашке; нет — пробел.
-    return dsh_motor_badge_ask() if question else ' '
+def _claude_session_switch_state(color: str, state: str, question: str) -> str:
+    # Колонка состояния, 8 клеток. Сессия ждёт ответа — впереди мигающий «?»: состояние
+    # читают глазами по колонке (за названием знак убран — дублировал).
+    if question:
+        return f"{dsh_motor_badge_ask()} {color}{state:<6}"
+    return f"{color}{state:<8}"
 
 
 def _claude_session_switch_question(question: str) -> str:
