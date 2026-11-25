@@ -1,8 +1,9 @@
 """Запущенные сессии Claude Code на этой машине: имя, работает или ждёт, токены, панель tmux.
 
 Источник — файлы `~/.claude/sessions/<pid>.json`, которые каждая сессия держит сама:
-`name`, `status` (`busy` — модель отвечает, `shell` — ход окончен, но идёт фоновая
-команда, `idle` — ждёт человека), `kind` (`interactive` или фоновая `bg`), `sessionId`, `cwd`. Токены —
+`name`, `status` (`busy` — модель отвечает, `waiting` — стоит и ждёт ввода человека:
+вопрос или разрешение, причина — в `waitingFor`; `shell` — ход окончен, но идёт фоновая
+команда, `idle` — ждёт следующего сообщения), `kind` (`interactive` или фоновая `bg`), `sessionId`, `cwd`. Токены —
 `claude_session_tokens`, панель — `tmux_pane_of_pid`.
 
 ```bash
@@ -26,8 +27,8 @@ from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 # Где сессии держат свои файлы.
 CLAUDE_SESSION_LIVE_DIR = '~/.claude/sessions'
 
-# Порядок статусов в списке: работает, фоновая команда, ждёт; незнакомый — в конце.
-CLAUDE_SESSION_LIVE_ORDER = ('busy', 'shell', 'idle')
+# Порядок статусов в списке: ждёт ответа, работает, фоновая команда, ждёт сообщения.
+CLAUDE_SESSION_LIVE_ORDER = ('waiting', 'busy', 'shell', 'idle')
 
 
 def claude_session_live_list() -> list:
@@ -43,7 +44,8 @@ def claude_session_live_list() -> list:
         `[{motor, name, question}]` (мотор и подпись — как в строке «DSH 4/4: …»;
         `question` — субагент стоит и ждёт ответа человека); хост DSH не
         отвечает — пусто у всех;
-        `question` — вопрос `AskUserQuestion`, который ждёт ответа человека; нет — пусто;
+        `question` — сессия стоит и ждёт ввода (`status: waiting`): причина из
+        `waitingFor` («input needed»); нет — пусто;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
@@ -63,6 +65,9 @@ def claude_session_live_list() -> list:
         rows.append({'sessionId': data['sessionId'], 'pid': pid,
                      'name': data.get('name') or data['sessionId'][:8], 'status': status,
                      'kind': data.get('kind') or '',
+                     # ⚠ Вопрос виден только здесь: в транскрипт строку вопроса Claude Code
+                     # дописывает вместе с ответом, пока она висит — её в файле нет.
+                     'question': (data.get('waitingFor') or 'вопрос') if status == 'waiting' else '',
                      'cwd': data.get('cwd') or '',
                      'updated': data.get('statusUpdatedAt') or data.get('updatedAt') or 0})
     panes = tmux_panes()
@@ -73,7 +78,6 @@ def claude_session_live_list() -> list:
     for row in rows:
         row['tokens_in'] = digest.get(row['sessionId'], {}).get('tokens_in', 0)
         row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
-        row['question'] = digest.get(row['sessionId'], {}).get('question', '')
         row['agents'] = agents.get(row['sessionId'], [])
         row['window_pct'] = _claude_session_live_pct(row['sessionId'], digest.get(row['sessionId'], {}))
         row['title'] = digest.get(row['sessionId'], {}).get('title', '')

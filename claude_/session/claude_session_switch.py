@@ -66,7 +66,8 @@ _CLAUDE_SESSION_SWITCH_BADGE = {
 CLAUDE_SESSION_SWITCH_RADIO = '○'
 
 # Вид статуса в таблице: цвет и слово.
-_CLAUDE_SESSION_SWITCH_LOOK = {'busy': ('\x1b[33m', 'работает'),
+_CLAUDE_SESSION_SWITCH_LOOK = {'waiting': ('\x1b[38;5;208m', 'вопрос'),
+                               'busy': ('\x1b[33m', 'работает'),
                                'shell': ('\x1b[36m', 'фон'),
                                'idle': ('\x1b[90m', 'ждёт')}
 
