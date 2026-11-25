@@ -32,6 +32,11 @@ from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 # Где сессии держат свои файлы.
 CLAUDE_SESSION_LIVE_DIR = '~/.claude/sessions'
 
+# Сбросы недельного окна ближе этого — один аккаунт (Anthropic сдвигает сброс на час-другой).
+# ⚠ Суточный допуск калибровки субагентов (`DSH_SAVING_ACCOUNT_DRIFT`) здесь склеил два
+# аккаунта со сбросами в 9 ч друг от друга — с занятостью окна 48% и 96%.
+CLAUDE_SESSION_LIVE_ACCOUNT_DRIFT = 4 * 3600
+
 # Порядок статусов в списке: ждёт ответа, работает, фоновая команда, ждёт сообщения.
 CLAUDE_SESSION_LIVE_ORDER = ('waiting', 'busy', 'shell', 'idle')
 
@@ -58,6 +63,8 @@ def claude_session_live_list() -> list:
         `sessionId`; строка окна тогда несёт название, состояние, токены и субагентов
         фоновой (`_claude_session_live_viewers`); нет — пусто;
         `ready` — отработала, пока на неё не смотрели (`claude_session_ready`);
+        `account` — аккаунт подписки (метка по сбросу недельного окна; у окна в фоновую —
+        аккаунт фоновой): у разных аккаунтов разные окна, их доли не складываются;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет),
@@ -107,6 +114,7 @@ def claude_session_live_list() -> list:
         tmux_session = row['pane'].split(':', 1)[0] if row['pane'] else ''
         row['host'] = claude_session_host(row['pid'], tmux_session, clients) if row['visible'] else ''
     _claude_session_live_viewers(rows)
+    _claude_session_live_accounts(rows)
     for row in rows:
         # Своё название (`t …` в сессии) — сильнее заголовка, что дал Claude Code.
         row['title'] = claude_session_name_get(row['sessionId'], f"pid:{row['pid']}", row['job']) or row['title']
@@ -233,6 +241,31 @@ def _claude_session_live_nested(row: dict, pids: set) -> bool:
     if row['entrypoint'].startswith('sdk'):
         return True
     return any(ancestor in pids for ancestor in proc_ps_ancestors(row['pid']))
+
+
+def _claude_session_live_accounts(rows: list) -> None:
+    # Аккаунт — по сбросу недельного окна в снимке `rate_limits` сессии (у окна в фоновую —
+    # фоновой). Anthropic сдвигает сброс у того же аккаунта на час-другой: близкие значения
+    # (`CLAUDE_SESSION_LIVE_ACCOUNT_DRIFT`) — один аккаунт, метка — наименьшее из них.
+    resets = {}
+    for row in rows:
+        resets[row['sessionId']] = _claude_session_live_reset(row['job'] or row['sessionId'])
+    labels = sorted({value for value in resets.values() if value})
+    canon = {}
+    for value in labels:
+        canon[value] = next((seen for seen in canon.values()
+                             if abs(float(seen) - float(value)) < CLAUDE_SESSION_LIVE_ACCOUNT_DRIFT), value)
+    for row in rows:
+        row['account'] = canon.get(resets[row['sessionId']], '')
+
+
+def _claude_session_live_reset(session_id: str) -> str:
+    try:
+        with open(os.path.expanduser(f'~/.cache/claude-rate/{session_id}.json'), encoding='utf-8') as handle:
+            limits = json.load(handle).get('rate_limits') or {}
+    except (OSError, ValueError):
+        return ''
+    return str((limits.get('seven_day') or {}).get('resets_at') or '')
 
 if __name__ == '__main__':
     for item in claude_session_live_list():

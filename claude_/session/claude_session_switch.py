@@ -170,7 +170,7 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         # а `sessionId` в строке нужен статусной строке, чтобы пометить своё окно.
         url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{row['sessionId']}"
         padded = (_claude_session_switch_link(url, _claude_session_switch_project(name, project),
-                                              row['host'], row['pid'], row['job'], row['cwd'])
+                                              row['host'], row['pid'], row['job'], row['cwd'], row['account'])
                   + padded[len(name):])
         # Название — на тёмной плашке во всю колонку, как кнопка «+»: видно, куда кликать;
         # по пробелу внутри слева и справа — отступы (сверху и снизу их в терминале нет).
@@ -255,18 +255,20 @@ def _claude_session_switch_cross(armed: bool) -> str:
 
 
 def _claude_session_switch_link(url: str, text: str, host: str = '', pid: int = 0, job: str = '',
-                                cwd: str = '') -> str:
+                                cwd: str = '', account: str = '') -> str:
     # Параметры ссылки OSC 8 — на экран не выходят: `host=` — по нему окно ставит вперёд
     # сессии своей IDE; `pid=` — по нему окно узнаёт свою строку. ⚠ Не по `sessionId`:
     # после `/resume` внутри сессии Claude Code отдаёт статусной строке id нового разговора,
     # а файл сессии хранит прежний; процесс же тот же. `job=` — окно смотрит в фоновую
     # сессию: её статусную строку рисует фоновая и узнаёт свою строку по этому id.
     # `proj=` — имя папки проекта: окно ставит вперёд сессии своего проекта.
+    # `acc=` — аккаунт подписки: доли чужих аккаунтов окно красит серым (окна разные).
     # Разделители `;`, `:` в значениях нельзя.
     project = os.path.basename(cwd.rstrip('/')).replace(' ', '_').replace(':', '_').replace(';', '_')
     params = ':'.join(part for part in (f"host={host.replace(' ', '_')}" if host else '',
                                          f'pid={pid}' if pid else '', f'job={job}' if job else '',
-                                         f'proj={project}' if project else '') if part)
+                                         f'proj={project}' if project else '',
+                                         f'acc={account}' if account else '') if part)
     return f'\x1b]8;{params};{url}\x1b\\{text}\x1b]8;;\x1b\\'
 
 
