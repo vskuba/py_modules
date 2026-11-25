@@ -35,6 +35,9 @@ CLAUDE_SESSION_SWITCH_PORT = 8797
 # Сколько ждать, пока шапка вкладки с tmux сменится на заголовок новой панели.
 CLAUDE_SESSION_SWITCH_TITLE_DELAY = 0.4
 
+# Чем запускается новая сессия: обёртка claude-shell (ответы через Telegram).
+CLAUDE_SESSION_SWITCH_COMMAND = 'claude-shell'
+
 # Журнал кликов: что пришло и чем кончилось — «клик ничего не сделал» разбирается по нему.
 CLAUDE_SESSION_SWITCH_LOG = '~/.cache/claude-session-switch.log'
 
@@ -110,7 +113,9 @@ def claude_session_switch_new(cwd: str, tmux_session: str = '') -> str:
         # Через интерактивную оболочку: окно берёт PATH того, кто его создаёт (служба без
         # nvm), и голый `claude` в нём не находился — окно молча закрывалось.
         shell = os.environ.get('SHELL') or '/bin/bash'
-        if tmux_window_new(tmux_session, cwd, [shell, '-ic', 'claude'], os.path.basename(cwd.rstrip('/'))):
+        # claude-shell, а не голый claude: в нём ответы на вопросы через Telegram.
+        if tmux_window_new(tmux_session, cwd, [shell, '-ic', CLAUDE_SESSION_SWITCH_COMMAND],
+                           os.path.basename(cwd.rstrip('/'))):
             return ''
         return f'tmux не открыл окно в сессии «{tmux_session}»'
     if jetbrains_tab_new(cwd):

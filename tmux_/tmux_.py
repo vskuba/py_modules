@@ -5,6 +5,7 @@ PYTHONPATH=. python -m tmux_.tmux_ panes            # все панели все
 PYTHONPATH=. python -m tmux_.tmux_ pane-of PID      # панель процесса (или пусто)
 PYTHONPATH=. python -m tmux_.tmux_ focus ЦЕЛЬ       # показать панель: session:window.pane
 PYTHONPATH=. python -m tmux_.tmux_ window СЕССИЯ ПАПКА КОМАНДА…   # новое окно с программой
+PYTHONPATH=. python -m tmux_.tmux_ enter БАЗА ПАПКА КОМАНДА…    # запустить в tmux здесь
 ```
 
 ⚠ Процесс в панели — не сама панель: tmux знает только `pane_pid` (обычно оболочку),
@@ -12,6 +13,7 @@ PYTHONPATH=. python -m tmux_.tmux_ window СЕССИЯ ПАПКА КОМАНДА
 ⚠ `focus` снаружи tmux (из сервиса, из обработчика ссылки) обязан назвать клиента:
 `switch-client` без `-c` берёт «текущего», а у внешнего процесса его нет.
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -77,7 +79,10 @@ def tmux_clients() -> list:
 
 
 def tmux_focus(target: str) -> bool:
-    """Вывести панель на экран: самый недавно активный клиент переключается на её окно.
+    """Вывести панель на экран: её окно выбирается в сессии tmux, клиент переводится на неё.
+
+    Клиент — тот, что уже показывает сессию цели (вкладка, где она открыта); такого нет —
+    самый недавно активный: он переключается на чужую сессию.
 
     Returns:
         True — переключено; False — нет клиента или нет такой цели.
@@ -86,7 +91,9 @@ def tmux_focus(target: str) -> bool:
     if not clients:
         return False
     session_window = target.rsplit('.', 1)[0]
-    ok = _tmux_ok('switch-client', '-c', clients[0]['name'], '-t', session_window)
+    session = session_window.split(':', 1)[0]
+    client = next((row for row in clients if row['session'] == session), clients[0])
+    ok = _tmux_ok('switch-client', '-c', client['name'], '-t', session_window)
     ok = _tmux_ok('select-window', '-t', session_window) and ok
     return _tmux_ok('select-pane', '-t', target) and ok
 
@@ -102,6 +109,30 @@ def tmux_window_new(session: str, cwd: str, command: list, name: str = '') -> bo
     if name:
         args += ['-n', name]
     return _tmux_ok(*args, *command)
+
+
+def tmux_session_enter(base: str, cwd: str, command: list, name: str = '') -> list:
+    """Запустить программу в tmux прямо в этом терминале — команда, которую надо `exec`.
+
+    Сессия `base` свободна (её не показывает ни один клиент) — программа становится её новым
+    окном, и терминал к ней подключается; сессии нет — она заводится. Занята другим
+    терминалом — заводится своя `base-2`, `base-3`, …: иначе второй терминал показывал бы
+    первый зеркалом.
+
+    Returns:
+        argv для `os.execvp` (`tmux attach …` / `tmux new-session …`).
+    """
+    names = set(_tmux_run('list-sessions', '-F', '#{session_name}').split())
+    shown = {row['session'] for row in tmux_clients()}
+    window = ['-n', name] if name else []
+    if base in names and base not in shown:
+        _tmux_ok('new-window', '-t', f'{base}:', '-c', cwd, *window, *command)
+        return ['tmux', 'attach', '-t', base]
+    session = base
+    number = 2
+    while session in names:
+        session, number = f'{base}-{number}', number + 1
+    return ['tmux', 'new-session', '-s', session, '-c', cwd, *window, *command]
 
 
 def _tmux_run(*args) -> str:
@@ -127,6 +158,9 @@ if __name__ == '__main__':
         print(tmux_pane_of_pid(int(sys.argv[2])))
     elif command == 'window' and len(sys.argv) > 4:
         sys.exit(0 if tmux_window_new(sys.argv[2], sys.argv[3], sys.argv[4:]) else 1)
+    elif command == 'enter' and len(sys.argv) > 4:
+        argv = tmux_session_enter(sys.argv[2], sys.argv[3], sys.argv[4:])
+        os.execvp(argv[0], argv)
     elif command == 'focus' and len(sys.argv) > 2:
         sys.exit(0 if tmux_focus(sys.argv[2]) else 1)
     else:
