@@ -2,7 +2,8 @@
 
 Транскрипт находит `claude_session_transcript_path`; у каждого ответа модели
 `message.usage`. Считается раздельно: «вход» — вход без кэша + запись в кэш, «выход» —
-что модель написала.
+что модель написала. Вдобавок — взвешенная цена сессии (`units`, веса прайса
+`DSH_SAVING_WEIGHTS`, с чтением кэша): из неё процент окна подписки, как у субагентов.
 Чтение из кэша (`cache_read_input_tokens`) не входит: оно повторяет весь контекст на
 каждом шаге и за час набегает в десятки миллионов, ничего не говоря о работе.
 
@@ -20,8 +21,9 @@ import json
 import os
 
 from claude_.session.claude_session_transcript import claude_session_transcript_path
+from dsh_.dsh_saving import DSH_SAVING_WEIGHTS
 
-# Состояние дочитывания: {sessionId: {path, offset, tin, tout, ids_tail, ai, custom}}.
+# Состояние дочитывания: {sessionId: {path, offset, tin, tout, units, ids_tail, ai, custom}}.
 CLAUDE_SESSION_TOKENS_CACHE = '~/.cache/claude-session-tokens.json'
 
 # Сколько последних id ответов помнить, чтобы не счесть хвост ответа дважды.
@@ -29,7 +31,9 @@ CLAUDE_SESSION_TOKENS_IDS = 64
 
 
 def claude_session_tokens(sessions: list) -> dict:
-    """Токены и заголовок сессий Claude Code: `{sessionId: {tokens_in, tokens_out, title}}`.
+    """Токены и заголовок сессий Claude Code: `{sessionId: {tokens_in, tokens_out, units, title}}`.
+
+    `units` — взвешенная цена во входных токенах (с чтением кэша), для процента окна.
 
     Args:
         sessions: `[{sessionId, cwd}]` — `cwd` нужен, чтобы найти транскрипт без обхода.
@@ -46,11 +50,11 @@ def claude_session_tokens(sessions: list) -> dict:
         state = cache.get(sid) or {}
         path = state.get('path') or claude_session_transcript_path(sid, row.get('cwd') or '')
         if not path:
-            result[sid] = {'tokens_in': 0, 'tokens_out': 0, 'title': ''}
+            result[sid] = {'tokens_in': 0, 'tokens_out': 0, 'units': 0.0, 'title': ''}
             continue
         state = _claude_session_tokens_read(path, state)
         cache[sid] = state
-        result[sid] = {'tokens_in': state['tin'], 'tokens_out': state['tout'],
+        result[sid] = {'tokens_in': state['tin'], 'tokens_out': state['tout'], 'units': state['units'],
                        'title': state['custom'] or state['ai']}
     _claude_session_tokens_save(cache)
     return result
@@ -58,18 +62,20 @@ def claude_session_tokens(sessions: list) -> dict:
 
 def _claude_session_tokens_read(path: str, state: dict) -> dict:
     offset, tin, tout = int(state.get('offset') or 0), int(state.get('tin') or 0), int(state.get('tout') or 0)
+    units = float(state.get('units') or 0)
     seen = list(state.get('ids_tail') or [])
     titles = {'ai': state.get('ai') or '', 'custom': state.get('custom') or ''}
     try:
         size = os.path.getsize(path)
         # Файл переписан или запись кэша старше раздельного счёта — считать заново.
-        if size < offset or 'tout' not in state:
-            offset, tin, tout, seen, titles = 0, 0, 0, [], {'ai': '', 'custom': ''}
+        if size < offset or 'units' not in state:
+            offset, tin, tout, units, seen, titles = 0, 0, 0, 0.0, [], {'ai': '', 'custom': ''}
         with open(path, 'rb') as handle:
             handle.seek(offset)
             chunk = handle.read()
     except OSError:
-        return {'path': path, 'offset': offset, 'tin': tin, 'tout': tout, 'ids_tail': seen, **titles}
+        return {'path': path, 'offset': offset, 'tin': tin, 'tout': tout, 'units': units,
+                'ids_tail': seen, **titles}
     end = chunk.rfind(b'\n') + 1  # недописанную строку оставить до следующего раза
     for line in chunk[:end].splitlines():
         if b'"usage"' not in line and b'-title"' not in line:
@@ -90,9 +96,13 @@ def _claude_session_tokens_read(path: str, state: dict) -> dict:
             continue
         if mid:
             seen = (seen + [mid])[-CLAUDE_SESSION_TOKENS_IDS:]
-        tin += int(usage.get('input_tokens') or 0) + int(usage.get('cache_creation_input_tokens') or 0)
-        tout += int(usage.get('output_tokens') or 0)
-    return {'path': path, 'offset': offset + end, 'tin': tin, 'tout': tout, 'ids_tail': seen, **titles}
+        fresh, write = int(usage.get('input_tokens') or 0), int(usage.get('cache_creation_input_tokens') or 0)
+        out, read = int(usage.get('output_tokens') or 0), int(usage.get('cache_read_input_tokens') or 0)
+        tin, tout = tin + fresh + write, tout + out
+        units += (fresh * DSH_SAVING_WEIGHTS['input'] + write * DSH_SAVING_WEIGHTS['cache_write']
+                  + out * DSH_SAVING_WEIGHTS['output'] + read * DSH_SAVING_WEIGHTS['cache_read'])
+    return {'path': path, 'offset': offset + end, 'tin': tin, 'tout': tout, 'units': units,
+            'ids_tail': seen, **titles}
 
 
 def _claude_session_tokens_load() -> dict:

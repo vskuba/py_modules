@@ -18,6 +18,7 @@ import os
 
 from claude_.session.claude_session_tokens import claude_session_tokens
 from claude_.session.claude_session_host import claude_session_host
+from dsh_.dsh_saving import dsh_saving_calibrate
 from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
 
 # Где сессии держат свои файлы.
@@ -31,8 +32,11 @@ def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, pane, visible}]`;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, pane, visible}]`;
         `title` — заголовок из транскрипта (шапка вкладки), пусто — его ещё нет;
+        `window_pct` — сколько процентов 5-часового окна подписки обошлась сессия (как
+        процент экономии субагентов: взвешенные токены / цена 1% окна её аккаунта);
+        `None` — калибровки ещё нет;
         `host` — где сессия видна: «PyCharm», «PhpStorm», … (`claude_session_host`);
         `pane` — цель tmux (`session:window.pane`) или пусто, если сессия не в tmux;
         `visible` — у сессии есть терминал на экране: не фоновая (`bg` терминала не имеет)
@@ -61,6 +65,7 @@ def claude_session_live_list() -> list:
     for row in rows:
         row['tokens_in'] = digest.get(row['sessionId'], {}).get('tokens_in', 0)
         row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
+        row['window_pct'] = _claude_session_live_pct(row['sessionId'], digest.get(row['sessionId'], {}))
         row['title'] = digest.get(row['sessionId'], {}).get('title', '')
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['visible'] = row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
@@ -78,6 +83,14 @@ def claude_session_live_find(session_id: str) -> dict:
             return row
     return {}
 
+
+def _claude_session_live_pct(session_id: str, digest: dict):
+    # Калибровка — по аккаунту самой сессии (снимок её `rate_limits`): на машине бывают
+    # сессии разных аккаунтов, и цена процента у них своя. Кэш калибровки — 5 минут.
+    per_pct = (dsh_saving_calibrate(session_id).get('five_hour') or {}).get('per_pct')
+    if not per_pct or not digest.get('units'):
+        return None
+    return digest['units'] / per_pct
 
 if __name__ == '__main__':
     for item in claude_session_live_list():
