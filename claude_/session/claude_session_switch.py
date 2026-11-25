@@ -26,7 +26,7 @@ import urllib.parse
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list
 from claude_.session.claude_session_transcript import claude_session_transcript_title
 from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
-from tmux_.tmux_ import tmux_focus
+from tmux_.tmux_ import tmux_focus, tmux_window_new
 
 # Адрес сервера переключения: только петля.
 CLAUDE_SESSION_SWITCH_HOST = '127.0.0.1'
@@ -83,12 +83,22 @@ def claude_session_switch_to(session_id: str) -> str:
             f"и сессия «{row['name']}» не в tmux")
 
 
-def claude_session_switch_new(cwd: str) -> str:
-    """Новая сессия Claude Code: вкладка терминала в IDE, где открыт проект папки `cwd`.
+def claude_session_switch_new(cwd: str, tmux_session: str = '') -> str:
+    """Новая сессия Claude Code: окном tmux в той же вкладке или новой вкладкой IDE.
+
+    Args:
+        cwd: папка проекта — там запустится Claude.
+        tmux_session: окно, где нажали «＋», само в tmux — новая сессия становится окном
+            этой сессии tmux и сразу показывается в той же вкладке терминала; радиокнопка
+            потом переключает между окнами. Пусто — вкладка терминала в IDE этого проекта.
 
     Returns:
         Пусто — открыта; иначе причина отказа словами.
     """
+    if tmux_session:
+        if tmux_window_new(tmux_session, cwd, ['claude'], os.path.basename(cwd.rstrip('/'))):
+            return ''
+        return f'tmux не открыл окно в сессии «{tmux_session}»'
     if jetbrains_tab_new(cwd):
         return ''
     return 'ни одной IDE с плагином Claude Tab Switch — открыть вкладку негде'
@@ -156,8 +166,10 @@ class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
             target = url.path[len('/switch/'):].strip('/')
             error = claude_session_switch_to(target)
         elif url.path == '/new':
-            target = 'new ' + (urllib.parse.parse_qs(url.query).get('cwd') or [''])[0]
-            error = claude_session_switch_new(target[4:])
+            query = urllib.parse.parse_qs(url.query)
+            cwd, tmux_session = (query.get('cwd') or [''])[0], (query.get('tmux') or [''])[0]
+            target = f'new {cwd}' + (f' tmux={tmux_session}' if tmux_session else '')
+            error = claude_session_switch_new(cwd, tmux_session)
         else:
             self.send_response(404)
             self.end_headers()

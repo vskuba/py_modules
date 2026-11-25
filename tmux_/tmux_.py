@@ -4,6 +4,7 @@
 PYTHONPATH=. python -m tmux_.tmux_ panes            # все панели всех сессий
 PYTHONPATH=. python -m tmux_.tmux_ pane-of PID      # панель процесса (или пусто)
 PYTHONPATH=. python -m tmux_.tmux_ focus ЦЕЛЬ       # показать панель: session:window.pane
+PYTHONPATH=. python -m tmux_.tmux_ window СЕССИЯ ПАПКА КОМАНДА…   # новое окно с программой
 ```
 
 ⚠ Процесс в панели — не сама панель: tmux знает только `pane_pid` (обычно оболочку),
@@ -76,6 +77,18 @@ def tmux_focus(target: str) -> bool:
     return _tmux_ok('select-pane', '-t', target) and ok
 
 
+def tmux_window_new(session: str, cwd: str, command: list, name: str = '') -> bool:
+    """Новое окно в сессии tmux с программой — оно сразу показывается её клиентам.
+
+    ⚠ Программа получает окружение сервера tmux, а не вызывающего: PATH — тот, с каким
+    сервер поднят (из интерактивной оболочки человека — с nvm и прочим).
+    """
+    args = ['new-window', '-t', f'{session}:', '-c', cwd]
+    if name:
+        args += ['-n', name]
+    return _tmux_ok(*args, *command)
+
+
 def _tmux_run(*args) -> str:
     try:
         return subprocess.run(['tmux', *args], capture_output=True, text=True, timeout=5).stdout
@@ -108,6 +121,8 @@ if __name__ == '__main__':
             print(f"{row['target']:<20} pid {row['pane_pid']:<8} {row['name']}")
     elif command == 'pane-of' and len(sys.argv) > 2:
         print(tmux_pane_of_pid(int(sys.argv[2])))
+    elif command == 'window' and len(sys.argv) > 4:
+        sys.exit(0 if tmux_window_new(sys.argv[2], sys.argv[3], sys.argv[4:]) else 1)
     elif command == 'focus' and len(sys.argv) > 2:
         sys.exit(0 if tmux_focus(sys.argv[2]) else 1)
     else:
