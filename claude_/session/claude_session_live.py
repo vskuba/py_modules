@@ -40,7 +40,7 @@ def claude_session_live_list() -> list:
     """Живые сессии Claude Code: работающие, затем с фоновой командой, затем ждущие; свежие сверху.
 
     Returns:
-        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_pct, agents, question, job, pane, visible}]`;
+        `[{sessionId, pid, name, title, status, kind, cwd, updated, tokens_in, tokens_out, window_in, window_out, window_pct, agents, question, job, pane, visible}]`;
         `title` — своё название (`t …`, `claude_session_name`), иначе как в шапке вкладки: у сессии в tmux — заголовок её панели (его ставит
         сам Claude Code), иначе — из транскрипта; пусто — заголовка ещё нет.
         ⚠ Заголовок панели верен и после `/resume` внутри сессии: файл сессии хранит прежний
@@ -94,6 +94,11 @@ def claude_session_live_list() -> list:
         row['tokens_out'] = digest.get(row['sessionId'], {}).get('tokens_out', 0)
         row['agents'] = agents.get(row['sessionId'], [])
         row['window_pct'] = _claude_session_live_pct(row['sessionId'], digest.get(row['sessionId'], {}))
+        # Вход/выход в текущем 5-часовом окне — рядом с «всего за сессию».
+        start = _claude_session_live_window_start(row['sessionId'])
+        found = digest.get(row['sessionId'], {})
+        row['window_in'] = int(claude_session_tokens_since(found.get('buckets_in'), start)) if start else 0
+        row['window_out'] = int(claude_session_tokens_since(found.get('buckets_out'), start)) if start else 0
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['title'] = (_claude_session_live_pane_title(row['pane'], panes)
                         or digest.get(row['sessionId'], {}).get('title', ''))
@@ -216,7 +221,8 @@ def _claude_session_live_viewers(rows: list) -> None:
         if not job:
             continue
         row['job'] = job['sessionId']
-        for key in ('status', 'question', 'tokens_in', 'tokens_out', 'window_pct', 'agents', 'updated'):
+        for key in ('status', 'question', 'tokens_in', 'tokens_out', 'window_in', 'window_out', 'window_pct',
+                    'agents', 'updated'):
             row[key] = job[key]
 
 

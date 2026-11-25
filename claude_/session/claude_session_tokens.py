@@ -40,8 +40,9 @@ def claude_session_tokens(sessions: list) -> dict:
     """Токены и заголовок сессий Claude Code: `{sessionId: {tokens_in, tokens_out, units, title}}`.
 
     `units` — взвешенная цена во входных токенах (с чтением кэша), за всю жизнь сессии;
-    `buckets` — та же цена по 10-минутным корзинам (`{начало корзины: units}`, последние
-    6 ч) — для доли **текущего** 5-часового окна (`claude_session_tokens_since`).
+    `buckets`, `buckets_in`, `buckets_out` — цена, вход и выход по 10-минутным корзинам
+    (`{начало корзины: число}`, последние 6 ч) — для **текущего** 5-часового окна
+    (`claude_session_tokens_since`).
 
     Args:
         sessions: `[{sessionId, cwd}]` — `cwd` нужен, чтобы найти транскрипт без обхода.
@@ -58,12 +59,14 @@ def claude_session_tokens(sessions: list) -> dict:
         state = cache.get(sid) or {}
         path = state.get('path') or claude_session_transcript_path(sid, row.get('cwd') or '')
         if not path:
-            result[sid] = {'tokens_in': 0, 'tokens_out': 0, 'units': 0.0, 'buckets': {}, 'title': ''}
+            result[sid] = {'tokens_in': 0, 'tokens_out': 0, 'units': 0.0, 'buckets': {},
+                           'buckets_in': {}, 'buckets_out': {}, 'title': ''}
             continue
         state = _claude_session_tokens_read(path, state)
         cache[sid] = state
         result[sid] = {'tokens_in': state['tin'], 'tokens_out': state['tout'], 'units': state['units'],
-                       'buckets': state['buckets'],
+                       'buckets': state['buckets'], 'buckets_in': state['buckets_in'],
+                       'buckets_out': state['buckets_out'],
                        'title': state['custom'] or state['ai']}
     _claude_session_tokens_save(cache)
     return result
@@ -88,20 +91,22 @@ def _claude_session_tokens_read(path: str, state: dict) -> dict:
     offset, tin, tout = int(state.get('offset') or 0), int(state.get('tin') or 0), int(state.get('tout') or 0)
     units = float(state.get('units') or 0)
     buckets = dict(state.get('buckets') or {})
+    buckets_in, buckets_out = dict(state.get('buckets_in') or {}), dict(state.get('buckets_out') or {})
     seen = list(state.get('ids_tail') or [])
     titles = {'ai': state.get('ai') or '', 'custom': state.get('custom') or ''}
     try:
         size = os.path.getsize(path)
         # Файл переписан или запись кэша старше раздельного счёта — считать заново.
-        if size < offset or 'buckets' not in state:
+        if size < offset or 'buckets_out' not in state:
             offset, tin, tout, units, seen, titles = 0, 0, 0, 0.0, [], {'ai': '', 'custom': ''}
-            buckets = {}
+            buckets, buckets_in, buckets_out = {}, {}, {}
         with open(path, 'rb') as handle:
             handle.seek(offset)
             chunk = handle.read()
     except OSError:
         return {'path': path, 'offset': offset, 'tin': tin, 'tout': tout, 'units': units,
-                'buckets': buckets, 'ids_tail': seen, **titles}
+                'buckets': buckets, 'buckets_in': buckets_in, 'buckets_out': buckets_out,
+                'ids_tail': seen, **titles}
     end = chunk.rfind(b'\n') + 1  # недописанную строку оставить до следующего раза
     for line in chunk[:end].splitlines():
         if b'"usage"' not in line and b'-title"' not in line:
@@ -130,10 +135,13 @@ def _claude_session_tokens_read(path: str, state: dict) -> dict:
         units += cost
         bucket = str(_claude_session_tokens_bucket(entry.get('timestamp')))
         buckets[bucket] = buckets.get(bucket, 0.0) + cost
+        buckets_in[bucket] = buckets_in.get(bucket, 0) + fresh + write
+        buckets_out[bucket] = buckets_out.get(bucket, 0) + out
     edge = time.time() - CLAUDE_SESSION_TOKENS_KEEP
-    buckets = {key: value for key, value in buckets.items() if int(key) >= edge}
+    buckets, buckets_in, buckets_out = ({key: value for key, value in table.items() if int(key) >= edge}
+                                        for table in (buckets, buckets_in, buckets_out))
     return {'path': path, 'offset': offset + end, 'tin': tin, 'tout': tout, 'units': units,
-            'buckets': buckets,
+            'buckets': buckets, 'buckets_in': buckets_in, 'buckets_out': buckets_out,
             'ids_tail': seen, **titles}
 
 
