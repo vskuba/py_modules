@@ -157,8 +157,10 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
     lines = []
     for row in sessions[:rows]:
         color, state = _CLAUDE_SESSION_SWITCH_LOOK.get(row['status'], _CLAUDE_SESSION_SWITCH_LOOK['idle'])
+        # «Ready» — ход закончен и ждёт человека; пока на сессию работают субагенты DSH,
+        # ход по сути не закончен — это «фон», а не «Ready».
         if row.get('ready'):
-            color, state = _CLAUDE_SESSION_SWITCH_LOOK['ready']
+            color, state = _CLAUDE_SESSION_SWITCH_LOOK['shell' if row['agents'] else 'ready']
         # «Проект: заголовок» — заголовок тот же, что в шапке вкладки; пока его нет (свежая
         # сессия) — «Новая сессия», а не служебное имя вроде «cyberai-61». Проект — имя папки.
         # Длинное имя проекта (cashier-service-payment-gateway) съело бы заголовок — короче.
