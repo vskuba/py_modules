@@ -17,8 +17,14 @@ have been fully subnetted» на машине, где мостовых сете�
 тестов против него. Сервис задачи один на машину (QA конвейера), а параллельных
 копий бывает несколько (`dsh-board fanout --worktree`) — им нужен каждому свой.
 
+Третий — PHP-проектам, где постоянного сервиса задачи нет: сюита (`phpunit`,
+`behat`, `phpcs`, `psalm`) прогоняется php-fpm-контейнером над копией, а не
+основной выкладкой, куда та по привычке `compose exec` смонтирована. Механика —
+`project_worktree_php.py`.
+
 ```bash
 python -m project_.project_worktree test tests/test_x.py --worktree <копия>
+python -m project_.project_worktree test <репо> --worktree <копия> --suite phpunit --filter Rapyd
 ```
 """
 import argparse
@@ -40,6 +46,7 @@ if __package__ in (None, ''):
 
 from http_.http_pool import http_pool_client
 from project_.project_ import project_git
+from project_.project_worktree_php import project_worktree_php_test
 
 # Что обязано быть ссылкой в каталоге задачи: compose монтирует каталог задачи
 # целиком, а симлинки из основной выкладки в него не едут — без них `.env`
@@ -378,17 +385,29 @@ if __name__ == '__main__':
                     'текущий')
     ap.add_argument('--service', default='uvicorn_task',
                     help='подстрока имени compose-сервиса')
-    ap.add_argument('--timeout', type=float, default=120, help='секунды')
+    ap.add_argument('--suite', choices=['phpunit', 'behat', 'phpcs', 'psalm'], default='',
+                    help='test: PHP-сюита над копией вместо сервера с pytest; '
+                         'позиционный аргумент — основная выкладка репо')
+    ap.add_argument('--filter', default='', help='test --suite: phpunit --filter / behat --name')
+    ap.add_argument('--path', default='', help='test --suite: путь фич/сюиты (behat, phpunit)')
+    ap.add_argument('--timeout', type=float, default=None,
+                    help='секунды (120 для сервера, 3600 для PHP-сюиты)')
     ns = ap.parse_args()
     try:
+        if ns.command == 'test' and ns.suite:
+            result = project_worktree_php_test(*(ns.targets or [''])[:1], ns.worktree, ns.suite,
+                                               ns.filter, ns.path, ns.timeout or 3600)
+            print(result['digest'])
+            print(f'журнал: {result["log"]}')
+            raise SystemExit(result['code'])
         if ns.command == 'test':
             result = project_worktree_test(ns.targets or ['tests'], ns.worktree, ns.service,
-                                           ['-k', ns.k] if ns.k else None, timeout=ns.timeout)
+                                           ['-k', ns.k] if ns.k else None, timeout=ns.timeout or 120)
             print(result['output'])
             raise SystemExit(result['code'])
         if ns.command == 'up':
             print(asyncio.run(project_worktree_up(
-                ns.worktree, ns.service, timeout=ns.timeout)))
+                ns.worktree, ns.service, timeout=ns.timeout or 120)))
         else:
             print(project_worktree_down(ns.service))
     except (RuntimeError, TimeoutError, ValueError) as err:
