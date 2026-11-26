@@ -268,8 +268,8 @@ def _visible(raw_piece: str, kind: str) -> str:
     return html_mod.unescape(raw_piece)
 
 
-def _blocks(raw: str) -> list[dict]:
-    """Склеить места в блоки-фразы: [{text, line, kind}]."""
+def text_grammar_blocks(raw: str) -> list[dict]:
+    """Видимый текст HTML блоками-фразами: [{text, line, kind}] — строчные теги фразу не рвут."""
     out: list[dict] = []
     cur = None
     for r in text_grammar_regions(raw):
@@ -287,7 +287,7 @@ def text_grammar_file(path: str, lang: str = "uk", url: str | None = None,
     """Проверить файл (.html — только видимый текст); вернуть находки с line, kind и context."""
     raw = open(path, encoding="utf-8").read()
     if path.endswith((".html", ".htm")):
-        blocks = _blocks(raw)
+        blocks = text_grammar_blocks(raw)
     else:
         blocks, line = [], 1
         for para in re.split(r"\n\s*\n", raw):
