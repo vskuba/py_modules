@@ -168,6 +168,14 @@ def _service_spec(root: Path, service: str, worktree: Path) -> tuple:
     spec = (config.get('services') or {}).get(service)
     if not spec:
         raise ValueError(f'сервиса {service!r} нет в compose основной выкладки {root}')
+    if not spec.get('image') and spec.get('build'):
+        # ⚠ Сервис, описанный только `build:`: `config --format json` не
+        # подставляет **умолчное имя его образа**, а `docker run` его хочет —
+        # KeyError на ровном месте. Compose даёт такому образу имя
+        # `<проект>-<сервис>`, где проект — `name:` из файла или каталог;
+        # берём то же правило. Образ обязан быть собран (`compose build`),
+        # иначе `docker run` скажет это словами.
+        spec['image'] = f"{config.get('name') or root.name.lower()}-{service}"
     nets = list((spec.get('networks') or {}).keys())
     network = ((config.get('networks') or {}).get(nets[0]) or {}).get('name') if nets else None
     return spec, network
