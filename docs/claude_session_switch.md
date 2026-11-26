@@ -351,3 +351,19 @@ set -s extended-keys-format csi-u    # ESC[13;2u — этот вид Claude Code
   папке сервера); строки `complete key` и `input_key_vt10x`.
 - Побочный эффект: в голом bash внутри tmux Shift+Enter печатает `[13;2u`.
 - Не сработало — Ctrl+J: перевод строки, который проходит через tmux без настроек.
+
+## 10. Переключатель бэкенда справа от «＋»
+
+`○ Claude ● Qwen4` на строке кнопки — бэкенд этого окна; клик — `GET /backend?pid=<claude>&to=<имя>`.
+Сервер передаёт просьбу обёртке claude-shell (`claude_/session/claude_session_backend.py`:
+файл `~/.cache/claude-shell-backend/<pid обёртки>` + `SIGUSR1`), та перезапускает `claude`
+на новом бэкенде с `--resume` той же беседы. Что значат имена бэкендов — знает только
+claude-shell (`src/backend/backend_switch.py`, `.claude/docs/backend.md` там).
+
+- Рисуется, только если в окружении строки есть `CLAUDE_SHELL_BACKEND` — её ставит
+  claude-shell ручной сессии; у голого `claude` и у ролей конвейера переключателя нет.
+- ⚠⚠ Сигнал — только обёртке, у чьего `claude` эта метка в окружении: обёртку без
+  обработчика `SIGUSR1` по умолчанию убивает вместе с сессией.
+- Ширина для выравнивания вправо — `stty size` терминала процесса `claude`: stdout
+  статусной строки не терминал.
+

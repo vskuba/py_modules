@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.parse
 
+from claude_.session.claude_session_backend import claude_session_backend_request
 from claude_.session.claude_session_close import claude_session_close_armed, claude_session_close_click
 from claude_.session.claude_session_ready import claude_session_ready_seen
 from claude_.session.claude_session_live import claude_session_live_find, claude_session_live_list, \
@@ -205,7 +206,8 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
 
 
 def claude_session_switch_serve(port: int = CLAUDE_SESSION_SWITCH_PORT) -> None:
-    """Поднять сервер переключения на петле: `GET /switch/<sessionId>`, `GET /new?cwd=…`."""
+    """Поднять сервер переключения на петле: `GET /switch/<sessionId>`, `GET /new?cwd=…`,
+    `GET /backend?pid=<claude>&to=<бэкенд>`."""
     http.server.ThreadingHTTPServer((CLAUDE_SESSION_SWITCH_HOST, port),
                                     _ClaudeSessionSwitchHandler).serve_forever()
 
@@ -344,6 +346,13 @@ class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
             answer = claude_session_close_click(target[6:])
             error = '' if answer in ('armed', 'closed') else answer
             target += f' {answer}' if not error else ''
+        elif url.path == '/backend':
+            # Переключатель бэкенда справа от «+»: `pid` — процесс `claude` нажатого окна.
+            query = urllib.parse.parse_qs(url.query)
+            pid, backend = (query.get('pid') or ['0'])[0], (query.get('to') or [''])[0]
+            target = f'backend {pid} {backend}'
+            error = (claude_session_backend_request(int(pid), backend) if pid.isdigit()
+                     else f'нет pid процесса claude: «{pid}»')
         elif url.path == '/new':
             query = urllib.parse.parse_qs(url.query)
             cwd, tmux_session = (query.get('cwd') or [''])[0], (query.get('tmux') or [''])[0]
