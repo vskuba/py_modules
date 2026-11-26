@@ -241,6 +241,10 @@ def _claude_session_switch_state(color: str, state: str, question: str) -> str:
     # читают глазами по колонке (за названием знак убран — дублировал).
     if question:
         return f"{dsh_motor_badge_ask()} {color}{state:<6}"
+    if state == _CLAUDE_SESSION_SWITCH_LOOK['ready'][1]:
+        # «R» мигает сам терминал (SGR 5): статусная строка перерисовывается раз в секунду,
+        # быстрее ею не мигнуть.
+        return f"{color}\x1b[5m{state[0]}\x1b[25m{state[1:]:<7}"
     return f"{color}{state:<8}"
 
 
