@@ -34,23 +34,26 @@ def tmux_panes() -> list:
 
     `attached` — к сессии tmux подключён хоть один клиент, то есть панель где-то на экране.
 
+    `label` — своё название панели (`tmux_pane_label`); нет — пусто.
+
     tmux не стоит или сервер не запущен — пустой список, не исключение.
     """
     if not shutil.which('tmux'):
         return []
     out = _tmux_run('list-panes', '-a', '-F',
                     '#{pane_pid}\t#{session_name}\t#{window_index}\t#{pane_index}\t'
-                    '#{window_name}\t#{session_attached}\t#{pane_title}\t#{pane_active}#{window_active}')
+                    '#{window_name}\t#{session_attached}\t#{pane_title}\t#{pane_active}#{window_active}\t'
+                    '#{@claude_name}')
     rows = []
     for line in out.splitlines():
         parts = line.split('\t')
-        if len(parts) != 8 or not parts[0].isdigit():
+        if len(parts) != 9 or not parts[0].isdigit():
             continue
-        pid, session, window, pane, name, attached, title, active = parts
+        pid, session, window, pane, name, attached, title, active, label = parts
         rows.append({'pane_pid': int(pid), 'target': f'{session}:{window}.{pane}',
                      'session': session, 'window': window, 'name': name,
                      'attached': attached not in ('', '0'), 'title': title,
-                     'shown': active == '11' and attached not in ('', '0')})
+                     'shown': active == '11' and attached not in ('', '0'), 'label': label})
     return rows
 
 
@@ -120,6 +123,21 @@ def tmux_window_new(session: str, cwd: str, command: list, name: str = '') -> bo
 def tmux_pane_title(target: str) -> str:
     """Заголовок панели сейчас — как его поставила программа в ней; нет панели — пусто."""
     return _tmux_run('display-message', '-p', '-t', target, '#{pane_title}').strip()
+
+
+def tmux_pane_label(target: str, label: str) -> bool:
+    """Дать панели своё название — шапка вкладки терминала покажет его вместо заголовка программы.
+
+    Пишется в опцию панели `@claude_name`; шапку собирает `set-titles-string` в `~/.tmux.conf`:
+    `#{?@claude_name,#{?#{m/r:^[^[:alnum:]] ,#{pane_title}},#{=1:pane_title} ,}#{@claude_name},#T}` —
+    значок работы Claude Code (✳/⠂ перед пробелом) из заголовка программы остаётся, остальное —
+    своё название. Пусто — снять.
+
+    ⚠ Без этой строки в `~/.tmux.conf` опция ставится, но шапка её не видит.
+    """
+    if label:
+        return _tmux_ok('set-option', '-p', '-t', target, '@claude_name', label)
+    return _tmux_ok('set-option', '-p', '-u', '-t', target, '@claude_name')
 
 
 def tmux_pane_kill(target: str) -> bool:

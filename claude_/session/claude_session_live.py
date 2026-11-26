@@ -27,7 +27,7 @@ from dsh_.dsh_board import dsh_board_motors_busy
 from dsh_.dsh_saving import dsh_saving_calibrate, dsh_saving_owner_of
 from dsh_.dsh_session import dsh_session_asking
 from dsh_.dsh_wait import dsh_wait_owner_of
-from tmux_.tmux_ import tmux_clients, tmux_pane_of_pid, tmux_panes
+from tmux_.tmux_ import tmux_clients, tmux_pane_label, tmux_pane_of_pid, tmux_panes
 
 # Где сессии держат свои файлы.
 CLAUDE_SESSION_LIVE_DIR = '~/.claude/sessions'
@@ -117,7 +117,12 @@ def claude_session_live_list() -> list:
     _claude_session_live_accounts(rows)
     for row in rows:
         # Своё название (`t …` в сессии) — сильнее заголовка, что дал Claude Code.
-        row['title'] = claude_session_name_get(row['sessionId'], f"pid:{row['pid']}", row['job']) or row['title']
+        custom = claude_session_name_get(row['sessionId'], f"pid:{row['pid']}", row['job'])
+        row['title'] = custom or row['title']
+        # Шапка вкладки терминала — тоже своим названием: её собирает tmux из опции панели.
+        label = next((pane['label'] for pane in panes if pane['target'] == row['pane']), '') if row['pane'] else ''
+        if row['pane'] and label != custom:
+            tmux_pane_label(row['pane'], custom)
     claude_session_ready_mark(rows, {pane['target'] for pane in panes if pane['shown']})
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
