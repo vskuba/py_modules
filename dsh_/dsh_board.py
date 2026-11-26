@@ -531,6 +531,9 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
     Копия снимается, только если в ней нет незакоммиченных правок — ветка остаётся.
     Проекты копий, чей каталог удалён мимо слоя (`git worktree remove`), снимаются с панели
     тоже — и без карточек: иначе их список на панели только растёт.
+    Опустевший проект снимается с панели (каталог остаётся): все его карточки агентские
+    и в архиве. Проект, где есть хоть одна карточка человека или живая, не трогается;
+    проект без карточек вовсе — тоже (мог быть только что заведён руками).
     Зовётся сама — `dsh_board_gc_auto` из статусной строки, не чаще раза в час.
 
     Args:
@@ -545,7 +548,9 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
     archived = set(state.get('archived') or [])
     edge = (time.time() - days * 86400) * 1000
     rows = []
-    for item in dsh_session_list(base=base):
+    dropped = set()   # проекты, уже снятые с панели в этом проходе (снимок state их ещё помнит)
+    sessions = dsh_session_list(base=base)
+    for item in sessions:
         session = item.get('sessionId') or ''
         key = re.sub(r'-g\d+$', '', session)
         if key not in robots or session in archived or item.get('running'):
@@ -565,10 +570,12 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
         worktree_drop = bool(worktree) and not gone and not kept
         if not dry:
             dsh_session_archive(session, base=base)
+            archived.add(session)
             if worktree_drop:
                 with contextlib.suppress(DshWorktreeError):
                     dsh_worktree_drop(worktree)
             if worktree and not kept:
+                dropped.add(os.path.realpath(worktree))
                 with contextlib.suppress(DshApiError):
                     dsh_board_workspace_drop(worktree, base=base)
                 dsh_board_worktree_forget(key)   # копии больше нет — метаданные не в счёт
@@ -577,13 +584,19 @@ def dsh_board_gc(days: float = DSH_BOARD_GC_DAYS, dry: bool = False, *,
     tech = os.path.realpath(_worktree_workspace())   # технический workspace не снимаем
     for workspace in state.get('workspaces') or []:
         path = workspace.get('path') or ''
-        if os.path.realpath(path) == tech:
+        if os.path.realpath(path) in {tech} | dropped:
             continue
         if DSH_BOARD_WORKTREE_MARK in path and not os.path.isdir(path):
             if not dry:
                 with contextlib.suppress(DshApiError):
                     dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace['id']}}, base=base)
             rows.append({'session': '', 'title': os.path.basename(path), 'worktree': path, 'kept': ''})
+            continue
+        if _workspace_empty(path, sessions, robots, archived):
+            if not dry:
+                with contextlib.suppress(DshApiError):
+                    dsh_api_call('workspace/delete', {'request': {'workspaceId': workspace['id']}}, base=base)
+            rows.append({'session': '', 'title': os.path.basename(path), 'worktree': '', 'kept': ''})
     return rows
 
 
@@ -753,6 +766,7 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
         if task.get('archive') and session and not task.get('session') and not tree:
             with contextlib.suppress(DshApiError):
                 dsh_session_archive(session, base=base)
+            archived.add(session)
 
     # Клады — последовательно, по порядку задач: порядок в боксе — порядок раздачи,
     # и гонка нитей не должна его путать. Ждать — параллельно, это только чтение.
@@ -1119,3 +1133,13 @@ def _patient(ask, timeout: float, retry: tuple = (DshApiUnreachable, DshApiUnava
 if __name__ == '__main__':
     from dsh_.dsh_board_cli import dsh_board_cli_main
     raise SystemExit(dsh_board_cli_main())
+
+
+def _workspace_empty(path: str, sessions: list, robots: set, archived: set) -> bool:
+    """Опустел ли проект субагентов: карточки в нём есть, и все — агентские в архиве."""
+    real = os.path.realpath(path)
+    mine = [item for item in sessions if os.path.realpath(item.get('cwd') or '/') == real]
+    return bool(mine) and all(
+        re.sub(r'-g\d+$', '', item.get('sessionId') or '') in robots
+        and (item.get('sessionId') or '') in archived and not item.get('running')
+        for item in mine)

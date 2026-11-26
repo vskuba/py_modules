@@ -161,6 +161,24 @@ def test_gc_keeps_technical_workspace_and_sweeps_old_copies(sandbox, monkeypatch
     assert dsh_board.dsh_board_worktree_row('card-new') == {}   # метаданные мёртвой карточки стёрты
 
 
+def test_gc_drops_emptied_workspace_keeps_human(sandbox, monkeypatch):
+    """gc: проект, где все карточки агентские и в архиве, снимается; с карточкой человека — нет."""
+    sandbox.state['workspaces'] = [{'id': 'w-bot', 'path': '/proj/bot'},
+                                   {'id': 'w-mix', 'path': '/proj/mix'},
+                                   {'id': 'w-new', 'path': '/proj/new'}]
+    monkeypatch.setattr(dsh_board, 'dsh_session_list', lambda **kw: [
+        {'sessionId': 'bot-old', 'cwd': '/proj/bot', 'updatedAt': 0},
+        {'sessionId': 'bot-done', 'cwd': '/proj/bot', 'updatedAt': 0},
+        {'sessionId': 'bot-mix', 'cwd': '/proj/mix', 'updatedAt': 0},
+        {'sessionId': 'human', 'cwd': '/proj/mix', 'updatedAt': 0},
+    ])
+    monkeypatch.setattr(dsh_board, 'dsh_session_archive', lambda session, **kw: None)
+    sandbox.state['robots'] = ['bot-old', 'bot-done', 'bot-mix']
+    sandbox.state['archived'] = ['bot-done']
+    dsh_board.dsh_board_gc(base='x:1')
+    assert sandbox.calls == [('workspace/delete', {'request': {'workspaceId': 'w-bot'}})]
+
+
 def test_workspace_drop_refuses_technical(sandbox):
     """Снять технический workspace руками — отказ, его файлы и карточки общие."""
     sandbox.state['workspaces'] = [{'id': 'w-tech', 'path': str(sandbox.technical)}]
