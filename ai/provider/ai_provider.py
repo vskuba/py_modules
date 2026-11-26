@@ -107,6 +107,24 @@ class AiProvider(ABC):
         return (str(config_get(self.name.upper() + '_API_URL') or ''),
                 str(config_get(self.name.upper() + '_API_KEY') or ''))
 
+    def raw_model(self, model_name: str) -> str:
+        """
+        Имя модели, которое положить в тело запроса.
+
+        Большинство сервисов принимает реестровое имя — хвост после префикса
+        (`openrouter/deepseek/deepseek-v4-flash-0731` -> `deepseek/…`), — и
+        умолчание возвращает `model_name` без изменений. Строгий сервис
+        переопределяет метод: vLLM, например, знает только имя, под которым
+        поднял модель, и на реестровое отвечает 404 — так стало на gx10 после
+        переезда с llama.cpp, который принимал любое.
+
+        Зовут его там, где тело запроса собирают руками, мимо pydantic-ai
+        (`ai_vision`, `translate_review`); стратегия, собирающая модель через
+        `model_get`, зовёт его и там (gx10) — чтобы имя в запросе не зависело
+        от пути сборки.
+        """
+        return model_name
+
     def raw_body_no_thinking(self) -> dict:
         """
         Поля тела запроса, глушащие размышления при сыром вызове.

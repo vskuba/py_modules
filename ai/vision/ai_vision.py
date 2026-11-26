@@ -13,9 +13,11 @@ RGB-JPEG — `ai_vision_normalize`, и только так уходит в мо�
 **Модель адресуется именем, как везде в `ai/`.** Адрес и ключ берутся из
 стратегии сервиса (`raw_endpoint`), зрение работает с любым провайдером
 реестра, а не только с gx10. Имя модели — обычное, с префиксом сервиса:
-`gx10/qwen-large`. Размышления гасятся полем стратегии (`raw_body_no_thinking`):
-размышляющая модель скармливает бюджет ответа внутреннему монологу и возвращает
-пустой `content`.
+`gx10/qwen-large`; в тело запроса его хвост кладёт `raw_model` стратегии —
+строгие серверы (vLLM) знают только имя, под которым подняли модель, и на
+реестровое отвечают 404. Размышления гасятся полем стратегии
+(`raw_body_no_thinking`): размышляющая модель скармливает бюджет ответа
+внутреннему монологу и возвращает пустой `content`.
 
 Запрос сырой: pydantic-ai здесь избыточен — один вопрос к одной картинке,
 одно POST, одно поле ответа.
@@ -117,7 +119,7 @@ async def ai_vision_describe(image: bytes, prompt: str = '', model_name: str = '
     # живёт в тощих окружениях, куда LLM-стек не ставили.
     from ai.provider.ai_provider_registry import ai_provider_registry_get
 
-    model_clean = name.partition('/')[2]  # адрес спрашиваем у стратегии полным именем, в запрос идёт имя без префикса сервиса
+    model_clean = name.partition('/')[2]  # адрес спрашиваем у стратегии полным именем, в запрос имя кладёт raw_model стратегии
     provider = ai_provider_registry_get(name)
     if not provider:
         raise ValueError(f"Vision: сервис модели '{name}' не найден в реестре провайдеров.")
@@ -128,7 +130,7 @@ async def ai_vision_describe(image: bytes, prompt: str = '', model_name: str = '
                          f"(для gx10 — GX10_<РАЗМЕР>_API_URL).")
 
     body = {
-        'model': model_clean,
+        'model': provider.raw_model(model_clean),
         'max_tokens': max_tokens,
         'temperature': 0.2,
         'messages': [{'role': 'user', 'content': [
