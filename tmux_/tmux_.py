@@ -87,21 +87,44 @@ def tmux_clients() -> list:
     return sorted(rows, key=lambda row: -row['activity'])
 
 
-def tmux_focus(target: str) -> bool:
+def tmux_focus(target: str, steal: bool = True, client: str = '') -> bool:
     """Вывести панель на экран: её окно выбирается в сессии tmux, клиент переводится на неё.
 
     Клиент — тот, что уже показывает сессию цели (вкладка, где она открыта); такого нет —
     самый недавно активный: он переключается на чужую сессию.
 
+    Args:
+        steal: False — чужой клиент не трогать. ⚠ Переведённый клиент уносит с экрана
+            сессию, которую показывал: она остаётся жить без вкладки («скрыта»). Без своего
+            клиента окно и панель всё равно выбираются — подключившийся потом увидит их.
+        client: имя (tty) клиента — вкладка, где кликнули; сильнее выбора выше. Цель в
+            другой сессии tmux — её окно **переезжает** в сессию этой вкладки, а не вкладка
+            переключается целиком (иначе прочие окна вкладки остались бы без экрана).
+
     Returns:
-        True — переключено; False — нет клиента или нет такой цели.
+        True — переключено; False — нет клиента (или своего при `steal=False`), нет цели.
     """
-    clients = tmux_clients()
-    if not clients:
-        return False
     session_window = target.rsplit('.', 1)[0]
     session = session_window.split(':', 1)[0]
-    client = next((row for row in clients if row['session'] == session), clients[0])
+    clients = tmux_clients()
+    wanted = client
+    client = (next((row for row in clients if row['name'] == wanted), None) if wanted
+              else next((row for row in clients if row['session'] == session), None))
+    if wanted and client and client['session'] != session:
+        # Вкладка, где кликнули, показывает свою сессию tmux с несколькими окнами: переключи
+        # её целиком — все её окна останутся без вкладки («скрыта»). Окно цели переезжает
+        # к ней окном, как у «＋ новая сессия». ⚠ Адресуется по id (`@N`, `%N`): номер окна
+        # после переезда другой, а опустевшая сессия-источник исчезает сама.
+        window = _tmux_run('display-message', '-p', '-t', target, '#{window_id}').strip()
+        pane = _tmux_run('display-message', '-p', '-t', target, '#{pane_id}').strip()
+        if window and pane and _tmux_ok('move-window', '-s', window, '-t', f"{client['session']}:"):
+            ok = _tmux_ok('select-window', '-t', window)
+            return _tmux_ok('select-pane', '-t', pane) and ok
+    if not client and (not steal or not clients):
+        _tmux_ok('select-window', '-t', session_window)
+        _tmux_ok('select-pane', '-t', target)
+        return False
+    client = client or clients[0]
     ok = _tmux_ok('switch-client', '-c', client['name'], '-t', session_window)
     ok = _tmux_ok('select-window', '-t', session_window) and ok
     return _tmux_ok('select-pane', '-t', target) and ok

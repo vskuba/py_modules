@@ -59,13 +59,23 @@ def jetbrains_tab_new(cwd: str) -> str:
     Returns:
         Имя проекта, где открыта вкладка; пусто — ни одной IDE с плагином.
     """
-    for strict in ('1', '0'):
-        query = urllib.parse.urlencode({'cwd': cwd, 'strict': strict})
-        for port in _jetbrains_tab_ports():
-            answer = _jetbrains_tab_get(port, f'/api/claude-tab/new?{query}')
-            if answer.startswith('opened '):
-                return answer[len('opened '):]
-    return ''
+    return _jetbrains_tab_open('new', {'cwd': cwd})
+
+
+def jetbrains_tab_attach(cwd: str, tmux_session: str) -> str:
+    """Открыть новую вкладку терминала, подключённую к сессии tmux, — в IDE проекта этой папки.
+
+    Нужна, когда сессию tmux не показывает ни одна вкладка: так она выходит на экран своей
+    вкладкой, а не уводит чужую (`tmux_focus(steal=False)`). IDE выбирается, как у
+    `jetbrains_tab_new`: сначала строго по папке, потом первая живая.
+
+    ⚠ Нужен плагин Claude Tab Switch с адресом `/api/claude-tab/attach`. Старый отвечает 404 —
+    это пустой ответ здесь, а не вкладка с новой сессией.
+
+    Returns:
+        Имя проекта, где открыта вкладка; пусто — ни одной IDE с таким плагином.
+    """
+    return _jetbrains_tab_open('attach', {'cwd': cwd, 'session': tmux_session})
 
 
 def jetbrains_tab_list() -> list:
@@ -100,6 +110,18 @@ def _jetbrains_tab_match(tab: str, want: str) -> bool:
 
 def _jetbrains_tab_ports() -> range:
     return range(JETBRAINS_TAB_PORT, JETBRAINS_TAB_PORT + JETBRAINS_TAB_PORTS)
+
+
+def _jetbrains_tab_open(action: str, params: dict) -> str:
+    # Открыть вкладку — общий обход IDE для `new` и `attach`: сначала строго (проект этой
+    # папки), потом в первой живой IDE. Ответ плагина — «opened <проект>».
+    for strict in ('1', '0'):
+        query = urllib.parse.urlencode({**params, 'strict': strict})
+        for port in _jetbrains_tab_ports():
+            answer = _jetbrains_tab_get(port, f'/api/claude-tab/{action}?{query}')
+            if answer.startswith('opened '):
+                return answer[len('opened '):]
+    return ''
 
 
 def _jetbrains_tab_get(port: int, path: str) -> str:

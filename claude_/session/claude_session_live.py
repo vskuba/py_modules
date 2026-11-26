@@ -109,8 +109,11 @@ def claude_session_live_list() -> list:
         row['pane'] = tmux_pane_of_pid(row['pid'], panes) if panes else ''
         row['title'] = (_claude_session_live_pane_title(row['pane'], panes)
                         or digest.get(row['sessionId'], {}).get('title', ''))
-        row['visible'] = (row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached)
-                          and not _claude_session_live_nested(row, pids))
+        nested = _claude_session_live_nested(row, pids)
+        row['visible'] = (row['kind'] != 'bg' and (not row['pane'] or row['pane'] in attached) and not nested)
+        # Скрыта — жива в tmux, но ни одна вкладка её не показывает (вкладку закрыли, IDE
+        # перезапустили): клик по ней в таблице выводит её своей вкладкой.
+        row['hidden'] = bool(row['kind'] != 'bg' and row['pane'] and row['pane'] not in attached and not nested)
         tmux_session = row['pane'].split(':', 1)[0] if row['pane'] else ''
         row['host'] = claude_session_host(row['pid'], tmux_session, clients) if row['visible'] else ''
     _claude_session_live_viewers(rows)
@@ -130,38 +133,63 @@ def claude_session_live_list() -> list:
 
 
 def claude_session_live_orphans(rows: list) -> list:
-    """Субагенты DSH, чей хозяин не виден в таблице: сессия закрыта или скрыта (фоновая,
-    в отсоединённом tmux). Их моторы иначе пропали бы из таблицы, хотя работают.
+    """Сессии, которых не видно в таблице, но которые живы или работают: скрытые (в tmux без
+    вкладки) и хозяева субагентов DSH, закрытые или скрытые. Иначе после перезапуска IDE
+    их не находили и открывали те же беседы заново `/resume` — выходили двойники.
 
     Args:
         rows: `claude_session_live_list()` целиком — по нему видно, жив ли хозяин.
 
     Returns:
-        `[{owner, title, project, state, agents}]`: `state` — «скрыта» (процесс жив, но
-        строки у него нет) или «закрыта»; `project` — проект хозяина (по его транскрипту).
-        ⚠ Не папка карточки субагента: она — его рабочая (`scratchpad/…/t4`, копия репо).
+        `[{owner, pid, copies, title, project, state, agents}]`: `state` — «скрыта» (процесс
+        жив, но вкладки нет) или «закрыта»; `pid` — процесс скрытой копии, по нему клик
+        выводит именно её (у двойника тот же `sessionId`, что у видимой); `copies` — сколько
+        скрытых копий у беседы (окна в одну фоновую — тоже копии). `project` — проект хозяина
+        (по его транскрипту). ⚠ Не папка карточки субагента: она — его рабочая
+        (`scratchpad/…/t4`, копия репо). Скрытая без заголовка (пустая, ни одного
+        сообщения) — не строка: таких копятся десятки.
     """
     shown = {row['sessionId'] for row in rows if row['visible']} | {row['job'] for row in rows if row['visible']}
     alive = {row['sessionId']: row for row in rows}
     orphans = {}
+    for row in rows:
+        key = row['job'] or row['sessionId']
+        if not row.get('hidden') or not row['title'] or key in shown:
+            continue
+        if key in orphans:
+            orphans[key]['copies'] += 1
+            continue
+        orphans[key] = {'owner': key, 'pid': row['pid'], 'copies': 1, 'agents': [], 'state': 'скрыта',
+                        'project': os.path.basename(row['cwd'].rstrip('/')), 'title': row['title']}
     for owner, agents in _claude_session_live_agents().items():
         if owner in shown:
             continue
+        if owner in orphans:
+            orphans[owner]['agents'] = agents
+            continue
         cwd = alive[owner]['cwd'] if owner in alive else claude_session_transcript_cwd(owner)
-        orphans[owner] = {'owner': owner, 'agents': agents, 'state': 'скрыта' if owner in alive else 'закрыта',
-                          'project': os.path.basename(cwd.rstrip('/'))}
-    titles = claude_session_tokens([{'sessionId': owner, 'cwd': ''} for owner in orphans])
+        orphans[owner] = {'owner': owner, 'pid': 0, 'copies': 0, 'agents': agents,
+                          'state': 'скрыта' if owner in alive else 'закрыта',
+                          'project': os.path.basename(cwd.rstrip('/')), 'title': ''}
+    titles = claude_session_tokens([{'sessionId': owner, 'cwd': ''} for owner, item in orphans.items()
+                                    if not item['title']])
+    # Название — то же, что было в строке хозяина: своё (`t …`) сильнее заголовка транскрипта,
+    # иначе скрытая сессия внизу выходила под другим именем и казалась новой.
     for owner, item in orphans.items():
-        item['title'] = titles.get(owner, {}).get('title', '')
-    return list(orphans.values())
+        item['title'] = (item['title'] or (alive[owner]['title'] if owner in alive else claude_session_name_get(owner))
+                         or titles.get(owner, {}).get('title', ''))
+    return sorted(orphans.values(), key=lambda item: (item['project'].lower(), item['title'].lower()))
 
 
 def claude_session_live_find(session_id: str) -> dict:
-    """Живая сессия по `sessionId` (или его началу), с заголовком; нет — пустой словарь."""
-    for row in claude_session_live_list():
-        if session_id and row['sessionId'].startswith(session_id):
-            return row
-    return {}
+    """Живая сессия по `sessionId` (или его началу), с заголовком; нет — пустой словарь.
+
+    ⚠ Одну беседу бывает открывают двумя процессами (`/resume` уже открытой в другом окне).
+    Берётся копия, видная на экране: невидимая уводила под себя чужую вкладку.
+    """
+    rows = [row for row in claude_session_live_list() if session_id and row['sessionId'].startswith(session_id)]
+    rows.sort(key=lambda row: not row['visible'])
+    return rows[0] if rows else {}
 
 
 def _claude_session_live_pct(session_id: str, digest: dict):

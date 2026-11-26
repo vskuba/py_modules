@@ -30,7 +30,7 @@ from claude_.session.claude_session_live import claude_session_live_find, claude
     claude_session_live_orphans
 from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
 from gnome_.gnome_window import gnome_window_activate
-from jetbrains_.jetbrains_tab import jetbrains_tab_new, jetbrains_tab_select
+from jetbrains_.jetbrains_tab import jetbrains_tab_attach, jetbrains_tab_new, jetbrains_tab_select
 from tmux_.tmux_ import tmux_focus, tmux_pane_title, tmux_window_new
 
 # Адрес сервера переключения: только петля.
@@ -83,16 +83,25 @@ _CLAUDE_SESSION_SWITCH_LOOK = {'ready': ('\x1b[1;92m', 'Ready'),
                                'idle': ('\x1b[90m', 'ждёт')}
 
 
-def claude_session_switch_to(session_id: str) -> str:
+def claude_session_switch_to(session_id: str, pid: int = 0, client: str = '') -> str:
     """Вывести сессию `session_id` на экран: панель tmux, а не в tmux — вкладку JetBrains.
 
     Вкладка IDE ищется по заголовку сессии (он же — шапка вкладки) плагином Claude Tab
     Switch (`jetbrains_tab_select`).
 
+    Args:
+        pid: именно эта копия беседы (у скрытого двойника тот же `sessionId`).
+        client: tty клиента tmux, в котором кликнули (`X-Tmux-Client` от привязки мыши в
+            `~/.tmux.conf`): сессия открывается **в этой же вкладке**. Прежняя сессия вкладки
+            уходит в «скрыта» и возвращается кликом. Пусто (клик не из tmux) — своя вкладка
+            сессии, а без неё новая вкладка IDE.
+
     Returns:
         Пусто — переключено; иначе причина отказа словами.
     """
-    row = claude_session_live_find(session_id)
+    # `pid` — именно эта копия беседы: у скрытого двойника тот же `sessionId`, что у видимой.
+    row = next((row for row in claude_session_live_list() if row['pid'] == pid), {}) if pid else {}
+    row = row or claude_session_live_find(session_id)
     if not row:
         return f'сессии {session_id} нет среди живых'
     claude_session_ready_seen(row['sessionId'], row['pid'])  # перешли на неё — «Ready» снят
@@ -100,9 +109,20 @@ def claude_session_switch_to(session_id: str) -> str:
     # Code»; среди одинаковых вкладок берётся вкладка проекта сессии.
     title = row['title'] or 'Claude Code'
     project = os.path.basename(row['cwd'].rstrip('/'))
+    if row['pane'] and client:
+        if not tmux_focus(row['pane'], client=client):
+            return f"tmux не переключил вкладку {client} на {row['pane']}"
+        return ''
     if row['pane']:
-        if not tmux_focus(row['pane']):
-            return f"tmux не переключил на {row['pane']}: нет подключённого клиента?"
+        # Сессию tmux не показывает ни одна вкладка — своя новая вкладка IDE, подключённая к
+        # ней. Чужую вкладку переводить нельзя: показанная в ней сессия уходила с экрана и
+        # оставалась «скрытой». Плагин без `attach` (старый) — по-прежнему чужая вкладка.
+        if not tmux_focus(row['pane'], steal=False):
+            session = row['pane'].split(':', 1)[0]
+            if _claude_session_switch_raise(jetbrains_tab_attach(row['cwd'], session)):
+                return ''
+            if not tmux_focus(row['pane']):
+                return f"tmux не переключил на {row['pane']}: нет подключённого клиента?"
         # tmux во вкладке JetBrains: её шапка — заголовок текущей панели (`set-titles`),
         # и после переключения она уже его носит. Не нашлась — tmux не в IDE, это не отказ.
         time.sleep(CLAUDE_SESSION_SWITCH_TITLE_DELAY)
@@ -199,8 +219,22 @@ def claude_session_switch_table(rows: int = CLAUDE_SESSION_SWITCH_ROWS) -> str:
         name = _claude_session_switch_short(
             f"{orphan['project'] or '—'}: {orphan['title'] or CLAUDE_SESSION_SWITCH_UNTITLED}",
             CLAUDE_SESSION_SWITCH_NAME)
-        lines.append(f"\x1b[0m      \x1b[38;5;244m {name:<{CLAUDE_SESSION_SWITCH_NAME}} \x1b[0m"
-                     f"{' ' * 11}\x1b[90m{orphan['state']:<8}\x1b[0m {' ' * 12} {' ' * 12} {' ' * 4}"
+        padded = f'{name:<{CLAUDE_SESSION_SWITCH_NAME}}'
+        # Скрытая (жива, но без вкладки) — ссылкой, как строка сессии: клик выводит её на
+        # экран своей вкладкой. Закрытой выводить нечего.
+        if orphan['state'] == 'скрыта':
+            url = f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/switch/{orphan['owner']}"
+            url += f"?pid={orphan['pid']}" if orphan['pid'] else ''
+            padded = _claude_session_switch_link(url, name) + padded[len(name):]
+        # «✖» у скрытой с вкладкой-копией: закрыть её совсем — все скрытые копии беседы,
+        # видимую не трогая (`hidden=1`). Два клика, как у строки сессии.
+        close = '  '
+        if orphan['state'] == 'скрыта' and orphan['pid']:
+            close = _claude_session_switch_link(
+                f"http://{CLAUDE_SESSION_SWITCH_HOST}:{CLAUDE_SESSION_SWITCH_PORT}/close/{orphan['owner']}?hidden=1",
+                _claude_session_switch_cross(f"hidden:{orphan['owner']}" in armed)) + ' '
+        lines.append(f"\x1b[0m {close}   \x1b[38;5;244m {padded} \x1b[0m"
+                     f"{' ' * 11}\x1b[90m{_claude_session_switch_copies(orphan):<8}\x1b[0m {' ' * 12} {' ' * 12} {' ' * 4}"
                      f"  {_claude_session_switch_agents(orphan['agents'])}")
     if len(sessions) > rows:
         lines.append(f'\x1b[0m  \x1b[90m… ещё {len(sessions) - rows}\x1b[0m')
@@ -232,6 +266,12 @@ def _claude_session_switch_badge(host: str) -> str:
     letters, left, right = badge
     return (f'\x1b[1;38;5;16;48;5;{left}m {letters[0]}'
             f'\x1b[48;5;{right}m{letters[1]} \x1b[0m')
+
+
+def _claude_session_switch_copies(orphan: dict) -> str:
+    # «скрыта ×3» — у беседы несколько скрытых копий (двойники `/resume`, окна в фоновую).
+    copies = orphan.get('copies') or 0
+    return f"{orphan['state']} ×{copies}" if copies > 1 else orphan['state']
 
 
 def _claude_session_switch_raise(ide_project: str) -> str:
@@ -342,10 +382,14 @@ class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
         url = urllib.parse.urlsplit(self.path)
         if url.path.startswith('/switch/'):
             target = url.path[len('/switch/'):].strip('/')
-            error = claude_session_switch_to(target)
+            pid = (urllib.parse.parse_qs(url.query).get('pid') or ['0'])[0]
+            client = self.headers.get('X-Tmux-Client', '')
+            error = claude_session_switch_to(target, int(pid) if pid.isdigit() else 0,
+                                             client if client.startswith('/dev/') else '')
         elif url.path.startswith('/close/'):
             target = 'close ' + url.path[len('/close/'):].strip('/')
-            answer = claude_session_close_click(target[6:])
+            hidden = 'hidden=1' in url.query
+            answer = claude_session_close_click(target[6:], hidden)
             error = '' if answer in ('armed', 'closed') else answer
             target += f' {answer}' if not error else ''
         elif url.path == '/backend':
