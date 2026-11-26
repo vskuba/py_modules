@@ -210,6 +210,17 @@ def claude_session_switch_serve(port: int = CLAUDE_SESSION_SWITCH_PORT) -> None:
                                     _ClaudeSessionSwitchHandler).serve_forever()
 
 
+def _claude_session_switch_tmux_of(session_id: str) -> str:
+    # Сессия tmux, в которой видна сессия `session_id`: своя панель или окно в фоновую
+    # сессию (`job`). Видимое на экране — первым: окон в одну фоновую сессию бывает много.
+    if not session_id:
+        return ''
+    rows = [row for row in claude_session_live_list()
+            if row.get('pane') and (row['sessionId'] == session_id or row.get('job') == session_id)]
+    rows.sort(key=lambda row: not row['visible'])
+    return rows[0]['pane'].split(':')[0] if rows else ''
+
+
 def _claude_session_switch_badge(host: str) -> str:
     badge = _CLAUDE_SESSION_SWITCH_BADGE.get(host)
     if not badge:
@@ -336,6 +347,9 @@ class _ClaudeSessionSwitchHandler(http.server.BaseHTTPRequestHandler):
         elif url.path == '/new':
             query = urllib.parse.parse_qs(url.query)
             cwd, tmux_session = (query.get('cwd') or [''])[0], (query.get('tmux') or [''])[0]
+            # Окно в фоновую сессию: строку рисует фоновый процесс вне tmux, `tmux=` ему не
+            # узнать — сессию tmux находим по окну, которое на неё смотрит.
+            tmux_session = tmux_session or _claude_session_switch_tmux_of((query.get('sid') or [''])[0])
             target = f'new {cwd}' + (f' tmux={tmux_session}' if tmux_session else '')
             error = claude_session_switch_new(cwd, tmux_session)
         else:
