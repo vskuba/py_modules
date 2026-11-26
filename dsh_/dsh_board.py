@@ -676,12 +676,20 @@ def dsh_board_stats(all_sessions: bool = False, *, base: str = DSH_API_ADDR_DEFA
 
 
 def dsh_board_inbox_take(session: str, turns: int) -> None:
-    """Отметить ответы карточки до круга номер `turns` прочитанными."""
+    """Отметить ответы карточки до круга номер `turns` прочитанными — и снять метку «ждём ответ».
+
+    ⚠ Метку снимаем здесь, а не у каждого вызывающего: ждун (`dsh_wait_run`) видит ответ
+    только во «входящих». Забрал ответ кто-то другой (`dsh-board answer`, `inbox --take`,
+    субагент, разбирающий чужие карточки) — без снятия метки ждун ждал бы его до
+    `DSH_WAIT_MAX_AGE` (12 ч) и не будил оркестратора и по уже собранным ответам.
+    """
     key = re.sub(r'-g\d+$', '', session)
     taken = _inbox_read()
     if turns > taken.get(key, 0):
         taken[key] = turns
         _json_write(_home_path(DSH_BOARD_INBOX), taken)
+    with contextlib.suppress(OSError):
+        dsh_wait_done(session)
 
 
 def dsh_board_turns(item: dict) -> int:
@@ -1130,11 +1138,6 @@ def _patient(ask, timeout: float, retry: tuple = (DshApiUnreachable, DshApiUnava
                 raise
             time.sleep(DSH_BOARD_RETRY_POLL)
 
-if __name__ == '__main__':
-    from dsh_.dsh_board_cli import dsh_board_cli_main
-    raise SystemExit(dsh_board_cli_main())
-
-
 def _workspace_empty(path: str, sessions: list, robots: set, archived: set) -> bool:
     """Опустел ли проект субагентов: карточки в нём есть, и все — агентские в архиве."""
     real = os.path.realpath(path)
@@ -1143,3 +1146,8 @@ def _workspace_empty(path: str, sessions: list, robots: set, archived: set) -> b
         re.sub(r'-g\d+$', '', item.get('sessionId') or '') in robots
         and (item.get('sessionId') or '') in archived and not item.get('running')
         for item in mine)
+
+
+if __name__ == '__main__':
+    from dsh_.dsh_board_cli import dsh_board_cli_main
+    raise SystemExit(dsh_board_cli_main())
