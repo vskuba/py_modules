@@ -8,7 +8,7 @@
 замены, и каждая проходит проверку, прежде чем попасть в список.
 
 ```bash
-set -a; . ~/.claude/gx10.env; set +a          # адрес и ключ локальной модели
+set -a; . ~/.claude/gx10.env; set +a          # адрес, ключ и GX10_MODEL локальной модели
 .venv/bin/python -m translate_.translate_review site/index.html --out review.json
 python -m translate_.translate_review site/index.html --lines 600-900 --model gx10/qwen-large
 python -m translate_.translate_fixes merge review.json --file site/index.html --out ok.json
@@ -139,11 +139,23 @@ def _ask(model: str, prompt: str, timeout: float) -> str:
     base, key = provider.raw_endpoint(clean)
     if not base:
         raise ValueError(f"для '{model}' нет адреса — для gx10: set -a; . ~/.claude/gx10.env")
-    body = {'model': clean, 'temperature': 0.1, 'max_tokens': 4000,
+    from config.config import config_get
+    # Имя, под которым сервер держит модель (`GX10_MODEL=qwen3.8-flash-next` в ~/.claude/gx10.env),
+    # важнее имени из соглашения реестра: vLLM другого не примет.
+    served_name = str(config_get(f"{model.partition('/')[0].upper()}_MODEL") or '')
+    body = {'model': served_name or clean, 'temperature': 0.1, 'max_tokens': 4000,
             'messages': [{'role': 'user', 'content': prompt}]}
     body.update(provider.raw_body_no_thinking())
-    r = httpx.post(f"{base.rstrip('/')}/chat/completions", json=body,
-                   headers={'Authorization': f'Bearer {key}'}, timeout=timeout)
+    headers = {'Authorization': f'Bearer {key}'}
+    r = httpx.post(f"{base.rstrip('/')}/chat/completions", json=body, headers=headers, timeout=timeout)
+    if r.status_code == 404:
+        # vLLM знает модель только под именем, с которым её подняли (`qwen3.8-flash-next`),
+        # а реестр шлёт имя из своего соглашения (`qwen-large`); llama.cpp принимал любое.
+        # Спрашиваем сервер, что он обслуживает, и повторяем с его именем.
+        served = httpx.get(f"{base.rstrip('/')}/models", headers=headers, timeout=30).json().get('data') or []
+        if served:
+            body['model'] = served[0]['id']
+            r = httpx.post(f"{base.rstrip('/')}/chat/completions", json=body, headers=headers, timeout=timeout)
     r.raise_for_status()
     return ((r.json().get('choices') or [{}])[0].get('message') or {}).get('content') or ''
 
