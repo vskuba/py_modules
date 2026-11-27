@@ -127,7 +127,7 @@ def test_per_card_waiters_do_not_extinguish_each_other(home):
 
 
 def test_waiter_alive_counts_a_per_card_waiter(home):
-    """Заставе `Stop` достаточно ждуна любого ряда: карточка ждать поставлена, ход свободен."""
+    """Живость — по любому живому ждуну сессии; покрывает ли он метки — смотри `dsh_wait_waiter_gaps`."""
     waiter = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', 'dsh-board', 'wait'])
     try:
         (home / os.path.basename(dsh_wait._waiter_path('orch-8', 'continuous-a'))).write_text(str(waiter.pid))
@@ -136,3 +136,50 @@ def test_waiter_alive_counts_a_per_card_waiter(home):
         waiter.kill()
         waiter.wait(timeout=5)                        # zombie: os.kill(pid, 0) на него отвечает «жив»
     assert not dsh_wait.dsh_wait_waiter_alive('orch-8')
+
+
+# ─── покрытие меток: пробелы ожидания (для застав и хуков) ───
+
+def test_per_card_waiter_covers_only_its_own_card(home):
+    """Ждун карточки A не покрывает карточку B: B остаётся в пробеле, хотя ждун жив."""
+    dsh_wait.dsh_wait_expect('continuous-a', owner='orch-9')
+    dsh_wait.dsh_wait_expect('continuous-b', owner='orch-9')
+    waiter = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', 'dsh-board', 'wait'])
+    try:
+        (home / os.path.basename(dsh_wait._waiter_path('orch-9', 'continuous-a'))).write_text(str(waiter.pid))
+        assert dsh_wait.dsh_wait_waiter_gaps('orch-9') == ['continuous-b']
+        assert dsh_wait.dsh_wait_waiter_alive('orch-9')      # живость — это одно, покрытие — другое
+    finally:
+        waiter.kill()
+        waiter.wait(timeout=5)
+    assert dsh_wait.dsh_wait_waiter_gaps('orch-9') == ['continuous-a', 'continuous-b']
+
+
+def test_general_waiter_covers_every_mark(home):
+    """Общий ждун (без ряда) покрывает все метки сессии; мёртвый — ничего."""
+    dsh_wait.dsh_wait_expect('continuous-a', owner='orch-10')
+    waiter = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)', 'dsh-board', 'wait'])
+    try:
+        (home / os.path.basename(dsh_wait._waiter_path('orch-10'))).write_text(str(waiter.pid))
+        assert dsh_wait.dsh_wait_waiter_gaps('orch-10') == []
+    finally:
+        waiter.kill()
+        waiter.wait(timeout=5)
+    assert dsh_wait.dsh_wait_waiter_gaps('orch-10') == ['continuous-a']
+
+
+def test_wait_exits_when_marks_are_taken_during_the_wait(home, monkeypatch):
+    """Метку сняли чужим забором, пока безымянный ждун спал: выйти сейчас, а не висеть 6 ч."""
+    dsh_wait.dsh_wait_expect('continuous-ddd', owner='orch-11')
+    calls = []
+
+    def answered(sessions, **_kw):
+        if not calls:                                  # первый виток: ответ забрал `dsh-board answer`
+            calls.append(1)
+            dsh_board.dsh_board_inbox_take('continuous-ddd', 1)
+        return []
+
+    monkeypatch.setattr(dsh_wait, 'dsh_wait_answered', answered)
+    started = time.time()
+    taken = dsh_wait.dsh_wait_run('orch-11', str(home / 'out'), timeout=60)
+    assert taken == [] and time.time() - started < 5

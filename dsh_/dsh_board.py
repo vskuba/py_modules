@@ -224,8 +224,8 @@ def dsh_board_eta(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
 
     Returns:
         `{'running', 'elapsed', 'rounds', 'typical', 'suggest'}`: `elapsed` — сколько идёт
-        идущий круг (0, если ничего не идёт), `rounds` — длительности завершённых кругов,
-        `typical` — их медиана, `suggest` — потолок для `--timeout` с запасом
+        идущий круг (0, если ничего не идёт), `rounds` — длительности последних завершённых
+        кругов, `typical` — их медиана, `suggest` — потолок для `--timeout` с запасом
         `DSH_BOARD_ETA_MARGIN`; при пустом журнале `typical` = 0, а `suggest` =
         `DSH_BOARD_WAIT_TIMEOUT`.
     """
@@ -233,10 +233,16 @@ def dsh_board_eta(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     done = [round(row['end'] - row['start']) for row in rows if row['end'] and row['start']]
     running = [row for row in rows if not row['end'] and row['start']]
     elapsed = int(max(0.0, time.time() - max(row['start'] for row in running))) if running else 0
-    typical = int(statistics.median(done)) if done else 0
-    suggest = (int(max(typical, elapsed) * DSH_BOARD_ETA_MARGIN) if done or elapsed
-               else DSH_BOARD_WAIT_TIMEOUT)
-    return {'running': bool(running), 'elapsed': elapsed, 'rounds': sorted(done)[-DSH_BOARD_ETA_ROUNDS:],
+    rounds = sorted(done[-DSH_BOARD_ETA_ROUNDS:])     # последние круги по времени, не самые долгие
+    typical = int(statistics.median(rounds)) if rounds else 0
+    if not done and not elapsed:
+        suggest = DSH_BOARD_WAIT_TIMEOUT
+    else:
+        # У юной карточки готовых кругов нет — по `elapsed × запас` мерить нельзя (круг только
+        # начался, а типичный здесь 36 мин): берём общий потолок, пока медиана не появилась.
+        floor = typical if done else DSH_BOARD_WAIT_TIMEOUT
+        suggest = int(max(floor, elapsed) * DSH_BOARD_ETA_MARGIN)
+    return {'running': bool(running), 'elapsed': elapsed, 'rounds': rounds,
             'typical': typical, 'suggest': max(60, suggest)}
 
 

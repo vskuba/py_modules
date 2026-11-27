@@ -30,7 +30,9 @@ def stage(tmp_path, monkeypatch):
 
     def arm(pending=(), alive=False, answered=(), error=None):
         monkeypatch.setattr(hook, 'dsh_wait_pending', lambda owner: sorted(pending))
-        monkeypatch.setattr(hook, 'dsh_wait_waiter_alive', lambda owner: alive)
+        # Живой ждун закрывает все метки (общий), мёртвый — не закрывает ничего: ряды в тесте не нужны.
+        monkeypatch.setattr(hook, 'dsh_wait_waiter_gaps',
+                            lambda owner, rows=None: [] if alive else list(rows if rows is not None else pending))
 
         def _answered(sessions):
             out['answered_calls'].append(list(sessions))

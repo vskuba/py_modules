@@ -134,7 +134,10 @@ def _run(args) -> int:
         status = dsh_board_motors_busy(base=base)
         if args.eta:
             for row in status['working']:
-                row.update(dsh_board_eta(row['session'], base=base))
+                try:
+                    row.update(dsh_board_eta(row['session'], base=base))
+                except Exception:                   # noqa: BLE001 — карточка исчезла между запросами,
+                    pass                            # а без `--eta` строка всё равно вышла бы
         if args.line:
             status['saving'] = dsh_saving_badge(args.session, base=base)
             # Кто из работающих ждёт ответа человека — «?» за цифрой мотора.

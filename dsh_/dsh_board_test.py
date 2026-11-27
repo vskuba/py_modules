@@ -400,6 +400,35 @@ def test_eta_without_finished_rounds_keeps_common_ceiling(sandbox, monkeypatch):
                                                  'typical': 0, 'suggest': dsh_board.DSH_BOARD_WAIT_TIMEOUT}
 
 
+def test_eta_young_running_round_is_measured_by_common_ceiling(sandbox, monkeypatch):
+    """Первый круг свежей карточки идёт 10 мин: предлагают общий потолок, а не `elapsed × запас`."""
+    import time
+    now = time.time()
+    monkeypatch.setattr(dsh_board, 'dsh_session_turn_log', lambda session, rounds=0, **kw: [
+        {'turn': 1, 'start': now - 600, 'end': None}])
+
+    eta = dsh_board.dsh_board_eta('card-1')
+
+    assert eta['running'] and eta['typical'] == 0
+    assert eta['suggest'] == int(dsh_board.DSH_BOARD_WAIT_TIMEOUT * dsh_board.DSH_BOARD_ETA_MARGIN)
+
+
+def test_eta_shows_latest_rounds_not_the_longest(sandbox, monkeypatch):
+    """Показаны последние круги, а не самые долгие: длинный старый круг не вытесняет свежие."""
+    import time
+    now = time.time()
+    monkeypatch.setattr(dsh_board, 'dsh_session_turn_log', lambda session, rounds=0, **kw: [
+        {'turn': 1, 'start': now - 5000, 'end': now - 3800},     # 1200 с — самый долгий
+        {'turn': 2, 'start': now - 3000, 'end': now - 2900},
+        {'turn': 3, 'start': now - 2000, 'end': now - 900},
+        {'turn': 4, 'start': now - 800, 'end': now - 710}])
+
+    eta = dsh_board.dsh_board_eta('card-1')
+
+    assert eta['rounds'] == [90, 100, 1100] and eta['typical'] == 100
+    assert eta['suggest'] == 150                       # 100 × запас, без оглядки на круг в 20 мин
+
+
 # ── пара «задача — ответ» для проверки ──
 
 def _verify_setup(sandbox, monkeypatch, pair, asked):
