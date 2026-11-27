@@ -1,6 +1,7 @@
 """
 Правка кадров-скриншотов: стирание запечённого текста, двумерная зачистка
-со стеклом (inpaint), плоская заливка окна, выделение штриха в альфу.
+со стеклом (inpaint), плоская заливка окна, размытие PII-окон, выделение
+штриха в альфу.
 
 Операции, которые нужны всякий раз, когда скриншот становится подложкой
 клона: текст на подложке менять нельзя — его надо стереть и наложить живой
@@ -61,6 +62,11 @@ IMAGE_FIX_FILL_FEATHER = 2.0
 # поверх него выглядит мутным стеклом. σ 2.8 измерено по остаточному
 # разбросу ровных зон карточек ua.gov.diia.app; 0 — без шума.
 IMAGE_FIX_INPAINT_SIGMA = 2.8
+
+# Sigma гауссианы для размытия PII, px: 9 переваривает 11-px текст email'а
+# в неразборчивые штрихи при масштабе кадра 1:1 и оставляет читаемой
+# раскладку вокруг окна.
+IMAGE_FIX_BLUR_RADIUS = 9
 
 
 def image_fix_erase(path, out, boxes, edge=IMAGE_FIX_EDGE, axis='h',
@@ -271,6 +277,54 @@ def image_fix_fill(path, out, boxes, color, radius=0,
             'color': tuple(int(v) for v in col)}
 
 
+def image_fix_blur(path, out, boxes, radius=IMAGE_FIX_BLUR_RADIUS,
+                   quality=IMAGE_FIX_QUALITY) -> dict:
+    """
+    Размыть окна кадра — PII под матовое стекло, раскладка остаётся читаемой.
+
+    Скриншот бэк-офиса — доказательство, а доказательство с открытыми
+    email'ами и кардами клиентов наружу не отдаётся. Чёрная плашка скрывает
+    факт («здесь что-то было»), гауссова клякса сохраняет длину и место
+    значения: видно, что в шапке — адрес оператора, прочесть нельзя. Поэтому
+    blur, а не fill.
+
+    Args:
+        path: картинка-источник.
+        out: куда сохранить (обычно тот же файл — правка на месте).
+        boxes: [(x0, y0, x1, y1)] — окна в конвенции PIL (x1, y1 исключая).
+            ⚠ Окно берут с запасом в `radius` px от текста: гауссиана тянет
+            в окно соседние пиксели, значение вплотную к краю вычитается
+            размытым штрихом.
+        radius: sigma гауссианы, px. 9 — адрес email 11-px становится
+            неразборчивым при сохранении масштаба 1:1.
+        quality: качество lossy-форматов.
+
+    Returns:
+        {'file', 'out', 'boxes': сколько окон размыто, 'radius'}.
+    """
+    from PIL import ImageFilter
+
+    img = Image.open(path)
+    has_alpha = 'A' in img.mode or (img.mode == 'P' and 'transparency' in img.info)
+    alpha = np.asarray(img.convert('RGBA'))[:, :, 3] if has_alpha else None
+    rgb = img.convert('RGB')
+    n = 0
+    for box in boxes:
+        x0, y0 = max(int(box[0]), 0), max(int(box[1]), 0)
+        x1, y1 = min(int(box[2]), rgb.width), min(int(box[3]), rgb.height)
+        if x0 >= x1 or y0 >= y1:
+            continue
+        region = rgb.crop((x0, y0, x1, y1)).filter(ImageFilter.GaussianBlur(radius))
+        rgb.paste(region, (x0, y0))
+        n += 1
+    result = rgb
+    if alpha is not None:
+        result = Image.merge('RGBA', (*result.split(),
+                                      Image.fromarray(alpha, 'L')))
+    result.save(out, **_save_kwargs(out, quality))
+    return {'file': path, 'out': out, 'boxes': n, 'radius': radius}
+
+
 def image_fix_strokes(path, out, box, hi=IMAGE_FIX_STROKE_HI,
                       span=IMAGE_FIX_STROKE_SPAN, color=(0, 0, 0)) -> dict:
     """
@@ -339,7 +393,7 @@ def _save_kwargs(out, quality):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='Правка кадров-скриншотов')
-    ap.add_argument('command', choices=['erase', 'inpaint', 'fill', 'strokes'])
+    ap.add_argument('command', choices=['erase', 'inpaint', 'fill', 'blur', 'strokes'])
     ap.add_argument('path', help='картинка')
     ap.add_argument('--out', required=True, help='куда сохранить')
     ap.add_argument('--box', action='append', metavar='x0,y0,x1,y1',
@@ -351,6 +405,8 @@ if __name__ == '__main__':
     ap.add_argument('--axis', default='h', choices=['h', 'v'], help='erase')
     ap.add_argument('--color', help='fill: "#rrggbb"')
     ap.add_argument('--radius', type=int, default=0, help='fill: скругление, px')
+    ap.add_argument('--blur-radius', type=int, default=IMAGE_FIX_BLUR_RADIUS,
+                    help='blur: sigma гауссианы, px')
     ap.add_argument('--feather', type=float, default=IMAGE_FIX_FILL_FEATHER,
                     help='fill: ширина мягкого края маски, px')
     ap.add_argument('--quality', type=int, default=IMAGE_FIX_QUALITY)
@@ -379,6 +435,10 @@ if __name__ == '__main__':
                                quality=ns.quality)
             print(f"залито {r['boxes']} окон "
                   f"{'#%02x%02x%02x' % r['color']} → {r['out']}")
+        elif ns.command == 'blur':
+            r = image_fix_blur(ns.path, ns.out, boxes, radius=ns.blur_radius,
+                               quality=ns.quality)
+            print(f"размыто {r['boxes']} окон (σ={r['radius']}) → {r['out']}")
         else:
             r = image_fix_strokes(ns.path, ns.out, boxes[0], hi=ns.hi,
                                   span=ns.span)
