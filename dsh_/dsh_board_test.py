@@ -101,7 +101,7 @@ def test_worktree_row_reads_metadata_by_generation_key(sandbox):
 
 
 def test_cli_land_finds_copy_by_metadata(sandbox, monkeypatch, capsys):
-    """`land` новой карточки берёт копию из метаданных, а не из cwd (там техworkspace)."""
+    """`land` новой карточки берёт копию из метаданных, а не из cwd (там технический workspace)."""
     landed = []
     monkeypatch.setattr(dsh_board_cli, 'dsh_session_find',
                         lambda session, **kw: {'cwd': str(sandbox.technical)})
@@ -137,7 +137,7 @@ def test_cli_land_old_card_falls_back_to_cwd(sandbox, monkeypatch, capsys):
 def test_gc_keeps_technical_workspace_and_sweeps_old_copies(sandbox, monkeypatch):
     """gc: технический workspace не трогает, старые копии и их проекты — убирает как раньше."""
     archived, dropped = [], []
-    # техworkspace на панели и каталога его нет вовсе — всё равно не снимается.
+    # технического workspace на панели и каталога его нет вовсе — всё равно не снимается.
     sandbox.state['workspaces'] = [{'id': 'w-tech', 'path': str(sandbox.technical)}]
     new_copy = sandbox.tmp / 'gone-copy'      # копия новой карточки — каталога нет
     old_copy = sandbox.tmp / 'repo' / '.claude' / 'worktrees' / 'dsh-staraya'
@@ -189,15 +189,13 @@ def test_workspace_drop_refuses_technical(sandbox):
 # ── промпт проверяющего ──
 
 def test_verify_of_worktree_card_gets_head(sandbox, monkeypatch):
-    """Карточка-проверяющий копии — тоже в техworkspace, с шапкой о пути копии."""
+    """Карточка-проверяющий копии — тоже в техническом workspace, с шапкой о пути копии."""
     monkeypatch.setattr(dsh_board, 'dsh_session_find',
                         lambda session, **kw: {'cwd': str(sandbox.technical), 'projections': {}})
     asked = []
 
-    def rows(session, count, **kw):
-        return [{'role': 'user', 'text': 'задача'}, {'role': 'assistant', 'text': 'ответ'}]
-
-    monkeypatch.setattr(dsh_board, 'dsh_session_dialog', rows)
+    monkeypatch.setattr(dsh_board, 'dsh_session_round_pair',
+                        lambda session, **kw: {'task': 'задача', 'answer': 'ответ', 'via': 'user'})
     monkeypatch.setattr(dsh_board, 'dsh_session_title', lambda item: 'правка')
     monkeypatch.setattr(dsh_board, 'dsh_board_ask',
                         lambda session, text, *a, **kw: asked.append(text) or 'вердикт')
@@ -374,3 +372,68 @@ def _tree(path=COPY):
 def _dsh_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding='utf-8')
+
+
+# ── срок круга: чем мерить --timeout ──
+
+def test_eta_measures_running_round_and_suggests_ceiling(sandbox, monkeypatch):
+    """`eta`: круг идёт 10 мин, готовые круги этой карточки — 20 и 13 мин → потолок 15 мин."""
+    import time
+    now = time.time()
+    monkeypatch.setattr(dsh_board, 'dsh_session_turn_log', lambda session, rounds=0, **kw: [
+        {'turn': 1, 'start': now - 2400, 'end': now - 1200},
+        {'turn': 2, 'start': now - 1100, 'end': now - 300},
+        {'turn': 3, 'start': now - 600, 'end': None}])
+
+    eta = dsh_board.dsh_board_eta('card-1')
+
+    assert eta['running'] and 590 <= eta['elapsed'] <= 610
+    assert eta['rounds'] == [800, 1200] and eta['typical'] == 1000
+    assert eta['suggest'] == 1500                      # медиана с запасом `DSH_BOARD_ETA_MARGIN`
+
+
+def test_eta_without_finished_rounds_keeps_common_ceiling(sandbox, monkeypatch):
+    """Карточка без готовых кругов: срок не выдумывается, остаётся общий потолок."""
+    monkeypatch.setattr(dsh_board, 'dsh_session_turn_log', lambda session, rounds=0, **kw: [])
+
+    assert dsh_board.dsh_board_eta('card-1') == {'running': False, 'elapsed': 0, 'rounds': [],
+                                                 'typical': 0, 'suggest': dsh_board.DSH_BOARD_WAIT_TIMEOUT}
+
+
+# ── пара «задача — ответ» для проверки ──
+
+def _verify_setup(sandbox, monkeypatch, pair, asked):
+    """Проверяемая карточка — обычная (не копия): проверяющий встаёт в её каталог."""
+    monkeypatch.setattr(dsh_board, 'dsh_session_find', lambda session, **kw: {'cwd': '/some/project'})
+    monkeypatch.setattr(dsh_board, 'dsh_session_round_pair', lambda session, **kw: pair)
+    monkeypatch.setattr(dsh_board, 'dsh_session_title', lambda item: 'правка')
+    monkeypatch.setattr(dsh_board, 'dsh_board_ask', lambda session, text, *a, **kw: asked.append(text) or 'вердикт')
+    monkeypatch.setattr(dsh_board, 'dsh_board_worktree_row', lambda session: {})
+
+
+def test_verify_takes_task_from_journal_not_from_tail(sandbox, monkeypatch):
+    """Задача далеко в журнале — вердикт всё равно ставится: пара берётся по всему журналу."""
+    asked = []
+    _verify_setup(sandbox, monkeypatch, {'task': 'собери статистику', 'answer': 'готово', 'via': 'user'}, asked)
+    dsh_board.dsh_board_verify('card-1', base='x:1')
+    assert 'собери статистику' in asked[0] and 'готово' in asked[0]
+
+
+def test_verify_without_task_in_journal_asks_for_it_by_words(sandbox, monkeypatch):
+    """Ответ есть, задачи в журнале нет — ошибка говорит, что задачу можно назвать словами."""
+    asked = []
+    _verify_setup(sandbox, monkeypatch, {'task': '', 'answer': 'готово', 'via': ''}, asked)
+    with pytest.raises(dsh_board.DshBoardError, match='--task'):
+        dsh_board.dsh_board_verify('card-1', base='x:1')
+    assert asked == []
+
+    dsh_board.dsh_board_verify('card-1', task='сверь цифры отчёта', base='x:1')
+    assert 'сверь цифры отчёта' in asked[0]
+
+
+def test_working_line_gains_eta_only_when_asked():
+    """Без `--eta` строка `working` не меняется; с ним — срок круга и потолок для `--timeout`."""
+    row = {'motor': 2, 'session': 'card-1', 'title': 'ревью', 'goal': 'сверяй логи'}
+    assert dsh_board_cli._working_text([row]) == 'мотор 2  ревью  — сверяй логи'
+    line = dsh_board_cli._working_text([dict(row, running=True, elapsed=1200, typical=0, suggest=1800)])
+    assert 'круг идёт 20 мин, готовых кругов ещё не было, --timeout 1800' in line

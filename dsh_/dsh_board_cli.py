@@ -28,14 +28,14 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_revive_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
     dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_count, dsh_board_inbox_take, \
     dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
-    dsh_board_gc, dsh_board_stats, dsh_board_verify, \
+    dsh_board_gc, dsh_board_eta, dsh_board_stats, dsh_board_verify, \
     dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool, \
     dsh_board_worktree_forget, dsh_board_worktree_head, dsh_board_worktree_row, \
     dsh_board_worktree_test_ask
 from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
-from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_run
+from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_key, dsh_wait_run
 from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_asking, \
@@ -116,10 +116,15 @@ def _run(args) -> int:
         owner = args.session or os.environ.get(DSH_WAIT_OWNER_ENV) or ''
         if not owner:
             raise ValueError('чью сессию ждать: --session или CLAUDE_CODE_SESSION_ID')
-        rows = dsh_wait_run(owner, args.out_dir, args.timeout, base=base)
+        # Карточки названы — ждун свой (ряд по набору карточек) и выходит на первой же
+        # ответившей: иначе партия будит оркестратора только на самой медленной карточке.
+        cards = sorted({dsh_wait_key(card) for card in args.card})
+        rows = dsh_wait_run(owner, args.out_dir, args.timeout, sessions=cards or None,
+                            first=bool(cards) and not args.all,
+                            slot='-'.join(cards), base=base)
         return _print(args, rows, lambda v: '\n\n'.join(
-            f"🤖 {r['title'] or r['session']}\n{r['brief']}\n(полный ответ: {r['out']})" for r in v)
-            or 'ждать было нечего')
+            f"🤖 {r['title'] or 'карточка'} — {r['session']}\n{r['brief']}\n(полный ответ: {r['out']})"
+            for r in v) or 'ждать было нечего')
 
     if command == 'collect':
         rows = dsh_fanout_log_collect(args.out_dir, args.timeout, base=base)
@@ -127,6 +132,9 @@ def _run(args) -> int:
 
     if command == 'working':
         status = dsh_board_motors_busy(base=base)
+        if args.eta:
+            for row in status['working']:
+                row.update(dsh_board_eta(row['session'], base=base))
         if args.line:
             status['saving'] = dsh_saving_badge(args.session, base=base)
             # Кто из работающих ждёт ответа человека — «?» за цифрой мотора.
@@ -187,7 +195,7 @@ def _run(args) -> int:
             for r in v) + f"\n{verb}: {len(v)}" if v else 'убирать нечего')
 
     if command == 'verify':
-        result = dsh_board_verify(args.session, args.timeout, base=base)
+        result = dsh_board_verify(args.session, args.timeout, args.task, base=base)
         row = _answer_row(args, result['verifier'], result['answer'])
         return _print(args, {**row, 'checked': args.session},
                       lambda v: f"проверяющий: {v['session']}\n{_answer_text(v)}")
@@ -317,7 +325,12 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     fanout.add_argument('--out-dir', default=None, metavar='КАТАЛОГ',
                         help='полные ответы — в КАТАЛОГ/N.md, в вывод — только итоги')
 
-    wait = command('wait', 'дождаться ответов всех субагентов своей сессии Claude — запускать фоном')
+    wait = command('wait', 'дождаться ответов субагентов своей сессии Claude — запускать фоном')
+    wait.add_argument('card', nargs='*', metavar='КАРТОЧКА',
+                      help='ждать эти карточки (по процессу на каждую, фоном); без них — все '
+                           'метки сессии и выход только когда отвечены все')
+    wait.add_argument('--all', action='store_true',
+                      help='не выходить на первом ответе (по умолчанию при названных карточках — выход)')
     wait.add_argument('--out-dir', required=True, metavar='КАТАЛОГ', help='полные ответы — сюда, в вывод — итоги')
     wait.add_argument('--session', default='', metavar='ID', help='сессия Claude Code (по умолчанию — текущая)')
     wait.add_argument('--timeout', type=float, default=6 * 3600)
@@ -328,6 +341,9 @@ def _parser(prog: str) -> argparse.ArgumentParser:
 
     working = command('working', 'кто из агентов работает сейчас и над чем')
     working.add_argument('--line', action='store_true', help='одной строкой — для статусной строки')
+    working.add_argument('--eta', action='store_true',
+                         help='сколько круг каждой карточки уже идёт и сколько длится тут обычно — '
+                              'каким ставить --timeout (по журналам; каждый ряд — тяжёлый session/page)')
     working.add_argument('--session', default='', metavar='ID',
                          help='сессия Claude Code: к строке — её экономия «(-5%%)»')
     working.add_argument('--links', default='', metavar='КАТАЛОГ',
@@ -357,6 +373,8 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     gc.add_argument('--dry', action='store_true', help='только показать')
     verify = command('verify', 'перекрёстная проверка ответа карточки вторым субагентом')
     verify.add_argument('session')
+    verify.add_argument('--task', default='', metavar='ТЕКСТ',
+                        help='задачу назвать словами: в карточке несколько кругов и сверять надо не последний промпт')
     verify.add_argument('--out', default=None, metavar='ФАЙЛ', help='полный разбор — в ФАЙЛ, в вывод — итог')
     verify.add_argument('--timeout', type=float, default=DSH_BOARD_WAIT_TIMEOUT)
     command('stats', 'сколько токенов отработали субагенты').add_argument(
@@ -472,7 +490,8 @@ def _working_text(rows: list) -> str:
     if not rows:
         return 'никто не работает'
     return '\n'.join(f"мотор {row['motor']}  {row['title'] or row['session']}"
-                     f"{'  — ' + row['goal'] if row['goal'] else '  — работа руками'}" for row in rows)
+                     f"{'  — ' + row['goal'] if row['goal'] else '  — работа руками'}"
+                     f"{_eta_note(row)}" for row in rows)
 
 
 def _working_line(status: dict) -> str:
@@ -611,6 +630,29 @@ def _board_text(state: dict) -> str:
 def _goal_added_text(value: dict, session: str) -> str:
     mine = [goal for goal in value.get('goals', []) if goal.get('session') == session]
     return f"промпт заведён: {mine[-1].get('id')}" if mine else 'промпт заведён'
+
+
+def _eta_note(row: dict) -> str:
+    """Пометка `working --eta`: сколько круг идёт, сколько он тут длится обычно, чем мерить `--timeout`.
+
+    Без `--eta` ключей в строке нет — строка остаётся прежней.
+    """
+    if 'elapsed' not in row:
+        return ''
+    if not row['running']:
+        return '   круг не идёт'
+    usual = f'обычно {_span(row["typical"])}' if row['typical'] else 'готовых кругов ещё не было'
+    return f'   круг идёт {_span(row["elapsed"])}, {usual}, --timeout {row["suggest"]}'
+
+
+def _span(seconds) -> str:
+    """Длительность по-человечески: `48 с`, `41 мин`, `6,8 ч`."""
+    seconds = float(seconds or 0)
+    if seconds < 90:
+        return f'{round(seconds)} с'
+    if seconds < 5400:
+        return f'{round(seconds / 60)} мин'
+    return f'{seconds / 3600:.1f} ч'.replace('.', ',')
 
 
 if __name__ == '__main__':
