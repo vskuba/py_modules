@@ -11,8 +11,13 @@
 | `data_mask_text(text)` | текст или байты (`curl -v`, лог): PAN, CVV, Bearer/Slack/JWT-токены по шаблону |
 | `data_mask_json(obj)` | разобранный JSON: ключи из `DATA_MASK_SECRET_KEYS` → `***`, строки — через `data_mask_text` |
 | `data_mask_find(text)` | что нашлось и где — значения обрезаны до 10 символов, сами секреты наружу не идут |
+| `data_mask_sweep_text(text, values)` | mask secrets страховка по ЗНАЧЕНИЯМ: в тексте артефакта нет тех самых значений из настроек |
+| `data_mask_sweep(paths, values)` | то же по файлам и деревьям; PDF — по текстовому слою; `{scanned, hits}` |
+| `data_mask_values(source)` | список запрещённых значений из файла (JSON-массив или построчно) |
 
-Все три отдают `(результат, None)` или `(None, 'ошибка')`; исходник не меняется.
+Все отдают `(результат, None)` или `(None, 'ошибка')`; исходник не меняется.
+CLI: `python -m data_.data_mask find --path дамп.json`, `mask`, и
+`sweep --path артефакты/ --values secrets.txt` — PASS/FAIL, FAIL = код 1.
 
 ```python
 masked, err = data_mask_json(json.loads(row['answer']))
@@ -23,7 +28,18 @@ masked, err = data_mask_json(json.loads(row['answer']))
 Ключи `DATA_MASK_SECRET_KEYS`, **без учёта регистра**: карта (`cvv`, `cvc`,
 `cardExpireDate`), заголовки (`authorization`, `x-api-key`, `x-signature`),
 OAuth (`accessToken`/`access_token`, `refreshToken`/`refresh_token`, `id_token`,
-`client_secret`), `password`, `secret`. Числа и пустые строки не трогаются.
+`client_secret`), `password`, `secret`, и короткие имена из конфигов контуров
+(`token`, `api_token`, `encryption_key`, `signature`). Числа и пустые строки не
+трогаются.
+
+## 3. Маска по именам слепа к значению — для этого sweep
+
+Маскиратор чинит секрет по ИМЕНИ ключа; значение из настроек (ключ подписи,
+`encryption_key`) въедет в артефакт неотмеченным, если автор артефакта вставил
+его под другим именем или прямо в URL. `data_mask_sweep` ищет сами значения:
+`http_card` гоняет `sweep_text` по собранному HTML до записи PNG, `pdf_report`
+— по HTML, тексту PDF и дереву источника. Наружу из отчёта значения уходят
+обрезанными до 10 символов — сам отчёт проверки ничего не выдаёт.
 
 ## Грабли
 

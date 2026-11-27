@@ -22,13 +22,20 @@ CLI (тела — файлы JSON; у ответа можно `{"status": 200, "
         --url https://api.example.com/v1/payout/methods \\
         --request req.json --response resp.json --note 'подпись' \\
         --collapse apms --out shot.png
+
+Метки по JSON-пути (`$.fiat_data.amount`) и spec-файл целиком — см.
+`http_card` (`http_/http_card.py`): это та же карточка для отчётов, где важны
+рамки на конкретных полях.
 """
 import argparse
 import html
 import json
 
 HTTP_SHOT_MASK = {'password', 'passwd', 'secret', 'token', 'access_token', 'refresh_token',
-                  'api_key', 'apikey', 'authorization', 'cvv', 'cvc', 'checksum'}
+                  'api_key', 'apikey', 'authorization', 'cvv', 'cvc', 'checksum',
+                  # ключи подписи и шифрования из callback-контуров: подпись
+                  # подделывают по значению, в кадр ей делать нечего
+                  'x-api-key', 'api_token', 'encryption_key', 'signature'}
 HTTP_SHOT_WIDTH = 1548
 
 _CSS = """

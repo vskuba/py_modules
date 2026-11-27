@@ -13,11 +13,17 @@
 маскируются целиком. Имена ключей (`x-api-key:`, `Authorization:`) остаются
 чистыми — режется только значение.
 """
+import json
 import re
+from pathlib import Path
 
 # ── константы ──
 
 DATA_MASK_MAX_VALUE = 10  # «значение обрезать до <=10 символов»
+# Расширения, которые `data_mask_sweep` читает как текст (PDF — отдельно, через
+# текстовый слой); PNG и прочие растры не сканируются: слоя с символами нет.
+DATA_MASK_SWEEP_SUFFIXES = ('.html', '.htm', '.json', '.md', '.txt', '.log',
+                            '.csv', '.pdf', '.py', '.sh', '.yaml', '.yml')
 DATA_MASK_KEEP_PREFIX = 4
 DATA_MASK_KEEP_SUFFIX = 4
 DATA_MASK_PAN_RE = re.compile(
@@ -45,7 +51,11 @@ DATA_MASK_SECRET_KEYS = ('card_cvv2', 'cvv2', 'cvv', 'cvc', 'cardExpireDate', 'c
                          'id_token', 'client_secret', 'password', 'secret',
                          # Ключ подписи callback-а: по нему подделывают уведомление о
                          # статусе, а в дампах бренда он лежит открыто в таблице `account`.
-                         'signature_key')
+                         'signature_key',
+                         # Голые имена из настроек stage-контуров: `token`, `api_token`,
+                         # `encryption_key` и `signature` — то же, что составные ключи выше,
+                         # только в конфиге бренда лежат под коротким именем.
+                         'token', 'api_token', 'encryption_key', 'signature')
 _DATA_MASK_SECRET_KEYS_LOWER = frozenset(key.lower() for key in DATA_MASK_SECRET_KEYS)
 
 # ── публичный API модуля ──
@@ -139,6 +149,105 @@ def data_mask_json(obj: 'dict | list | tuple') -> tuple:
     return _walk(obj), None
 
 
+def data_mask_values(source) -> tuple:
+    """Список запрещённых значений: из файла (JSON-массив или построчно) либо из готового списка.
+
+    Args:
+        source: путь к файлу значений или сам итерабл значений.
+
+    Returns:
+        ([str, …], None); либо (None, 'текст ошибки') — пустой список значений
+        это ошибка, а не PASS: проверять нечем.
+    """
+    if isinstance(source, (str, Path)):
+        text = Path(source).read_text(encoding='utf-8')
+        try:
+            data = json.loads(text)
+            vals = [str(v) for v in data] if isinstance(data, list) else [str(data)]
+        except json.JSONDecodeError:
+            vals = [line.strip() for line in text.splitlines() if line.strip()]
+    else:
+        vals = [str(v) for v in source]
+    vals = [v for v in vals if v]
+    return (vals, None) if vals else (None, 'список значений пуст: сравнивать не с чем')
+
+
+def data_mask_sweep_text(text: str, values) -> tuple:
+    """Нет ли в тексте запрещённых значений; вернуть их обрезанными (≤10 символов).
+
+    Страховка после маскиратора: маскиратор чинит значения по ИМЕНИ ключа, а
+    сюда передают сами значения из настроек (ключи stage-контуров, подписи) —
+    совпало ли хоть одно, независимо от того, как оно в текст попало.
+
+    Args:
+        text: текст артефакта (HTML, JSON-спека, склейка текста PDF).
+        values: реальные значения, которым в тексте быть нельзя.
+
+    Returns:
+        ([{'value', 'count'}], None) — значение в отчёте обрезано до
+        `DATA_MASK_MAX_VALUE`, чтобы сам отчёт проверки ничего не выдавал;
+        либо (None, 'текст ошибки').
+    """
+    vals, err = data_mask_values(values)
+    if err:
+        return None, err
+    if not isinstance(text, str):
+        return None, f'текст должен быть str, а {type(text).__name__}'
+    hits = [{'value': value[:DATA_MASK_MAX_VALUE], 'count': text.count(value)}
+            for value in vals if value in text]
+    return hits, None
+
+
+def data_mask_sweep(paths, values) -> tuple:
+    """Нет ли запрещённых значений в артефактах: файлы и деревья, PDF — по текстовому слою.
+
+    Общая страховка сборщиков (карточка `http_.http_card`, отчёт
+    `pdf_.pdf_report`) и прогон «вручную перед публикацией»: PNG не сканируется
+    (текстового слоя нет), сканируются входы — JSON-спеки, HTML, Markdown, и
+    PDF, из которого сначала вынимается текст. Деревья обходятся `file_walk` —
+    без `.venv` и служебных веток.
+
+    Args:
+        paths: файлы и/или каталоги (элементы списка либо строка).
+        values: реальные значения, которым в артефактах быть нельзя.
+
+    Returns:
+        ({'scanned': int, 'hits': [{'file', 'value', 'count'}]}, None) — PASS
+        это пустой `hits`; либо (None, 'текст ошибки').
+    """
+    from file_.file_walk import file_walk  # лениво: data_ ядром не тянет file_
+
+    vals, vals_err = data_mask_values(values)
+    if vals_err:
+        return None, vals_err
+    if isinstance(paths, (str, bytes, Path)):
+        paths = [paths]
+    files = []
+    for one in paths:
+        path = Path(one)
+        if path.is_dir():
+            files.extend(file_walk(path, DATA_MASK_SWEEP_SUFFIXES))
+        elif path.is_file():
+            files.append(path)
+        else:
+            return None, f'пути нет: {path}'
+    # один файл мог приехать дважды (явно и в составе каталога) — скан один раз
+    files = list(dict.fromkeys(Path(f).resolve() for f in files))
+    scanned, hits = 0, []
+    for f in files:
+        if str(f).lower().endswith('.pdf'):
+            from pdf_.pdf_ import pdf_text  # лениво: колёса pdf_ не в ядре data_
+            text = pdf_text(str(f))
+        else:
+            text = Path(f).read_bytes().decode('utf-8', 'replace')
+        found, err = data_mask_sweep_text(text, vals)
+        if err:
+            return None, err
+        scanned += 1
+        hits.extend({**hit, 'file': str(f)} for hit in found)
+    return {'scanned': scanned, 'hits': hits}, None
+
+
 
 # ── детали реализации ──
 
@@ -176,14 +285,32 @@ def _data_mask_sub(pattern: 're.Pattern', text: str, group: str = None) -> str:
 
 if __name__ == '__main__':
     import argparse
+    import json
     import sys
 
     _P = argparse.ArgumentParser(description=__doc__.split('\n')[1])
-    _P.add_argument('cmd', choices=('find', 'mask'), help='что показать')
-    _P.add_argument('--path', default='-', help='файл дампа ('' — stdin)')
+    _P.add_argument('cmd', choices=('find', 'mask', 'sweep'), help='что показать')
+    _P.add_argument('--path', default=['-'], nargs='+',
+                    help='файл дампа ('' — stdin) либо, для sweep, файлы/каталоги')
+    _P.add_argument('--values', default='', metavar='FILE',
+                    help='sweep: список запрещённых значений (JSON-массив или построчно)')
     _C = _P.parse_args()
+    if _C.cmd == 'sweep':
+        _vals, _err = data_mask_values(_C.values)
+        if _vals is None:
+            print(f'ошибка: {_err}', file=sys.stderr)
+            raise SystemExit(1)
+        _got, _err = data_mask_sweep(_C.path, _vals)
+        if _got is None:
+            print(f'ошибка: {_err}', file=sys.stderr)
+            raise SystemExit(1)
+        for _h in _got['hits']:
+            print(f"FAIL {_h['file']}: {_h['value']}… x{_h['count']}")
+        print(f"{'FAIL' if _got['hits'] else 'PASS'}: проверено файлов {_got['scanned']}, "
+              f"значений {len(_vals)}")
+        raise SystemExit(1 if _got['hits'] else 0)
     if _C.cmd == 'find':
-        _text = open(_C.path, 'rb').read() if _C.path != '-' else sys.stdin.buffer.read()
+        _text = open(_C.path[0], 'rb').read() if _C.path[0] != '-' else sys.stdin.buffer.read()
         _rows, _err = data_mask_find(_text)
         if _rows is None:
             print(f'ошибка: {_err}', file=sys.stderr)
@@ -192,7 +319,7 @@ if __name__ == '__main__':
             print(f"offset={_r['position']:<10} {_r['kind']:<6} "
                   f"value={_r['value_prefix']!r}… ({_r['value_prefix_len']}б)")
     else:
-        _text = open(_C.path, 'r', encoding='utf-8').read() if _C.path != '-' \
+        _text = open(_C.path[0], 'r', encoding='utf-8').read() if _C.path[0] != '-' \
             else sys.stdin.read()
         _masked, _err = data_mask_text(_text)
         if _masked is None:

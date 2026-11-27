@@ -52,6 +52,7 @@ namespace-папок, которые проекты импортируют на�
 | `adb_/adb_rec.py` | `docs/mobile_rec.md` — запись экрана, разбор на кадры, обзорный лист, сверка двух записей |
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
+| `pdf_/pdf_report.py` | `docs/pdf_report.md` — PDF-отчёт из папки с артефактами: печать источника, превью и contact sheet, проверки пустых страниц и фигур выше тела; ⚠ enforcement-CSS после авторского |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) и про страницу панели без бойлерплейта (`web_drive_page`: вход из `.env`, модуль с любыми кавычками, `wait` с базой) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `web_/web_signup.py`, `web_/web_wall.py`, `web_/web_ledger.py`, `mail_/mail_wait.py` | `docs/web_signup_flow.md` — чужая площадка: стена-стоп, регистрация, письмо-подтверждение, один аккаунт на площадку |
@@ -93,6 +94,8 @@ namespace-папок, которые проекты импортируют на�
 | `comfyui_/comfyui_collection.py` | `docs/comfyui_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
 | `http_/http_mock.py` | `docs/testing_rules.md`, §5.1 — сторож «живого HTTP в тестах не бывает»: на транспорте httpx и на весь прогон, а не на сокете и не на тест |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
+| `http_/http_card.py` | `docs/http_card.md` — карточка «запрос → ответ» картинкой: маска секретов по имени ключа (заголовки, тела, query URL), метки по JSON-пути; ⚠⚠ метки по пути, не по DOM-порядку |
+| `data_/data_mask.py` | `docs/data_mask.md` — маска секретов из дампа + sweep по значениям; ⚠ маска по имени ключа слепа к секрету под другим именем или в URL |
 | `socketio_/` | `docs/socketio.md` — чат socket.io 2 без браузера; ⚠ пинг шлёт клиент, третье поколение не подходит |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
 | `config/`, `setting_/` | `docs/env_config_rules.md` |
@@ -249,6 +252,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `code_.code_order` | `<файлы> --then X --then Y` → порядок литералов в исходнике как факт кода |
 | `file_.file_check` | `файл... [--size --sha] [--json]` → цел ли файл: пустышка, огрызок, подмена головы; код возврата = число нецелых |
 | `file_.file_walk` | `[корень] [--suffix .py] [--count]` → что вообще обойдёт инструмент, без служебных веток |
+| `data_.data_mask` | `find/mask [--path файл…]`, `sweep [--path файл/папка…] --values файл` → маска секретов; sweep — PASS/FAIL по значениям, FAIL = код 1 |
 | `js_.js_check` | `файл… (.js/.mjs/.html)` → распарсится ли код как браузерный ESM-модуль, адрес поломки, граф импортов |
 | `page_.page_contract` | `--router … --js … [--both]` → ключи ответа против читаемых JS |
 | `commit_.commit_scope` | `[--root]` → изменённое по подсистемам; модули без строки дока |
@@ -276,6 +280,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `evm_.evm_keys` | `address КЛЮЧ` / `sign КЛЮЧ --digest …` → адрес EIP-55; подпись с самопроверкой signer==recovered |
 | `http_.http_watch` | `URL [--field путь.в.json --header к=в --format value\|json --expect Z]` → значение поля сейчас + проба сторожу; индекс списка числом (`items.0.state`); отказ — не трейсбек |
 | `http_.http_rest` | `call URL [--method --body --auth $КЛЮЧ]` / `schema URL` → вызов с угаданным заголовком, схема тела из ошибки валидации |
+| `http_.http_card` | `--spec card.json --out card.png [--width 1548] [--forbid файл]` → карточка «запрос → ответ» с метками по JSON-пути; метка мимо — код 2, секрет из `--forbid` — PNG не пишется |
 | `crypto_.crypto_pow` | `SEED --bits N [--check NONCE]` → nonce с N ведущими нулями sha256(seed+nonce); сверка готового nonce |
 | `crypto_.crypto_ed25519` | `pair [--seed-text]` / `sign КЛЮЧ «челлендж»` / `verify PUB «челлендж» SIG` `[--encoding hex\|base64url\|base58]` |
 | `evm_.evm_typed` | `domain имя версия chain контракт` / `typehash «тип»` / `digest «тип» --fields '{}' --domain 0x…` → EIP-712 руками |
@@ -323,6 +328,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
+| `pdf_.pdf_report` | `build <каталог> [--landscape --out report.pdf --forbid файл]` / `check <файл> [--min-ink 8 --skip-page N]` → PDF + превью + contact sheet + вердикт |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `ink`, `fit`, `textdiff`, `baseline-top` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals`, `stroke`, `expose`, `contract`, `frac` `[--json]` |
 | `image_.image_scan` | `runs`, `bbox [--tone --tol --rect --alpha-thresh]`, `rows`, `glyph`, `windows`, `diff` |
