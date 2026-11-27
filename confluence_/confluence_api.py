@@ -34,7 +34,7 @@ scopes) Confluence видит сразу; scoped — только с confluence-
 * `confluence_api_export` — всё пространство в каталог: `<id>.md` + `index.tsv`.
 * `confluence_api_search` — CQL-поиск.
 * `confluence_api_storage_text` — storage XHTML → текст.
-* `confluence_api_page_create` / `confluence_api_attach` — создать страницу и приложить файлы (публикация — только по просьбе).
+* `confluence_api_page_create` / `confluence_api_page_update` / `confluence_api_attach` — создать, обновить страницу и приложить файлы (публикация — только по просьбе).
 
 CLI:
 
@@ -181,6 +181,22 @@ def confluence_api_page_create(space_key: str, parent_id: str, title: str, stora
     return jira_api_request('POST', 'wiki/api/v2/pages', body={
         'spaceId': space['id'], 'status': 'current', 'title': title, 'parentId': str(parent_id),
         'body': {'representation': 'storage', 'value': storage}}, env=env, product='confluence')
+
+
+def confluence_api_page_update(page_id: str, storage: str, title: str = '', message: str = '',
+                               env: dict | None = None) -> dict:
+    """Заменить тело страницы (storage XHTML) новой версией; заголовок — прежний, если не задан.
+
+    ⚠ Публикация, как и создание. Номер версии берётся из текущей страницы (+1): v2 без него
+    отвечает 409. Вложения не трогаются — картинки по имени продолжают работать.
+    """
+    env = env or jira_api_env()
+    current = confluence_api_page(page_id, env)
+    return jira_api_request('PUT', f'wiki/api/v2/pages/{page_id}', body={
+        'id': str(page_id), 'status': 'current', 'title': title or current['title'],
+        'body': {'representation': 'storage', 'value': storage},
+        'version': {'number': int(current['version']['number']) + 1, 'message': message}},
+        env=env, product='confluence')
 
 
 def confluence_api_attach(page_id: str, paths: list, env: dict | None = None) -> list:

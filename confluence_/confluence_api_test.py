@@ -46,3 +46,17 @@ def test_confluence_api_attach_uses_v1_multipart(monkeypatch, tmp_path):
     assert seen['path'] == 'wiki/rest/api/content/777/child/attachment'
     assert seen['headers']['X-Atlassian-Token'] == 'no-check'
     assert out == [{'id': 'att1', 'title': 's.png'}]
+
+
+def test_confluence_api_page_update_bumps_version_and_keeps_title(monkeypatch):
+    """Новая версия = текущая + 1; без заголовка остаётся прежний (v2 без версии отвечает 409)."""
+    seen = {}
+    monkeypatch.setattr(confluence_api, 'confluence_api_page',
+                        lambda page, env=None: {'title': 'Old', 'version': {'number': 3}})
+    monkeypatch.setattr(confluence_api, 'jira_api_request',
+                        lambda *a, **k: seen.update(method=a[0], path=a[1], body=k['body']) or {'id': '777'})
+
+    confluence_api.confluence_api_page_update('777', '<p>y</p>', message='m', env={'url': 'https://site.test'})
+
+    assert (seen['method'], seen['path']) == ('PUT', 'wiki/api/v2/pages/777')
+    assert seen['body']['version'] == {'number': 4, 'message': 'm'} and seen['body']['title'] == 'Old'
