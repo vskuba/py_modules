@@ -265,20 +265,33 @@ def jira_api_attach(key: str, paths: list, env: dict | None = None) -> list:
     (без него Jira отвечает 403 XSRF check failed).
     """
     env = env or jira_api_env()
+    raw, headers = jira_api_multipart(paths)
+    return jira_api_request('POST', f"rest/api/3/issue/{jira_api_key(key, env['aliases'])}/attachments",
+                            env=env, timeout=60, raw=raw, headers=headers)
+
+
+def jira_api_multipart(paths: list) -> tuple:
+    """Тело multipart (поле `file` на каждый путь) и заголовки для загрузки вложений Atlassian.
+
+    Общая для Jira (`issue/{key}/attachments`) и Confluence (`content/{id}/child/attachment`):
+    обоим нужен `X-Atlassian-Token: no-check`, иначе 403 XSRF check failed.
+
+    Returns:
+        `(raw, headers)` — готовые аргументы `jira_api_request(..., raw=, headers=)`.
+    """
     boundary = 'jira-api-' + base64.b16encode(os.urandom(8)).decode().lower()
     parts = []
     for path in paths:
         name = os.path.basename(path)
         with open(path, 'rb') as fh:
             payload = fh.read()
-        mime = 'image/png' if name.lower().endswith('.png') else 'application/octet-stream'
+        mime = {'.png': 'image/png', '.pdf': 'application/pdf'}.get(
+            os.path.splitext(name.lower())[1], 'application/octet-stream')
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
                      f'filename="{name}"\r\nContent-Type: {mime}\r\n\r\n'.encode() + payload + b'\r\n')
     raw = b''.join(parts) + f'--{boundary}--\r\n'.encode()
-    return jira_api_request('POST', f"rest/api/3/issue/{jira_api_key(key, env['aliases'])}/attachments",
-                            env=env, timeout=60, raw=raw, headers={
-                                'Content-Type': f'multipart/form-data; boundary={boundary}',
-                                'X-Atlassian-Token': 'no-check'})
+    return raw, {'Content-Type': f'multipart/form-data; boundary={boundary}',
+                 'X-Atlassian-Token': 'no-check'}
 
 
 def jira_api_adf_text(node) -> str:

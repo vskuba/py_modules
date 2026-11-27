@@ -34,6 +34,7 @@ scopes) Confluence видит сразу; scoped — только с confluence-
 * `confluence_api_export` — всё пространство в каталог: `<id>.md` + `index.tsv`.
 * `confluence_api_search` — CQL-поиск.
 * `confluence_api_storage_text` — storage XHTML → текст.
+* `confluence_api_page_create` / `confluence_api_attach` — создать страницу и приложить файлы (публикация — только по просьбе).
 
 CLI:
 
@@ -53,7 +54,7 @@ import urllib.parse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from jira_.jira_api import jira_api_env, jira_api_request
+from jira_.jira_api import jira_api_env, jira_api_multipart, jira_api_request
 
 
 def confluence_api_page_id(text: str) -> str:
@@ -165,6 +166,34 @@ def confluence_api_search(cql: str, limit: int = 50, env: dict | None = None) ->
                     'excerpt': re.sub(r'@@@\w*@@@', '', r.get('excerpt', '')).strip(),
                     'url': r.get('url', '')})
     return out
+
+
+def confluence_api_page_create(space_key: str, parent_id: str, title: str, storage: str,
+                               env: dict | None = None) -> dict:
+    """Создать страницу под `parent_id`; тело — storage XHTML. Вернёт JSON страницы (`id`, `_links`).
+
+    ⚠ Публикация: страницу видят все, кому видно пространство, — звать только по просьбе.
+    Картинка из вложения в теле — `<ac:image><ri:attachment ri:filename="x.png"/></ac:image>`;
+    само вложение кладёт `confluence_api_attach` (можно и после создания — ссылка по имени).
+    """
+    env = env or jira_api_env()
+    space = confluence_api_space(space_key, env)
+    return jira_api_request('POST', 'wiki/api/v2/pages', body={
+        'spaceId': space['id'], 'status': 'current', 'title': title, 'parentId': str(parent_id),
+        'body': {'representation': 'storage', 'value': storage}}, env=env, product='confluence')
+
+
+def confluence_api_attach(page_id: str, paths: list, env: dict | None = None) -> list:
+    """Приложить файлы к странице; вернёт вложения (`id`, `title`).
+
+    ⚠ Публикация, как и страница. В v2 загрузки нет — v1 `rest/api/content/{id}/child/attachment`
+    с тем же multipart, что у Jira (`jira_api_multipart`).
+    """
+    env = env or jira_api_env()
+    raw, headers = jira_api_multipart(paths)
+    result = jira_api_request('POST', f'wiki/rest/api/content/{page_id}/child/attachment',
+                              env=env, timeout=60, raw=raw, headers=headers, product='confluence')
+    return (result or {}).get('results', [])
 
 
 def confluence_api_storage_text(storage: str) -> str:
