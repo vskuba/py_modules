@@ -30,6 +30,13 @@ ssh, `DROP DATABASE`, залить, применить, применить **в�
 без родительских таблиц заливка падает на `Cannot add or update a child row`, а
 без справочников (`*_type`) — на вставке. Так и было: `agent_workflow_step_type`
 забылся, и репетиция упала не на миграции, а на подготовке.
+
+## Два вкуса
+
+| Вкус | Когда | Что прогоняет |
+|------|-------|---------------|
+| `yoyo` (умолчание) | SQL-миграции поверх среза прода | `--dump` → применить → применить снова, сверить выводы |
+| `doctrine` | PHP-сервис на Doctrine migrations | одноразовая MySQL + console-цепочка up → prev ×N → up, счётчики строк и вердикт идемпотентности — владелец `mysql_rehearse_doctrine` |
 """
 import argparse
 import re
@@ -209,26 +216,45 @@ def _after(text: str) -> str:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Прогнать миграцию на свежей копии боевой базы дважды.')
-    parser.add_argument('migration', help='файл миграции')
-    parser.add_argument('--dump', required=True,
+        description='Прогнать миграцию на свежей копии дважды (yoyo) или up→prev→up на одноразовой MySQL (doctrine).')
+    parser.add_argument('target', help='yoyo: файл миграции; doctrine: корень репозитория')
+    parser.add_argument('--flavor', choices=('yoyo', 'doctrine'), default='yoyo',
+                        help='что прогонять (см. «Два вкуса» в докстринге)')
+    parser.add_argument('--dump', default='',
                         help='команда, печатающая дамп; `{sql}` в ней заменится '
                              'на служебный запрос при --tables')
-    parser.add_argument('--apply', required=True,
+    parser.add_argument('--apply', default='',
                         help='команда, принимающая SQL на вход')
-    parser.add_argument('--reset', required=True,
+    parser.add_argument('--reset', default='',
                         help='команда, заводящая пустую базу заново')
     parser.add_argument('--tables', default='',
                         help='таблицы через запятую: покажет, каких не хватает '
                              'по внешним ключам, и ничего не прогонит')
+    parser.add_argument('--worktree', default='',
+                        help='doctrine: копия, чей код крутится; пусто — сам репозиторий')
+    parser.add_argument('--image', default='mysql:8.0', help='doctrine: образ mysql')
+    parser.add_argument('--prev', type=int, default=1, help='doctrine: сколько миграций откатить')
+    parser.add_argument('--sql-check', default='',
+                        help='doctrine: контрольный запрос, сверяемый между фазами')
     args = parser.parse_args()
 
     try:
+        if args.flavor == 'doctrine':
+            from mysql_.mysql_rehearse_doctrine import (mysql_rehearse_doctrine_format,
+                                                        mysql_rehearse_doctrine_run)
+            outcome = mysql_rehearse_doctrine_run(args.target, args.worktree, args.image,
+                                                  args.prev, args.sql_check)
+            print(mysql_rehearse_doctrine_format(outcome))
+            raise SystemExit(0 if outcome['ok'] and outcome['idempotent'] else 1)
+
         if args.tables:
             print(' '.join(mysql_rehearse_tables(args.tables.split(','), args.dump)))
             raise SystemExit(0)
+        for flag in ('--dump', '--apply', '--reset'):
+            if not getattr(args, flag[2:].replace('-', '_')):
+                raise RuntimeError(f'{flag} обязателен для вкуса yoyo')
 
         print(mysql_rehearse_format(
-            mysql_rehearse_run(args.migration, args.dump, args.apply, args.reset)))
+            mysql_rehearse_run(args.target, args.dump, args.apply, args.reset)))
     except RuntimeError as err:
         raise SystemExit(f'ошибка: {err}')
