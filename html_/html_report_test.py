@@ -1,4 +1,6 @@
 """Тесты `html_report` — чистый генератор, офлайн без браузера и печати."""
+import re
+
 from html_.html_report import html_report
 from pdf_.pdf_toc import pdf_toc_entries
 
@@ -32,3 +34,11 @@ def test_html_report_секция_с_page_начинается_с_новой_с�
 def test_html_report_заголовок_в_колонтитуле_экранирован():
     html = html_report(SPEC)
     assert 'content:"QA \\"Draft\\" 26.11"' in html
+
+
+def test_html_report_якоря_оглавления_ведут_в_существующие_id():
+    # битая ссылка в оглавлении — PDF с цифрой, которая ведёт в никуда
+    html = html_report(SPEC)
+    hrefs = set(re.findall(r'href="#([^"]+)"', html))
+    ids = set(re.findall(r'\bid="([^"]+)"', html))
+    assert hrefs == {'p1', 's-a', 's-b'} and hrefs <= ids

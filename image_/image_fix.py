@@ -292,9 +292,10 @@ def image_fix_blur(path, out, boxes, radius=IMAGE_FIX_BLUR_RADIUS,
         path: картинка-источник.
         out: куда сохранить (обычно тот же файл — правка на месте).
         boxes: [(x0, y0, x1, y1)] — окна в конвенции PIL (x1, y1 исключая).
-            ⚠ Окно берут с запасом в `radius` px от текста: гауссиана тянет
-            в окно соседние пиксели, значение вплотную к краю вычитается
-            размытым штрихом.
+            Каждое окно размывается с соседними пикселями (под капотом к
+            окну добирается пояс в 3σ, наружу правка не выходит): буква
+            вплотную к краю окна не остаётся читаемой, даже если окно взяли
+            впритык к тексту.
         radius: sigma гауссианы, px. 9 — адрес email 11-px становится
             неразборчивым при сохранении масштаба 1:1.
         quality: качество lossy-форматов.
@@ -309,13 +310,18 @@ def image_fix_blur(path, out, boxes, radius=IMAGE_FIX_BLUR_RADIUS,
     alpha = np.asarray(img.convert('RGBA'))[:, :, 3] if has_alpha else None
     rgb = img.convert('RGB')
     n = 0
+    pad = 3 * radius  # опора гауссианы ≈3σ: окно размывается С ОКРУЖЕНИЕМ —
+    # без запаса crop фильтруется сам в себе, кромка пикселей растягивается,
+    # и буква у края окна остаётся читаемой; окно «впритык к буквам» — не оправдание
     for box in boxes:
         x0, y0 = max(int(box[0]), 0), max(int(box[1]), 0)
         x1, y1 = min(int(box[2]), rgb.width), min(int(box[3]), rgb.height)
         if x0 >= x1 or y0 >= y1:
             continue
-        region = rgb.crop((x0, y0, x1, y1)).filter(ImageFilter.GaussianBlur(radius))
-        rgb.paste(region, (x0, y0))
+        px0, py0 = max(x0 - pad, 0), max(y0 - pad, 0)
+        px1, py1 = min(x1 + pad, rgb.width), min(y1 + pad, rgb.height)
+        region = rgb.crop((px0, py0, px1, py1)).filter(ImageFilter.GaussianBlur(radius))
+        rgb.paste(region.crop((x0 - px0, y0 - py0, x1 - px0, y1 - py0)), (x0, y0))
         n += 1
     result = rgb
     if alpha is not None:

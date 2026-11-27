@@ -45,6 +45,9 @@ def pdf_contact_sheet(pdf_path: str, out_png: str, dpi: int = PDF_SHEET_DPI,
     with tempfile.TemporaryDirectory(prefix='pdf-sheet-') as tmp:
         files = pdf_render(pdf_path, tmp, dpi=dpi)
         if pages:
+            bad = [p for p in pages if not 1 <= p <= len(files)]
+            if bad:  # IndexError вместо внятного «в документе N страниц» — зло
+                raise RuntimeError(f'страницы {bad} вне документа: в нём {len(files)}')
             files = [files[p - 1] for p in pages]
         got = image_sheet(files, str(out_png), cols=cols, thumb=thumb, label='name')
     return {'out': got['out'], 'pages': got['n']}

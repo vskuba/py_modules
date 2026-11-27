@@ -1,9 +1,12 @@
 """Тесты `pdf_toc` — офлайн: печать подменена PDF из pypdf с ручным текстовым слоем."""
+import os
 import re
+
+import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from pdf_.pdf_toc import pdf_build_toc, pdf_toc_entries
+from pdf_.pdf_toc import _atomic_write, pdf_build_toc, pdf_toc_entries
 
 _RES = DictionaryObject({NameObject('/Font'): DictionaryObject(
     {NameObject('/F1'): DictionaryObject({
@@ -81,3 +84,52 @@ def test_pdf_build_toc_несходимость_видна_в_unresolved(tmp_pat
                         print_fn=_printer(plan), rounds=2)
     assert got['unresolved'] == ['s-z'] and got['pages']['s-z'] is None
     assert 'data-for="s-z">?' in html.read_text(encoding='utf-8')
+
+
+def test_pdf_build_toc_качели_упираются_в_потолок_раундов(tmp_path):
+    # каждый следующий заход печатника расставляет секции иначе: сверка никогда
+    # не совпадает — цикл обязан упереться в rounds, а не гонять печать вечно
+    entries = [('s-a', 'Alpha'), ('s-b', 'Beta')]
+    html = tmp_path / 'doc.html'
+    html.write_text(_html(entries), encoding='utf-8')
+    plans = [['Alpha Beta', 'Alpha body', 'Beta body'],
+             ['Alpha Beta', 'Beta body', 'Alpha body']]
+    calls = []
+
+    def print_fn(h, p):
+        _printer(plans[len(calls) % 2])(h, p)
+        calls.append(p)
+
+    got = pdf_build_toc(str(html), str(tmp_path / 'd.pdf'), print_fn=print_fn, rounds=3)
+    assert not got['converged'] and got['rounds'] == 3
+    assert len(calls) == 4  # rounds печатей + финальная с финального HTML
+
+
+def test_pdf_build_toc_ноль_раундов_это_не_печать(tmp_path):
+    html = tmp_path / 'doc.html'
+    html.write_text(_html([('s-a', 'Alpha')]), encoding='utf-8')
+    with pytest.raises(ValueError):
+        pdf_build_toc(str(html), str(tmp_path / 'd.pdf'),
+                      print_fn=_printer(['Alpha']), rounds=0)
+
+
+def test_атомарная_правка_переживает_сбой_посреди_замены(tmp_path, monkeypatch):
+    src = tmp_path / 'doc.html'
+    src.write_text('полный документ', encoding='utf-8')
+
+    def _boom(*a, **k):
+        raise OSError('диск умер')
+
+    monkeypatch.setattr(os, 'replace', _boom)
+    with pytest.raises(OSError):
+        _atomic_write(str(src), 'недобитый')
+    assert src.read_text(encoding='utf-8') == 'полный документ'  # источник цел
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['doc.html']  # temp вычищен
+
+
+def test_атомарная_правка_не_оставляет_мусора(tmp_path):
+    src = tmp_path / 'doc.html'
+    src.write_text('раз', encoding='utf-8')
+    _atomic_write(str(src), 'два')
+    assert src.read_text(encoding='utf-8') == 'два'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['doc.html']

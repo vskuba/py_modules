@@ -32,6 +32,7 @@ QA-документы печатались вручную в два проход
 import argparse
 import json
 import re
+import sys
 
 PDF_TOC_ROUNDS = 3  # раундов «печать → правка»; больший — просто дороже
 
@@ -76,7 +77,8 @@ def pdf_build_toc(html_path: str, out_pdf: str, rounds: int = PDF_TOC_ROUNDS,
 
     Args:
         html_path: документ с пустыми (или устаревшими) `<span class="pg">`;
-            правится на месте — это источник, его и отдавать в печать.
+            правится на месте (атомарно, temp + rename) — это источник,
+            его и отдавать в печать.
         out_pdf: куда печатать.
         rounds: раундов правки; 2 хватает заведомо сходящемуся документу.
         print_fn: `fn(html_path, out_pdf)`; по умолчанию `pdf_print_html`
@@ -94,6 +96,8 @@ def pdf_build_toc(html_path: str, out_pdf: str, rounds: int = PDF_TOC_ROUNDS,
     """
     from pdf_.pdf_ import pdf_info, pdf_print_html, pdf_text
 
+    if rounds < 1:  # иначе цикл пустой, сверки нет — молча напечатанный «?» документ
+        raise ValueError(f'rounds={rounds}: нужен хотя бы один раунд печать→сверка')
     do_print = print_fn or (lambda h, p: pdf_print_html(h, p, chrome=chrome))
     skip = set(skip_pages)
     pages_found: dict = {}
@@ -128,8 +132,9 @@ def pdf_build_toc(html_path: str, out_pdf: str, rounds: int = PDF_TOC_ROUNDS,
         html = _SPAN.sub(lambda m: f'{m.group(1)}'
                          f'{pages_found.get(m.group(2)) or "?"}'
                          f'{m.group(4)}', html)
-        with open(html_path, 'w', encoding='utf-8') as fh:
-            fh.write(html)
+        # источник правится атомарно (temp + rename): сбой в середине записи
+        # не должен оставлять недобитый HTML там, где лежал полный документ
+        _atomic_write(html_path, html)
     if not converged and r >= rounds:
         do_print(html_path, out_pdf)  # финальный PDF — с финального HTML
     return {'pages': pages_found, 'rounds': r, 'converged': converged,
@@ -139,6 +144,32 @@ def pdf_build_toc(html_path: str, out_pdf: str, rounds: int = PDF_TOC_ROUNDS,
 def _condense(text: str) -> str:
     """Текст без пробельных символов: «С К У Б А» от pypdf снова «СКУБА»."""
     return re.sub(r'\s+', '', text)
+
+
+def _atomic_write(path: str, text: str) -> None:
+    """Заменить содержимое файла целиком и атомарно: temp в его же каталоге + rename.
+
+    `os.replace` на POSIX переименоывает атомарно: читатель видит либо старый
+    файл, либо новый; temp рядом с целью — та же ФС, иначе rename не атомарен.
+    """
+    import os
+    import tempfile
+
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + '.',
+                               suffix='.tmp')
+    try:
+        if os.path.exists(path):  # mkstemp даёт 600 — права источника сохраняем
+            os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 if __name__ == '__main__':
@@ -152,6 +183,9 @@ if __name__ == '__main__':
     ap.add_argument('--chrome', default=None)
     ns = ap.parse_args()
     skip = tuple(int(v) for v in ns.skip.split(',')) if ns.skip else ()
-    print(json.dumps(pdf_build_toc(ns.html, ns.out_pdf, rounds=ns.rounds,
-                                   chrome=ns.chrome, skip_pages=skip),
-                     ensure_ascii=False, indent=1))
+    res = pdf_build_toc(ns.html, ns.out_pdf, rounds=ns.rounds,
+                        chrome=ns.chrome, skip_pages=skip)
+    print(json.dumps(res, ensure_ascii=False, indent=1))
+    # код возврата = число неразрешённых строк: скрипт сборки не пройдёт
+    # туда, где в оглавлении остались '?'
+    sys.exit(min(len(res['unresolved']), 125))
