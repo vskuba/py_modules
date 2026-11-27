@@ -124,6 +124,47 @@ def project_worktree_php_test(repo: str = '', worktree: str = '', suite: str = '
     return info
 
 
+def project_worktree_php_run(repo: str = '', worktree: str = '', argv: list = None,
+                             env: dict = None, networks: list = None,
+                             timeout: float = 1800) -> dict:
+    """Произвольную команду того же php-контейнера — над кодом worktree; код, хвост вывода и полный журнал.
+
+    Args:
+        repo: основная выкладка PHP-проекта; пусто — основная для `worktree`.
+        worktree: каталог копии; пусто — текущий.
+        argv: команда внутри контейнера (рабочий каталог — корень кода); префикс
+            `php -d memory_limit=-1` добавляется, если команда начинается с `php`.
+        env: добавочные переменные прогона (например `DATABASE_URL`); пишутся в файл
+            600 **после** переменных сервиса — перекрывают их.
+        networks: добавочные docker-сети (например приватная с одноразовой базой).
+        timeout: секунд на прогон; исчерпан — код -1 и журнал до обрыва.
+
+    Returns:
+        `{'ok', 'code', 'out', 'log'}` — код возврата, хвост вывода, путь к полному журналу.
+
+    ⚠ Та же цена, что у сюиты: `vendor/` и конфиги — на read-only из основной
+    выкладки, а root-овые артефакты прогона после сметаются из копии.
+    """
+    wt = Path(worktree or Path.cwd()).resolve()
+    root = Path(repo).resolve() if repo else project_main_root(root=str(wt))
+    service, spec, config, error = _php_service(root)
+    if error:
+        raise ValueError(error)
+    code_root, nets, image = _php_runtime(root, service, spec, config)
+    mounts, staged = _php_mounts(wt, root, code_root)
+    token = secrets.token_hex(3)
+    log = Path(tempfile.gettempdir()) / f'project_worktree_php_run_{token}.log'
+    head = [str(one) for one in (argv or [])]
+    if head and head[0] == 'php':
+        head = head[:1] + ['-d', 'memory_limit=-1'] + head[1:]
+    with _php_stage(root, code_root, staged) as (stage_mount, pre):
+        output, rc = _docker_run(f'wt-php-{token}', image, nets + list(networks or []), spec,
+                                 mounts + stage_mount, code_root, pre, [(head, '')], timeout,
+                                 log, env)
+    _php_sweep(wt, image)
+    return {'ok': rc == 0, 'code': rc, 'out': output, 'log': str(log)}
+
+
 # ── детали реализации ──
 
 def _php_service(root: Path) -> tuple:
@@ -325,10 +366,12 @@ def _phpcs_count(chunk: str) -> tuple:
 
 
 def _docker_run(name: str, image: str, networks: list, spec: dict, mounts: list, code: str,
-                pre: str, runs: list, timeout: float, log: Path) -> tuple:
+                pre: str, runs: list, timeout: float, log: Path, extra_env: dict = None) -> tuple:
     """Каждый прогон — `docker run --rm`; stdout+stderr в журнал, вызывающему — хвост, код — от главного (первого) прогона.
 
     Секреты сервиса едут файлом 600, не аргументами: командная строка видна в `ps`.
+    `extra_env` пишется в тот же файл **после** переменных сервиса — в `--env-file`
+    последняя строка побеждает, так переопределяется `DATABASE_URL` сервиса.
     """
     cmd = ['docker', 'run', '--rm', '--name', name, '-w', code, *mounts]
     for net in networks:
@@ -341,6 +384,9 @@ def _docker_run(name: str, image: str, networks: list, spec: dict, mounts: list,
     with tempfile.NamedTemporaryFile('w', suffix='.env', delete=False) as handle:
         os.chmod(handle.name, 0o600)
         for key, value in (spec.get('environment') or {}).items():
+            if value is not None and '\n' not in str(value):
+                handle.write(f'{key}={value}\n')
+        for key, value in (extra_env or {}).items():
             if value is not None and '\n' not in str(value):
                 handle.write(f'{key}={value}\n')
         handle.flush()                            # иначе docker увидит пустой env-файл
