@@ -13,6 +13,11 @@
 * `commit_pr_ship(root, title, body, base='master', sync=('dev','staging'), dry=False)`
   — пуш ветки, PR в базу, merge, синк-PR'ы базы в каждую среду; вернуть
   {'pr','merge_commit','sync': {среда: {'pr','state'}}}.
+* `commit_pr_ship_retry(argv, cwd, attempts=3)` — одна команда gh/git с повторами на
+  сетевых промахах; соседним модулям, которым это тоже нужно (свой повтор уже
+  заводили дважды — сюда, а не в третий раз).
+* `commit_pr_ship_pr_ensure(root, head, base, title, body)` — номер открытого PR head→base,
+  нет — завести; повторный create не беда.
 
 ⚠ Мержить только merge-commit'ом (`--merge --admin`): squash переписывает
 историю, и следующий синк `master → dev` конфликтует с уже влитым.
@@ -70,9 +75,9 @@ def commit_pr_ship(root: str = '.', title: str = '', body: str = '',
         return _dry_plan(root, branch, base, sync)
 
     title = title or _git(root, 'log', '-1', '--format=%s')
-    _retry(['git', 'push', '-u', 'origin', branch], cwd=root)
+    commit_pr_ship_retry(['git', 'push', '-u', 'origin', branch], cwd=root)
 
-    pr = _pr_ensure(root, branch, base, title, body)
+    pr = commit_pr_ship_pr_ensure(root, branch, base, title, body)
     _gh(root, 'pr', 'merge', str(pr), '--merge', '--admin')
     commit = _pr_merged(root, pr)
 
@@ -83,39 +88,7 @@ def commit_pr_ship(root: str = '.', title: str = '', body: str = '',
     return out
 
 
-def _sync_one(root: str, base: str, target: str, dry: bool = False) -> dict:
-    """Синк base → среда: временная ветка, merge, PR, merge PR'а."""
-    tmp = f'merge/{base}-into-{target}'
-    _retry(['git', 'fetch', 'origin', target, base], cwd=root)
-    _git(root, 'checkout', '-B', tmp, f'origin/{target}')
-    got = subprocess.run(['git', 'merge', '--no-edit', f'origin/{base}'],
-                         cwd=root, capture_output=True, text=True)
-    text = got.stdout + got.stderr
-    if got.returncode != 0:
-        raise RuntimeError(f'конфликт синка {base}→{target}: {text[-300:]}')
-    if 'Already up to date' in text:
-        return {'pr': None, 'state': 'already'}
-    if dry:
-        return {'pr': None, 'state': 'dry'}
-    _retry(['git', 'push', '-f', 'origin', tmp], cwd=root)
-    pr = _pr_ensure(root, tmp, target, f'Merge {base} into {target}',
-                    f'Sync {base} into {target} (branch law).')
-    _gh(root, 'pr', 'merge', str(pr), '--merge', '--admin')
-    _pr_merged(root, pr)
-    return {'pr': pr, 'state': 'merged'}
-
-
-def _dry_plan(root: str, branch: str, base: str, sync) -> dict:
-    for target in ('', *sync):
-        step = (f'gh pr create --base {base} --head {branch} && gh pr merge --merge --admin'
-                if target == '' else
-                f'git checkout -B merge/{base}-into-{target} origin/{target}; '
-                f'git merge origin/{base}; push; PR → merge')
-        print('· ' + (step if not target else f'синк в {target}: ' + step))
-    return {'branch': branch, 'pr': None, 'merge_commit': '', 'sync': {}}
-
-
-def _pr_ensure(root: str, head: str, base: str, title: str, body: str) -> int:
+def commit_pr_ship_pr_ensure(root: str, head: str, base: str, title: str, body: str) -> int:
     """Номер открытого PR head→base; нет — завести. Повторный create не беда."""
     got = subprocess.run(['gh', 'pr', 'list', '--head', head, '--base', base,
                           '--state', 'open', '--json', 'number'],
@@ -138,6 +111,54 @@ def _pr_ensure(root: str, head: str, base: str, title: str, body: str) -> int:
     return items[0]['number']
 
 
+def commit_pr_ship_retry(argv: list, cwd: str, attempts: int = _RETRY) -> str:
+    """gh/git с retry: i/o timeout к api.github.com здесь рядовое явление.
+
+    Raises:
+        RuntimeError: `attempts` подряд команда вернула ненулевой код; в тексте —
+                      хвост stderr (или stdout) последнего промаха.
+    """
+    for n in range(1, attempts + 1):
+        got = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        if got.returncode == 0:
+            return got.stdout
+        if n < attempts:
+            time.sleep(4 * n)
+    raise RuntimeError(f"{' '.join(argv)} -> {(got.stderr or got.stdout).strip()[-300:]}")
+
+
+def _sync_one(root: str, base: str, target: str, dry: bool = False) -> dict:
+    """Синк base → среда: временная ветка, merge, PR, merge PR'а."""
+    tmp = f'merge/{base}-into-{target}'
+    commit_pr_ship_retry(['git', 'fetch', 'origin', target, base], cwd=root)
+    _git(root, 'checkout', '-B', tmp, f'origin/{target}')
+    got = subprocess.run(['git', 'merge', '--no-edit', f'origin/{base}'],
+                         cwd=root, capture_output=True, text=True)
+    text = got.stdout + got.stderr
+    if got.returncode != 0:
+        raise RuntimeError(f'конфликт синка {base}→{target}: {text[-300:]}')
+    if 'Already up to date' in text:
+        return {'pr': None, 'state': 'already'}
+    if dry:
+        return {'pr': None, 'state': 'dry'}
+    commit_pr_ship_retry(['git', 'push', '-f', 'origin', tmp], cwd=root)
+    pr = commit_pr_ship_pr_ensure(root, tmp, target, f'Merge {base} into {target}',
+                    f'Sync {base} into {target} (branch law).')
+    _gh(root, 'pr', 'merge', str(pr), '--merge', '--admin')
+    _pr_merged(root, pr)
+    return {'pr': pr, 'state': 'merged'}
+
+
+def _dry_plan(root: str, branch: str, base: str, sync) -> dict:
+    for target in ('', *sync):
+        step = (f'gh pr create --base {base} --head {branch} && gh pr merge --merge --admin'
+                if target == '' else
+                f'git checkout -B merge/{base}-into-{target} origin/{target}; '
+                f'git merge origin/{base}; push; PR → merge')
+        print('· ' + (step if not target else f'синк в {target}: ' + step))
+    return {'branch': branch, 'pr': None, 'merge_commit': '', 'sync': {}}
+
+
 def _pr_merged(root: str, pr: int, timeout: int = 60) -> str:
     """Дождаться MERGED и вернуть sha merge-коммита."""
     deadline = time.monotonic() + timeout
@@ -151,24 +172,13 @@ def _pr_merged(root: str, pr: int, timeout: int = 60) -> str:
 
 
 def _gh(root: str, *argv: str) -> str:
-    return _retry(['gh', *argv], cwd=root)
+    return commit_pr_ship_retry(['gh', *argv], cwd=root)
 
 
 def _git(root: str, *argv: str) -> str:
     # git оканчивает вывод переводом строки; без rstrip имя ветки уходило в
     # push с новой строкой внутри refspec — fatal: invalid refspec
-    return _retry(['git', *argv], cwd=root).rstrip('\n')
-
-
-def _retry(argv: list, cwd: str, attempts: int = _RETRY) -> str:
-    """gh/git с retry: i/o timeout к api.github.com здесь рядовое явление."""
-    for n in range(1, attempts + 1):
-        got = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
-        if got.returncode == 0:
-            return got.stdout
-        if n < attempts:
-            time.sleep(4 * n)
-    raise RuntimeError(f"{' '.join(argv)} -> {(got.stderr or got.stdout).strip()[-300:]}")
+    return commit_pr_ship_retry(['git', *argv], cwd=root).rstrip('\n')
 
 
 if __name__ == '__main__':
