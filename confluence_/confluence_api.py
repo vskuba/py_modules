@@ -169,18 +169,25 @@ def confluence_api_search(cql: str, limit: int = 50, env: dict | None = None) ->
 
 
 def confluence_api_page_create(space_key: str, parent_id: str, title: str, storage: str,
-                               env: dict | None = None) -> dict:
+                               env: dict | None = None, appearance: str = '') -> dict:
     """Создать страницу под `parent_id`; тело — storage XHTML. Вернёт JSON страницы (`id`, `_links`).
 
     ⚠ Публикация: страницу видят все, кому видно пространство, — звать только по просьбе.
     Картинка из вложения в теле — `<ac:image><ri:attachment ri:filename="x.png"/></ac:image>`;
     само вложение кладёт `confluence_api_attach` (можно и после создания — ссылка по имени).
+    `appearance` (`full-width` / `fixed-width`) — ширина страницы: это не разметка, а свойства
+    `content-appearance-published` и `-draft`; без них страница узкая, по центру.
     """
     env = env or jira_api_env()
     space = confluence_api_space(space_key, env)
-    return jira_api_request('POST', 'wiki/api/v2/pages', body={
+    page = jira_api_request('POST', 'wiki/api/v2/pages', body={
         'spaceId': space['id'], 'status': 'current', 'title': title, 'parentId': str(parent_id),
         'body': {'representation': 'storage', 'value': storage}}, env=env, product='confluence')
+    if appearance:
+        for key in ('content-appearance-draft', 'content-appearance-published'):
+            jira_api_request('POST', f"wiki/api/v2/pages/{page['id']}/properties",
+                             body={'key': key, 'value': appearance}, env=env, product='confluence')
+    return page
 
 
 def confluence_api_page_update(page_id: str, storage: str, title: str = '', message: str = '',

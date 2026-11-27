@@ -60,3 +60,18 @@ def test_confluence_api_page_update_bumps_version_and_keeps_title(monkeypatch):
 
     assert (seen['method'], seen['path']) == ('PUT', 'wiki/api/v2/pages/777')
     assert seen['body']['version'] == {'number': 4, 'message': 'm'} and seen['body']['title'] == 'Old'
+
+
+def test_confluence_api_page_create_sets_full_width_appearance(monkeypatch):
+    """`appearance` ставит оба свойства ширины: без них страница выходит узкой, по центру."""
+    calls = []
+    monkeypatch.setattr(confluence_api, 'confluence_api_space', lambda key, env=None: {'id': '42'})
+    monkeypatch.setattr(confluence_api, 'jira_api_request',
+                        lambda *a, **k: calls.append((a[1], k.get('body'))) or {'id': '777'})
+
+    confluence_api.confluence_api_page_create('CAS', 1, 'T', '<p/>', env={'url': 'https://site.test'},
+                                              appearance='full-width')
+
+    props = [body for path, body in calls if path.endswith('/properties')]
+    assert {p['key'] for p in props} == {'content-appearance-draft', 'content-appearance-published'}
+    assert all(p['value'] == 'full-width' for p in props)
