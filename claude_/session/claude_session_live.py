@@ -16,6 +16,8 @@ PYTHONPATH=. python -m claude_.session.claude_session_live    # таблица �
 import glob
 import json
 import os
+import threading
+import time
 
 from claude_.session.claude_session_tokens import claude_session_tokens, claude_session_tokens_since
 from claude_.session.claude_session_transcript import claude_session_transcript_cwd
@@ -39,6 +41,13 @@ CLAUDE_SESSION_LIVE_ACCOUNT_DRIFT = 4 * 3600
 
 # Порядок статусов в списке: ждёт ответа, работает, фоновая команда, ждёт сообщения.
 CLAUDE_SESSION_LIVE_ORDER = ('waiting', 'busy', 'shell', 'idle')
+# Колонка субагентов DSH: сколько секунд ждать хост. Таблицу обрывает `timeout 8` статусной
+# строки, а у запросов к хосту свои 10 с каждый: медленный хост останавливал всю таблицу
+# (и с ней новое название `t …`). Не успел — берётся прошлый удачный ответ из кэша.
+CLAUDE_SESSION_LIVE_AGENTS_WAIT = 3.0
+CLAUDE_SESSION_LIVE_AGENTS_CACHE = '~/.cache/claude-session-agents.json'
+# Прошлый ответ старше этого — уже не правда: колонка пустеет.
+CLAUDE_SESSION_LIVE_AGENTS_STALE = 120
 
 
 def claude_session_live_list() -> list:
@@ -221,14 +230,48 @@ def _claude_session_live_window_start(session_id: str) -> float:
     return float(resets) - 5 * 3600 if resets else 0.0
 
 
+_CLAUDE_SESSION_LIVE_AGENTS = {}
+
+
 def _claude_session_live_agents() -> dict:
+    # Субагенты DSH с потолком по времени: опрос хоста — в фоновой нити, которую выход
+    # процесса не ждёт. Один опрос на прогон: список и «скрытые» зовут его оба.
+    if 'value' in _CLAUDE_SESSION_LIVE_AGENTS:
+        return _CLAUDE_SESSION_LIVE_AGENTS['value']
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(value=_claude_session_live_agents_fetch()),
+                              daemon=True)
+    thread.start()
+    thread.join(CLAUDE_SESSION_LIVE_AGENTS_WAIT)
+    path = os.path.expanduser(CLAUDE_SESSION_LIVE_AGENTS_CACHE)
+    if result.get('value') is not None:
+        value = result['value']
+        try:
+            with open(f'{path}.tmp', 'w', encoding='utf-8') as handle:
+                json.dump({'at': time.time(), 'agents': value}, handle, ensure_ascii=False)
+            os.replace(f'{path}.tmp', path)
+        except OSError:
+            pass
+    else:
+        try:
+            with open(path, encoding='utf-8') as handle:
+                cached = json.load(handle)
+            fresh = time.time() - cached.get('at', 0) < CLAUDE_SESSION_LIVE_AGENTS_STALE
+            value = cached.get('agents') or {} if fresh else {}
+        except (OSError, ValueError, AttributeError):
+            value = {}
+    _CLAUDE_SESSION_LIVE_AGENTS['value'] = value
+    return value
+
+
+def _claude_session_live_agents_fetch():
     # Занятые моторы DSH и чья это работа: хозяин карточки — сессия Claude, что её завела.
-    # Хост лёг или медлит — колонка пустеет, таблица из-за него не ломается.
+    # Хост лёг — None (не «субагентов нет»): тогда берётся кэш, таблица из-за него не ломается.
     try:
         working = dsh_board_motors_busy()['working']
         asking = dsh_session_asking([item.get('session') or '' for item in working])
     except Exception:
-        return {}
+        return None
     agents = {}
     for item in working:
         # Хозяин — кто сейчас ждёт ответа (последним дал задание), иначе — кто завёл карточку.
