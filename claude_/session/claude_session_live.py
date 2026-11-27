@@ -224,10 +224,15 @@ def _claude_session_live_window_start(session_id: str) -> float:
                 snapshots.append(json.load(handle))
         except (OSError, ValueError):
             continue
+    # ⚠ Снимок с истёкшим окном (`resets_at` в прошлом, сессия давно не ходила к Claude) —
+    # не в счёт: начало того окна давно прошло, расход «с него» — цена многих окон.
+    def resets_of(row):
+        value = float((((row.get('rate_limits') or {}).get('five_hour') or {}).get('resets_at')) or 0)
+        return value if value > time.time() else 0.0
+    snapshots = [row for row in snapshots if resets_of(row)]
     mine = [row for row in snapshots if row.get('session_id') == session_id]
     pool = mine or sorted(snapshots, key=lambda row: -float(row.get('at') or 0))[:1]
-    resets = (((pool[0].get('rate_limits') or {}).get('five_hour') or {}).get('resets_at')) if pool else None
-    return float(resets) - 5 * 3600 if resets else 0.0
+    return resets_of(pool[0]) - 5 * 3600 if pool else 0.0
 
 
 _CLAUDE_SESSION_LIVE_AGENTS = {}

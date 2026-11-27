@@ -144,6 +144,12 @@ def dsh_saving_calibrate(owner: str = None, force: bool = False) -> dict:
     result = {'account': account, 'at': time.time()}
     for window, span in DSH_SAVING_WINDOWS.items():
         limit = limits.get(window) or {}
+        # ⚠ Окно снимка уже истекло (`resets_at` в прошлом): сессия давно не ходила к Claude,
+        # и снимок держит лимиты её последнего запроса. Счёт от начала того окна до сейчас
+        # давал 84 млн единиц на 48% — цена 1% ×11, доли в таблице «<1%». Такой снимок —
+        # «данных нет», берётся прошлая калибровка.
+        if float(limit.get('resets_at') or 0) <= time.time():
+            limit = {}
         used = float(limit.get('used_percentage') or 0)
         previous = cached.get(window) or {}
         if not limit.get('resets_at') or used < DSH_SAVING_MIN_PCT:
