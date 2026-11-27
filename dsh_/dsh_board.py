@@ -37,6 +37,7 @@ import fcntl
 import json
 import os
 import re
+import statistics
 import subprocess
 import threading
 import time
@@ -47,12 +48,18 @@ from dsh_.dsh_saving import dsh_saving_owner_mark, dsh_saving_sent
 from dsh_.dsh_wait import dsh_wait_done, dsh_wait_expect
 from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_merged, \
     dsh_worktree_new
-from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, dsh_session_dialog, \
+from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, \
     dsh_session_find, dsh_session_history, dsh_session_image_part, dsh_session_list, \
-    dsh_session_prompt, dsh_session_title, dsh_session_turn_reply
+    dsh_session_prompt, dsh_session_round_pair, dsh_session_title, dsh_session_turn_log, \
+    dsh_session_turn_reply
 
 # Потолок ожидания ответа субагента по умолчанию, с.
 DSH_BOARD_WAIT_TIMEOUT = 1800
+# Сколько готовых кругов этой карточки брать для обычного срока (`dsh_board_eta`) и каким
+# запасом множиться медиана, чтобы не разбудить себя ложным «не дождались». Замер
+# 24–27.11: 115 кругов из 205 дольше 1800 с, разброс внутри карточки — ×2.
+DSH_BOARD_ETA_ROUNDS = 3
+DSH_BOARD_ETA_MARGIN = 1.5
 # Шаг, с которым переспрашивать хост, не ответивший вовремя.
 DSH_BOARD_RETRY_POLL = 2.0
 # Сколько раз продолжать круг, оборванный перезапуском хоста, и чем.
@@ -199,6 +206,44 @@ def dsh_board_working(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
         `[{session, title, kind, goal, motor, model, robot}]` — см. `dsh_board_motors_busy`.
     """
     return dsh_board_motors_busy(base=base)['working']
+
+
+def dsh_board_eta(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Сколько круг в карточке уже идёт и сколько он тут длится обычно — чем мерить `--timeout`.
+
+    Потолок ожидания ставят наугад, а живой круг дольше его: за 24–27.11 — 30 таймаутов
+    ожидания при медиане готового круга 36 мин (потолок по умолчанию — 30 мин), и каждый
+    раз оркестратор поднимал его руками: 1800 → 2400 → 3600 → 5400 с. Здесь срок берётся
+    из журналов самой карточки: сколько уже идёт, сколько длится обычно, какой потолок
+    поставить, чтобы не разбудить себя ложным «не дождались».
+
+    ⚠ Обычный срок — по кругам **этой** карточки: у копии, у обзора логов и у проверки
+    круги разной длины, общая медиана по доске ничего не предсказывает.
+    ⚠ Границы кругов — тяжёлый `session/page` (страницами назад), в статусной строке
+    (`working --line`, раз в секунду) эту функцию звать нельзя.
+
+    Returns:
+        `{'running', 'elapsed', 'rounds', 'typical', 'suggest'}`: `elapsed` — сколько идёт
+        идущий круг (0, если ничего не идёт), `rounds` — длительности последних завершённых
+        кругов, `typical` — их медиана, `suggest` — потолок для `--timeout` с запасом
+        `DSH_BOARD_ETA_MARGIN`; при пустом журнале `typical` = 0, а `suggest` =
+        `DSH_BOARD_WAIT_TIMEOUT`.
+    """
+    rows = dsh_session_turn_log(session, DSH_BOARD_ETA_ROUNDS + 1, base=base)
+    done = [round(row['end'] - row['start']) for row in rows if row['end'] and row['start']]
+    running = [row for row in rows if not row['end'] and row['start']]
+    elapsed = int(max(0.0, time.time() - max(row['start'] for row in running))) if running else 0
+    rounds = sorted(done[-DSH_BOARD_ETA_ROUNDS:])     # последние круги по времени, не самые долгие
+    typical = int(statistics.median(rounds)) if rounds else 0
+    if not done and not elapsed:
+        suggest = DSH_BOARD_WAIT_TIMEOUT
+    else:
+        # У юной карточки готовых кругов нет — по `elapsed × запас` мерить нельзя (круг только
+        # начался, а типичный здесь 36 мин): берём общий потолок, пока медиана не появилась.
+        floor = typical if done else DSH_BOARD_WAIT_TIMEOUT
+        suggest = int(max(floor, elapsed) * DSH_BOARD_ETA_MARGIN)
+    return {'running': bool(running), 'elapsed': elapsed, 'rounds': rounds,
+            'typical': typical, 'suggest': max(60, suggest)}
 
 
 def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
@@ -482,7 +527,7 @@ def dsh_board_revive_auto(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
         return []
 
 
-def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
+def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, task: str = '', *,
                      base: str = DSH_API_ADDR_DEFAULT) -> dict:
     """Перекрёстная проверка: второй субагент сверяет ответ первого с кодом и источниками.
 
@@ -492,6 +537,12 @@ def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
     утверждение и раскладывает на «подтверждено / неверно / не проверить». Оркестратору —
     итог; смотреть самому остаётся только «неверно» и «не проверить».
 
+    Args:
+        session: проверяемая карточка.
+        timeout: потолок ожидания проверяющего, с.
+        task: задачу можно назвать словами — когда в карточке было несколько кругов и
+            сверять надо не последний промпт, а конкретный.
+
     Returns:
         `{session, verifier, answer}` — проверяемая карточка, карточка проверяющего и его
         полный ответ (итог — `dsh_board_brief`).
@@ -500,11 +551,14 @@ def dsh_board_verify(session: str, timeout: float = DSH_BOARD_WAIT_TIMEOUT, *,
         DshBoardError: в проверяемой карточке нет пары «задача — ответ».
     """
     item = dsh_session_find(session, base=base)
-    rows = dsh_session_dialog(session, 10, base=base)
-    task = next((row['text'] for row in reversed(rows) if row['role'] == 'user'), '')
-    answer = next((row['text'] for row in reversed(rows) if row['role'] == 'assistant'), '')
+    # Пару берём по всему журналу (`dsh_session_round_pair`), а не из хвоста: задача
+    # долгого круга лежит за сотнями записей до конца, и такая карточка считалась
+    # «без пары» — 5 падений проверки за 24–27.11, каждый раз её делали руками.
+    pair = dsh_session_round_pair(session, base=base)
+    task, answer = task or pair['task'], pair['answer']
     if not task or not answer:
-        raise DshBoardError(f'в карточке {session} нет пары «задача — ответ» для проверки')
+        raise DshBoardError(f'в карточке {session} нет пары «задача — ответ» для проверки'
+                            + (' (задачу можно передать: --task)' if answer else ''))
     title = f"проверка: {dsh_session_title(item) or session}"[:60]
     row = dsh_board_worktree_row(session)
     if row.get('path'):

@@ -41,6 +41,12 @@ DSH_SESSION_IMAGE_TYPES = ('image/png', 'image/jpeg', 'image/webp', 'image/gif')
 # круге с десятками шагов инструментов.
 DSH_SESSION_REPLY_SPAN = 40
 
+# Ходьба назад по журналу (`dsh_session_round_pair`, `dsh_session_turn_log`): окно страниц
+# и их число. 6 × 40 сообщений покрывают круг в ~600 записей — больше в живых карточках
+# не было (замер 24–27.11), а каждая лишняя страница — тяжёлый `session/page`.
+DSH_SESSION_PAIR_MESSAGES = 40
+DSH_SESSION_PAIR_PAGES = 6
+
 # Шаг опроса журнала в ожидании конца круга.
 DSH_SESSION_POLL = 2.0
 # Страница журнала долгой карточки и список карточек (сотни шагов с выводами инструментов) тяжела: под
@@ -236,16 +242,24 @@ def dsh_session_dialog(session: str, count: int = 10, *,
     Промпт человека (и наш) — `user/message` с `source.kind == "user"`; служебные вставки
     хоста (инструкции проекта, снимок песочницы) идут тем же типом, но своим `kind`.
 
+    ⚠ Окно берётся по репликам, а не по записям журнала: круг с десятками шагов
+    инструментов раздувает журнал в десятки раз, и одна страница до промпта не доходит —
+    `dsh-board history` long-карточки показывал одни ответы, без задающих их промптов.
+    Поэтому окно идёт назад страницами, пока реплик не наберётся.
+
     Returns:
         `[{"role": "user"|"assistant", "time", "seq", "text"}]` по возрастанию.
     """
     if count <= 0:
         return []
-    rows = []
-    for event in dsh_session_history(session, count * DSH_SESSION_SPAN, base=base):
-        row = _dialog_row(event)
-        if row is not None:
-            rows.append(row)
+    rows: list = []
+
+    def enough(events: list) -> bool:
+        rows[:] = [row for event in events if (row := _dialog_row(event)) is not None]
+        return len(rows) >= count
+
+    _walk_back(session, enough, DSH_SESSION_PAIR_PAGES,
+               max(count * DSH_SESSION_SPAN, DSH_SESSION_PAIR_MESSAGES), base)
     return rows[-count:]
 
 
@@ -259,6 +273,65 @@ def dsh_session_answer_last(session: str, after: int = 0, *,
         if row is not None and row['role'] == 'assistant':
             return row['text']
     return ''
+
+
+def dsh_session_round_pair(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Пара «задача — ответ» последнего завершённого круга — по всему журналу карточки.
+
+    `dsh_session_dialog` берёт последние `count × DSH_SESSION_SPAN` записей журнала, а в
+    круге с десятками шагов инструментов до промпта так не дойти: у карточки на 616 записей
+    задача лежит на 15-й, и `dsh_board_verify` объявлял её «без пары» — замеры 24–27.11
+    дают 5 таких падений, каждый раз проверку делали руками заново. Здесь окно идёт от
+    конца назад страницами, пока не соберутся ответ и промпт к нему.
+
+    ⚠ Задачу мог положить не человек, а доска (`continuous_add`): в журнале это
+    `agent/inbox/spliced` с `target: "next-turn"`, репликой человека оно не числится — но
+    это и есть задача того круга, и как задача пары оно годится.
+
+    Returns:
+        `{'task', 'answer', 'via'}` — `via`: `user` — промпт из реплики человека,
+        `goal` — клад доски, `` — пара не собрана (карточка без круга, журнал пуст).
+    """
+    events = _walk_back(session, _pair_enough, DSH_SESSION_PAIR_PAGES,
+                        DSH_SESSION_PAIR_MESSAGES, base)
+    answer, answer_seq = '', -1
+    for event in events:                              # последний ответ агента — это ответ пары
+        row = _dialog_row(event)
+        if row is not None and row['role'] == 'assistant':
+            answer, answer_seq = row['text'], event.get('seq', 0)
+    task, via = '', ''
+    for event in events:                              # промпт, которым начат именно этот ответ
+        row = _dialog_row(event)
+        if row is not None and row['role'] == 'user' and event.get('seq', 0) < answer_seq:
+            task, via = row['text'], 'user'
+    if not task and answer:
+        # Реплики человека в окне нет: задача — последний клад доски перед ответом.
+        for event in events:
+            text = _spliced_goal_text(event)
+            if text and event.get('seq', 0) < answer_seq:
+                task, via = text, 'goal'
+    return {'task': task, 'answer': answer, 'via': via}
+
+
+def dsh_session_turn_log(session: str, rounds: int = 3, *,
+                         base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Границы последних кругов карточки — `{turn, start, end}` по возрастанию.
+
+    Нужны, чтобы сказать, сколько круг уже идёт и сколько он длится обычно: по `running`
+    в списке карточек этого не видно, а потолок ожидания (`DSH_BOARD_WAIT_TIMEOUT`) без
+    этих чисел ставят наугад и промахиваются (замер 24–27.11: 30 таймаутов ожидания,
+    медиана готового круга — 36 мин при потолке 30 мин).
+
+    Args:
+        rounds: сколько завершённых кругов собрать; идущий сейчас добавляется всегда.
+
+    Returns:
+        `[{'turn', 'start', 'end'}]` — времена в секундах (`time.time`), `end` пуст при
+        идущем круге; пусто — журнал карточки не читается или кругов не было.
+    """
+    events = _walk_back(session, lambda rows: _turn_rows(rows)[1] >= rounds,
+                        DSH_SESSION_PAIR_PAGES, DSH_SESSION_PAIR_MESSAGES, base)
+    return _turn_rows(events)[0]
 
 
 def dsh_session_turn_reply(session: str, after: int, text: str, timeout: float = 1800, *,
@@ -430,3 +503,91 @@ def _reply_between(events: list, start: int, end: int) -> str:
             if row is not None and row['role'] == 'assistant':
                 text = row['text']
     return text
+
+
+def _walk_back(session: str, enough, pages: int, messages: int, base: str) -> list:
+    """События журнала от конца назад, пока `enough(events)` не скажет «хватит».
+
+    Одна страница — `messages` сообщений; засечку следующей, более ранней страницы берём
+    на единицу младше самого раннего события уже прочитанного окна. Страниц меньше
+    заявленного — журнал кончился: дальше идти некуда.
+
+    ⚠ Страница тяжёлой карточки (сотни шагов с выводами инструментов) велика и медленна
+    (`DSH_SESSION_PAGE_TIMEOUT`) — потому страниц всего `DSH_SESSION_PAIR_PAGES`, а не
+    «весь журнал»: обычно пара находится в первых двух окнах.
+    """
+    events, cursor = [], None
+    for _ in range(pages):
+        rows = dsh_session_history(session, messages, cursor, base=base)
+        if not rows:
+            break
+        events = rows + events
+        if enough(events):
+            break
+        oldest = int(rows[0].get('seq', 0) or 0)
+        if cursor is not None and oldest >= cursor:
+            break                                    # страница не сдвинулась назад — идти некуда
+        cursor = oldest - 1
+    return events
+
+
+def _pair_enough(events: list) -> bool:
+    """Для пары нужны ответ агента **и** промпт раньше него: одного ответа мало.
+
+    Окно, в котором есть только ответ, — это круг с сотнями шагов инструментов: промпт
+    остался страницей раньше, и ходить надо дальше, а не объявлять пару собранной.
+    """
+    marks = [(event.get('seq', 0), (_dialog_row(event) or {}).get('role')) for event in events]
+    marks = [(seq, role) for seq, role in marks if role]
+    answer = max((seq for seq, role in marks if role == 'assistant'), default=-1)
+    return answer > 0 and any(seq < answer for seq, role in marks if role == 'user')
+
+
+def _spliced_goal_text(event: dict) -> str:
+    """Задача, положенная карточке доской (`continuous_add`), — текст вставки `next-turn`.
+
+    Вставки `next-step` — это служебные уведомления (финиш фоновой задачи, снимок
+    инструкций), а не задача; их не берём.
+    """
+    if event.get('type') != 'agent/inbox/spliced':
+        return ''
+    data = event.get('data') or {}
+    if data.get('target') != 'next-turn':
+        return ''
+    for part in data.get('inserted') or []:
+        text = dsh_session_message_text(part if isinstance(part, dict) else {})
+        if text:
+            return text
+    return ''
+
+
+def _turn_rows(events: list) -> tuple:
+    """Границы кругов из событий журнала: `([{turn, start, end}], сколько завершённых)`."""
+    opened = {}
+    rows = []
+    for event in events:
+        kind = event.get('type')
+        if kind not in ('turn/start', 'turn/end'):
+            continue
+        data = event.get('data') or {}
+        turn = data.get('turn')
+        clock = _event_clock(event)
+        if kind == 'turn/start':
+            opened[turn] = clock
+        else:
+            start = opened.pop(turn, None)
+            if start:
+                rows.append({'turn': turn, 'start': start, 'end': clock})
+    rows += [{'turn': turn, 'start': clock, 'end': None} for turn, clock in opened.items()]
+    rows.sort(key=lambda row: row['start'] or 0)
+    return rows, sum(1 for row in rows if row['end'])
+
+
+def _event_clock(event: dict) -> float:
+    """Время события журнала в секундах эпохи: хост пишет его в миллисекундах."""
+    value = event.get('time')
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return value / 1000 if value > 1e11 else value

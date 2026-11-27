@@ -16,8 +16,8 @@
 * карточки, чей ответ лежит во «входящих», но метка `dsh_wait` всё ещё стоит
   (`dsh_wait_answered` — тот же признак, что у ждуна и заставы живости) — их ждун заберёт,
   когда его перезаведут;
-* метки без живого ждуна (`dsh_wait_waiter_alive`) — субагенты ещё работают, будить
-  некому.
+* метки без живого ждуна (`dsh_wait_waiter_gaps`) — субагенты ещё работают, будить
+  некому; покарточный ждун `wait <карточка>` закрывает только свои карточки.
 
 Ничего из этого хук сам не запускает и не отменяет: он кладёт модели `additionalContext`
 с конкретикой — что готово и где лежит, что ещё идёт, и готовую команду ждуна
@@ -32,7 +32,7 @@
 ⚠ Тяжёлых вызовов хосту — ровно один (`dsh_wait_answered`) и только когда метки есть,
 а ждуна нет; и тот под потолком `CLAUDE_HOOK_DSH_REARM_HOST_WAIT` на отдельной нити:
 засохший кэш `session/list` не имеет права задержать старт сессии дольше секунды. Локальные
-проверки (`dsh_wait_pending`, `dsh_wait_waiter_alive`, обход `<TMPDIR>/dsh-wait-*`) — те же,
+проверки (`dsh_wait_pending`, `dsh_wait_waiter_gaps`, обход `<TMPDIR>/dsh-wait-*`) — те же,
 что делает `claude_hook_dsh_wait`.
 
 ⚠ `_state_write` — last-writer-wins: два хука разных сессий пишут непересекающиеся
@@ -51,7 +51,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from claude_.hook.claude_hook import claude_hook_input  # noqa: E402
 from dsh_.dsh_api import DSH_API_HOME_DEFAULT  # noqa: E402
 from dsh_.dsh_wait import (DSH_WAIT_MAX_AGE, DSH_WAIT_OWNER_ENV, dsh_wait_answered,  # noqa: E402
-                           dsh_wait_key, dsh_wait_pending, dsh_wait_waiter_alive)
+                           dsh_wait_key, dsh_wait_pending, dsh_wait_waiter_gaps)
 
 # Виденные ответы: {файл: mtime} — чтобы тот же файл не всплывал на каждом ходе.
 CLAUDE_HOOK_DSH_REARM_STATE = 'dsh-board.rearm-seen.json'
@@ -82,10 +82,12 @@ def claude_hook_dsh_rearm_context(data: dict) -> str:
     state = _state_read()
     ready = _collected_answers(state, out_dir)
     pending = dsh_wait_pending(owner)
-    alive = dsh_wait_waiter_alive(owner)
+    # Покарточный ждун будит только свои карточки: «ждун есть» ещё не значит «ждать некому»
+    # — смотрим пробел, иначе партия молча отпускала ход с непокрытыми метками.
+    gaps = dsh_wait_waiter_gaps(owner, pending)
 
     # «Входящие» хоста — только когда они что-то решают: метки есть, а ждать их некому.
-    answered = _answered_guarded(pending) if pending and not alive else []
+    answered = _answered_guarded(gaps) if gaps else []
     got = {dsh_wait_key(str(row.get('session') or '')): row for row in answered}
     seen_cards = {row['card'] for row in ready}
 
@@ -100,12 +102,12 @@ def claude_hook_dsh_rearm_context(data: dict) -> str:
                           for row in uncollected)
         lines.append(f'{len(uncollected)} answer(s) sit in the inbox, never collected: {names}')
 
-    if pending and not alive:
-        running = [key for key in pending if key not in got and key not in seen_cards]
+    if gaps:
+        running = [key for key in gaps if key not in got and key not in seen_cards]
         if running:
             lines.append(f'{len(running)} subagent(s) still running: ' +
                          ', '.join(key.replace('continuous-', '')[:8] for key in running))
-        head = CLAUDE_HOOK_DSH_REARM_HEAD_DEAD.format(count=len(pending))
+        head = CLAUDE_HOOK_DSH_REARM_HEAD_DEAD.format(count=len(gaps))
         lines.append(CLAUDE_HOOK_DSH_REARM_RUN.format(out=out_dir))
     else:
         head = CLAUDE_HOOK_DSH_REARM_HEAD_READ

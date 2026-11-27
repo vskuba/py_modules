@@ -10,7 +10,8 @@
 «входящих» (`dsh_board_inbox_take`: `ask --wait`, `answer`, `inbox --take`, сам ждун).
 `dsh-board wait` — фоновый ждун: дожидается ответов по всем меткам своей сессии,
 кладёт их в файлы, печатает итоги и выходит — выход и есть будильник. Застава на `Stop`
-(`claude_hook_dsh_wait`) не отпускает ход, пока метки есть, а живого ждуна нет.
+(`claude_hook_dsh_wait`) не отпускает ход, пока хоть одна метка осталась без живого ждуна:
+общий ждёт все метки сессии, покарточный (`wait <карточка>`) — только названные в нём.
 
 ⚠ Раньше метку снимали только `ask --wait` и ждун: ответ, забранный `dsh-board answer`
 (хоть субагентом, разбирающим чужие карточки), оставлял метку, и ждун висел до
@@ -91,13 +92,36 @@ def dsh_wait_key(session: str) -> str:
 
 
 def dsh_wait_waiter_alive(owner: str) -> bool:
-    """Ждёт ли сейчас живой процесс `dsh-board wait` этой сессии."""
-    try:
-        with open(_waiter_path(owner), encoding='utf-8') as handle:
-            os.kill(int(handle.read().strip()), 0)
-        return True
-    except (OSError, ValueError):
-        return False
+    """Жив ли хоть один процесс `dsh-board wait` этой сессии — общий или любого ряда.
+
+    ⚠ Для решения «можно ли отпускать ход» этого мало: ждун `wait <карточка>` будит
+    оркестратора только по своим карточкам — смотри `dsh_wait_waiter_gaps`.
+    """
+    return any(_waiter_alive(path) for path in _waiter_paths(owner))
+
+
+def dsh_wait_waiter_gaps(owner: str, pending: list = None) -> list:
+    """Какие метки сессии `owner` остались без живого ждуна — пробелы ожидания.
+
+    Ждун без ряда (`wait` без карточек) покрывает **все** метки сессии; ждун
+    `wait A B` — только карточки своего ряда: отработав первую (режим `first`), он
+    остальных не будит. Заставе `Stop` и хуку `SessionStart` одних живых пидов мало:
+    партия из трёх меток, где ждёт только одна карточка, молча отпустила бы ход, и
+    два ответа ушли бы в никуда — ровно то, ради чего застава и появилась.
+
+    Returns:
+        Непокрытые метки (порядок `pending`); пусто — ждать нечего или всё под ждуном.
+    """
+    want = list(pending) if pending is not None else dsh_wait_pending(owner)
+    if not want:
+        return []
+    for path, slot in _waiter_slots(owner):
+        if not _waiter_alive(path):
+            continue
+        if not slot:
+            return []                            # общий ждун покрывает все метки сессии
+        want = [key for key in want if not _slot_has(slot, key)]
+    return want
 
 
 def dsh_wait_answered(sessions: list, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
@@ -124,9 +148,28 @@ def dsh_wait_answered(sessions: list, *, base: str = DSH_API_ADDR_DEFAULT) -> li
     return [row for row in rows if not _interrupted(dsh_session_history(row['session'], 2, base=base))]
 
 
-def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, *,
-                 base: str = DSH_API_ADDR_DEFAULT) -> list:
-    """Дождаться ответов на все метки сессии `owner`: в файлы, метки снять.
+def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: list = None,
+                 first: bool = False, *, slot: str = '', base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Дождаться ответов — всех меток сессии или названных карточек: в файлы, метки снять.
+
+    Args:
+        owner: сессия Claude Code, чьи метки разбираются (по неё же и будильник).
+        out_dir: каталог для полных ответов.
+        timeout: потолок всего ожидания, с.
+        sessions: ждать **эти** карточки, а не все метки сессии; карточка без метки тоже
+            годится — ответ ищется по «входящим».
+        first: выйти на первом же забранном ответе — так одна карточка будит оркестратора
+            сама, не дожидаясь самой медленной в партии.
+        slot: разъезд для нескольких ждунов одной сессии (по одному на карточку): у каждого
+            свой файл pid, гасят они только своего двойника.
+
+    ⚠ Без `first` ждун выходит, когда кончились все его карточки: партия из четырёх задач
+    с кругами 12, 20, 40 и 60 мин будила оркестратора один раз — на 60-й минуте, и три
+    готовых ответа ждали своей очереди ещё 8, 40 и 48 мин (замер 24–27.11: 18,6 ч такой
+    выдержки на 107 ответах). Поэтому `dsh-board wait <карточка>` — по процессу на карточку.
+    ⚠ Ответ, уже забранный кем-то другим, в «входящих» не лежит. Безымянный ждун перечитывает
+    метки каждый виток — снятая чужим забором он пустит сразу; названному карточка фиксирована
+    на старте — такую он дождётся разве что до `timeout`.
 
     Returns:
         `[{session, title, out, brief}]` — забранные ответы; пусто — ждать было нечего
@@ -135,46 +178,64 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, *,
     from dsh_.dsh_board import dsh_board_box_clear, dsh_board_brief, dsh_board_inbox_take  # ленивый: цикл импорта
     from dsh_.dsh_session import dsh_session_answer_last
     os.makedirs(out_dir, exist_ok=True)
-    _waiter_replace(owner)
-    with open(_waiter_path(owner), 'w', encoding='utf-8') as handle:
+    _waiter_replace(owner, slot)
+    with open(_waiter_path(owner, slot), 'w', encoding='utf-8') as handle:
         handle.write(str(os.getpid()))
+    named = sessions is not None
+    want = [dsh_wait_key(key) for key in sessions] if named else dsh_wait_pending(owner)
     taken, deadline = [], time.time() + timeout
     try:
-        while dsh_wait_pending(owner) and time.time() < deadline:
-            for row in dsh_wait_answered(dsh_wait_pending(owner), base=base):
+        while want and time.time() < deadline:
+            got = set()
+            for row in dsh_wait_answered(want, base=base):
                 session = row['session']
                 answer = dsh_session_answer_last(session, base=base) or ''
-                path = os.path.join(out_dir, f'{session}.md')
+                path = os.path.join(out_dir, f'{dsh_wait_key(session)}.md')
                 with open(path, 'w', encoding='utf-8', errors='replace') as out:
                     out.write(answer)
                 dsh_board_inbox_take(session, row['turns'])  # снимает и метку
                 dsh_board_box_clear(session, base=base)
                 taken.append({'session': session, 'title': row['title'], 'out': path,
                               'brief': dsh_board_brief(answer)})
-            if dsh_wait_pending(owner):
+                got.add(dsh_wait_key(session))
+                if first:
+                    break
+            if got:
+                want = [key for key in want if key not in got]
+            if first and taken:
+                break
+            if not named:
+                # Метки безымянного ждуна живут в файле: их мог снять чужой забор ответа
+                # (`answer`, `inbox --take`) или добавить новую — перечитываем каждый
+                # виток, как было до покарточных ждунов. Снятую метку не перечитав —
+                # висели бы до `timeout` (грабель 2026-11-26), не дождавшись новой —
+                # никогда.
+                want = dsh_wait_pending(owner)
+            if want:
                 time.sleep(DSH_WAIT_POLL)
     finally:
         # Файл чужого ждуна (сменившего этот через `_waiter_replace`) не трогаем.
         try:
-            with open(_waiter_path(owner), encoding='utf-8') as handle:
+            with open(_waiter_path(owner, slot), encoding='utf-8') as handle:
                 mine = handle.read().strip() == str(os.getpid())
             if mine:
-                os.unlink(_waiter_path(owner))
+                os.unlink(_waiter_path(owner, slot))
         except OSError:
             pass
     return taken
 
 
-def _waiter_replace(owner: str) -> None:
-    """Погасить прежнего ждуна этой сессии: будит он только свой процесс Claude Code.
+def _waiter_replace(owner: str, slot: str = '') -> None:
+    """Погасить прежнего ждуна **этого же ряда** этой сессии: будит он только свой процесс.
 
     Новый ждун той же сессии появляется, когда прежний пережил перезапуск харнеса (его
     будильник уже никуда не придёт) или когда ход запустил второй. Без замены они копились
-    часами — по три-пять процессов на сессию. Гасим только процесс `dsh-board wait`:
-    pid мог достаться чужому процессу.
+    часами — по три-пять процессов на сессию. ⚠ Ряд (`slot`) — часть имени: ждуны разных
+    карточек друг друга не гасят, иначе второй `wait <карточка>` снял бы первого.
+    Гасим только процесс `dsh-board wait`: pid мог достаться чужому процессу.
     """
     try:
-        with open(_waiter_path(owner), encoding='utf-8') as handle:
+        with open(_waiter_path(owner, slot), encoding='utf-8') as handle:
             pid = int(handle.read().strip())
         if pid == os.getpid():
             return
@@ -200,8 +261,55 @@ def _home(name: str) -> str:
     return os.path.join(os.path.expanduser(os.environ.get('DSH_HOME') or DSH_API_HOME_DEFAULT), name)
 
 
-def _waiter_path(owner: str) -> str:
-    return _home(f"dsh-board.waiter.{re.sub(r'[^0-9a-zA-Z-]', '', owner)}.pid")
+def _waiter_path(owner: str, slot: str = '') -> str:
+    """Файл pid ждуна. Ряд (`slot`) — часть имени: у сессии их теперь несколько, по одному
+    на карточку (`wait <карточка>`), и в имени они различаются хвостом после имени сессии."""
+    tag = re.sub(r'[^0-9a-zA-Z-]', '', owner)
+    if slot:
+        tag += '.' + re.sub(r'[^0-9a-zA-Z-]', '', slot)
+    return _home(f'dsh-board.waiter.{tag}.pid')
+
+
+def _waiter_paths(owner: str) -> list:
+    """Все файлы ждунов сессии — общего ряда и покарточных."""
+    return [path for path, _slot in _waiter_slots(owner)]
+
+
+def _waiter_slots(owner: str) -> list:
+    """Файлы ждунов сессии как [(файл, ряд)]: ряд `''` — общий ждун, он покрывает всё."""
+    tag = re.sub(r'[^0-9a-zA-Z-]', '', owner)
+    prefix, out = f'dsh-board.waiter.{tag}', []
+    try:
+        with os.scandir(_home('')) as scan:
+            for entry in scan:
+                if not entry.name.endswith('.pid') or not entry.name.startswith(f'{prefix}.'):
+                    continue
+                slot = entry.name[len(prefix) + 1:-len('.pid')]
+                out.append((entry.path, slot))
+    except OSError:
+        return out
+    return sorted(out)
+
+
+def _waiter_alive(path: str) -> bool:
+    """Жив ли процесс из файла pid ждуна."""
+    try:
+        with open(path, encoding='utf-8') as handle:
+            os.kill(int(handle.read().strip()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _slot_has(slot: str, key: str) -> bool:
+    """Карточка в этом ряду: ряд — карточки через `-`, сверяем ключ целиком, в обрамлении `-`.
+
+    ⚠ Ряд склеен теми же дефисами, что внутри ключей (`continuous-<uuid>`), так что
+    совпадение по куску ключа невозможно — нужен весь ключ между дефисами; теоретический
+    ложный случай — ключ целиком, угодивший ровно на шов двух чужих карточек ряда.
+    """
+    clean = re.sub(r'[^0-9a-zA-Z-]', '', key)
+    return clean and f'-{clean}-' in f'-{slot}-'
 
 
 def _read() -> dict:

@@ -5,10 +5,11 @@
 заканчивающий работу без такого процесса, заканчивает её в пустоту — так и было: задача
 ушла без `--wait`, ход закрыт, ответ лежал во «входящих», пока человек не спросил.
 
-Застава смотрит метки `dsh_wait` этой сессии (каждый промпт субагенту их ставит) и живого
-ждуна `dsh-board wait`. Метки есть, ждуна нет — ход не отпускается, модель получает
-готовую команду. Ждун жив или меток нет — ход свободен. Поломка самой заставы ход
-отпускает (`claude_hook_stop_run`): застава держит только то, в чём уверена.
+Застава смотрит метки `dsh_wait` этой сессии (каждый промпт субагенту их ставит) и ждунов
+`dsh-board wait`: общий ждёт все метки, покарточный (`wait <карточка>`) — только свои.
+Останется метка без живого ждуна — ход не отпускается, модель получает готовую команду.
+Все метки под ждунами или меток нет — ход свободен. Поломка самой заставы ход отпускает
+(`claude_hook_stop_run`): застава держит только то, в чём уверена.
 
     echo '{"session_id":"s"}' | python3 claude_/hook/claude_hook_dsh_wait.py
 """
@@ -18,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from claude_.hook.claude_hook import claude_hook_stop_run  # noqa: E402
-from dsh_.dsh_wait import dsh_wait_pending, dsh_wait_waiter_alive  # noqa: E402
+from dsh_.dsh_wait import dsh_wait_waiter_gaps  # noqa: E402
 
 CLAUDE_HOOK_DSH_WAIT_TEXT = (
     'У этой сессии субагенты DSH ещё работают, и их ответа никто не ждёт: {count} шт. ({names}). '
@@ -35,12 +36,14 @@ def claude_hook_dsh_wait_check(data: dict) -> str:
     # ⚠⚠ Живой `ask`/`fanout` ждуном не считается: отвязанный процесс (`&`, setsid) жив, но
     # его выход оркестратора не будит — будит только фоновая задача харнесса. Так и было:
     # застава отпустила бы ход при трёх отвязанных субагентах. Ждун — только `dsh-board wait`.
-    pending = dsh_wait_pending(owner)
-    if not pending or dsh_wait_waiter_alive(owner):
+    # ⚠ И не любой из его процессов: ждун `wait <карточка>` будит только по своим карточкам,
+    # остальные метки — пробел; держать ход надо по ним (`dsh_wait_waiter_gaps`).
+    gaps = dsh_wait_waiter_gaps(owner)
+    if not gaps:
         return ''
     out = os.path.join(os.environ.get('TMPDIR') or '/tmp', f'dsh-wait-{owner[:8]}')
-    names = ', '.join(key.replace('continuous-', '')[:8] for key in pending[:5])
-    return CLAUDE_HOOK_DSH_WAIT_TEXT.format(count=len(pending), names=names, out=out)
+    names = ', '.join(key.replace('continuous-', '')[:8] for key in gaps[:5])
+    return CLAUDE_HOOK_DSH_WAIT_TEXT.format(count=len(gaps), names=names, out=out)
 
 
 if __name__ == '__main__':
