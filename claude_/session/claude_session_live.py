@@ -39,6 +39,9 @@ CLAUDE_SESSION_LIVE_DIR = '~/.claude/sessions'
 # у калибровки субагентов (`DSH_SAVING_ACCOUNT_DRIFT`) теперь те же 4 ч.
 CLAUDE_SESSION_LIVE_ACCOUNT_DRIFT = 4 * 3600
 
+# Панель снимает «Ready», только если её терминал трогали (клавиши, мышь) за эти секунды.
+CLAUDE_SESSION_LIVE_SEEN_ACTIVE = 20
+
 # Порядок статусов в списке: ждёт ответа, работает, фоновая команда, ждёт сообщения.
 CLAUDE_SESSION_LIVE_ORDER = ('waiting', 'busy', 'shell', 'idle')
 # Колонка субагентов DSH: сколько секунд ждать хост. Таблицу обрывает `timeout 8` статусной
@@ -135,7 +138,12 @@ def claude_session_live_list() -> list:
         label = next((pane['label'] for pane in panes if pane['target'] == row['pane']), '') if row['pane'] else ''
         if row['pane'] and label != custom:
             tmux_pane_label(row['pane'], custom)
-    claude_session_ready_mark(rows, {pane['target'] for pane in panes if pane['shown']})
+    # «На экране» для Ready — только панель, чей терминал трогали недавно: подключённый
+    # клиент ещё не значит, что человек смотрит туда, а не в браузер или Mini App.
+    fresh = time.time() - CLAUDE_SESSION_LIVE_SEEN_ACTIVE
+    touched = {client['session'] for client in clients if client['activity'] >= fresh}
+    claude_session_ready_mark(rows, {pane['target'] for pane in panes
+                                     if pane['shown'] and pane['session'] in touched})
     rank = {status: index for index, status in enumerate(CLAUDE_SESSION_LIVE_ORDER)}
     rows.sort(key=lambda row: (rank.get(row['status'], len(rank)), -row['updated']))
     return rows
