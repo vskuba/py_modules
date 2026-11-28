@@ -300,7 +300,7 @@ def dsh_board_motors_set(provider: str, model: str, count: int, *,
 
 def dsh_board_sessions(include_idle: bool = False, *,
                        base: str = DSH_API_ADDR_DEFAULT) -> list:
-    """Карточки хоста для человека: без пустых и без архивных.
+    """Карточки хоста для человека: без пустых и без архивных; пустая с задачей в очереди — показывается.
 
     Args:
         include_idle: и карточки без живого агента (одна история); по умолчанию только
@@ -309,10 +309,18 @@ def dsh_board_sessions(include_idle: bool = False, *,
     Returns:
         `[{session, title, cwd, running, updatedAt}]`, свежие сверху.
     """
-    archived = set(dsh_board_state(base=base).get('archived') or [])
+    state = dsh_board_state(base=base)
+    archived = set(state.get('archived') or [])
+    # Карточка с поставленной в очередь задачей, но без единого хода агента, у хоста
+    # `blank` — её нельзя прятать: именно так невидимыми остаются ждущие своего мотора
+    # задачи, и оркестратор заводит дубликат.
+    queued = {goal.get('session') for goal in state.get('goals') or []
+              if goal.get('status') == 'active'}
     rows = []
     for item in dsh_session_list(base=base):
-        if item.get('blank') or item.get('sessionId') in archived:
+        if item.get('sessionId') in archived:
+            continue
+        if item.get('blank') and item.get('sessionId') not in queued:
             continue
         if not include_idle and not item.get('agentAvailable'):
             continue
