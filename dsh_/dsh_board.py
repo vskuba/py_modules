@@ -247,7 +247,8 @@ def dsh_board_eta(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
 
 
 def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
-    """Занятые моторы и сколько их всего: `{capacity, working}` — для «DSH 1/4».
+    """Занятые моторы, очередь и сколько моторов всего: `{capacity, queued, working}` — для
+    «DSH 1/4» и «DSH 4/4 +2» (`queued` — задачи, которым срок подошёл, а мотор занят).
 
     Источник истины — хост: маршрут плагина `continuous-agent.working` отдаёт занятые
     моторы с подписями и ёмкость (моторы включённых моделей) одним лёгким запросом.
@@ -256,16 +257,19 @@ def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     (`DSH_BOARD_TITLES`); тяжёлый `session/list` — только для незнакомых карточек.
 
     Returns:
-        `{capacity, working: [{session, title, kind, goal, motor, model, robot}]}`:
+        `{capacity, queued, working: [{session, title, kind, goal, motor, model, robot}]}`:
         `kind` — `run` (заход промпта доски) или `hand` (работа руками), `title` — подпись.
     """
     keys = ('session', 'title', 'kind', 'goal', 'motor', 'model', 'robot')
     try:
         answer = dsh_api_get('continuous-agent.working', base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
         working = [{key: row.get(key) for key in keys} for row in answer.get('working') or []]
-        if 'capacity' in answer:
-            return {'capacity': answer['capacity'], 'working': working}
-        return {'capacity': _capacity(dsh_board_state(base=base)), 'working': working}
+        if 'capacity' in answer and 'queued' in answer:
+            return {'capacity': answer['capacity'], 'queued': int(answer['queued'] or 0), 'working': working}
+        # Плагин старше счётчика очереди (хост не перезапускали) — очередь и ёмкость по доске.
+        state = dsh_board_state(base=base)
+        return {'capacity': answer.get('capacity') or _capacity(state), 'queued': _queued(state),
+                'working': working}
     except DshApiError as error:
         if 'HTTP 404' not in str(error):
             raise
@@ -277,7 +281,7 @@ def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     working = [{'session': key, 'title': titles.get(key, ''), 'kind': brick.get('kind'),
                 'goal': brick.get('name') or '', 'motor': brick.get('motor'), 'model': brick.get('model'),
                 'robot': bool(brick.get('robot'))} for key, brick in zip(session_keys, bricks)]
-    return {'capacity': _capacity(state), 'working': working}
+    return {'capacity': _capacity(state), 'queued': _queued(state), 'working': working}
 
 
 def dsh_board_motors_set(provider: str, model: str, count: int, *,
@@ -1106,6 +1110,11 @@ def _worktrees_mark(session: str, tree: dict) -> None:
     rows[_key(session)] = {'path': tree.get('path') or '', 'branch': tree.get('branch') or '',
                            'root': tree.get('root') or '', 'at': time.time()}
     _json_write(path, rows)
+
+
+def _queued(state: dict) -> int:
+    # Очередь моторов: кирпичики цепочки `wait` — срок цели подошёл, а машина занята.
+    return sum(1 for brick in state.get('chain') or [] if brick.get('kind') == 'wait')
 
 
 def _capacity(state: dict) -> int:

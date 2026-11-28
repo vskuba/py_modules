@@ -466,3 +466,11 @@ def test_working_line_gains_eta_only_when_asked():
     assert dsh_board_cli._working_text([row]) == 'мотор 2  ревью  — сверяй логи'
     line = dsh_board_cli._working_text([dict(row, running=True, elapsed=1200, typical=0, suggest=1800)])
     assert 'круг идёт 20 мин, готовых кругов ещё не было, --timeout 1800' in line
+
+
+def test_working_line_shows_queue_after_busy_motors():
+    from dsh_.dsh_board_cli import _working_line
+    rows = [{'motor': i, 'session': f's{i}', 'goal': 'g', 'title': ''} for i in (1, 2, 3, 4)]
+    assert _working_line({'working': rows, 'capacity': 4, 'queued': 2}).startswith('DSH 4/4 +2: ')
+    assert _working_line({'working': rows, 'capacity': 4, 'queued': 0}).startswith('DSH 4/4: ')
+    assert _working_line({'working': [], 'capacity': 4}) == 'DSH 0/4'

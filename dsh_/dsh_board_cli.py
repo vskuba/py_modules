@@ -503,9 +503,12 @@ def _working_text(rows: list) -> str:
 
 
 def _working_line(status: dict) -> str:
-    """`DSH 0/4` в простое, `DSH 2/4: ревью dsh_board · Часовая сверка…` в работе."""
+    """`DSH 0/4` в простое, `DSH 2/4: ревью dsh_board · Часовая сверка…` в работе,
+    `DSH 4/4 +2: …` — заняты 4 мотора и 2 задачи ждут в очереди. Без цвета: «+2» красит
+    статусная строка (её разбор ждёт голое `DSH N/M`)."""
     rows = sorted(status['working'], key=lambda row: str(row.get('motor')))
-    head = f"DSH {len(rows)}/{status['capacity']}"
+    queued = status.get('queued') or 0
+    head = f"DSH {len(rows)}/{status['capacity']}{f' +{queued}' if queued else ''}"
     if status.get('saving'):
         head += f" {status['saving']}"
     if not rows:
