@@ -6,9 +6,10 @@ PDF-отчёт из папки с артефактами: печать, прев
 печати: картинка выше высоты тела страницы (в A4 landscape тело ~132 mm, а
 `img {max-height:172mm}` из портретного шаблона — фигура не влезает, остаток
 секции уезжает на пустую страницу) и пустая страница после неё. Здесь оба
-грабля названы прямо: при печати max-height фигур дописывается поверх
-авторского CSS, готовый PDF проверяется — чернила на странице (`pdf_render` +
-доля тёмных пикселей) и прямоугольники картинок (`pdf_xobject_get`).
+грабля названы прямо: при печати потолок фигур дописывается поверх авторского
+CSS — как верхняя граница (`min`), а не как приказ, — готовый PDF проверяется —
+чернила на странице (`pdf_render` + доля тёмных пикселей) и прямоугольники
+картинок (`pdf_xobject_get`).
 
 Источники (в `src` — каталоге или файле): `report.html` (авторский HTML
 сохраняется как есть, к нему только дописывается исполнительский CSS),
@@ -18,10 +19,21 @@ PDF-отчёт из папки с артефактами: печать, прев
 не пройдены — CLI уходит с ненулевым кодом. Секреты — та же страховка, что у
 карточки: `--forbid` гоняет `data_.data_mask.data_mask_sweep` по HTML и тексту PDF.
 
+Страницу-обложку (метатаблица без текста) проверки посчитают пустой — обеим
+подкомандам можно сказать, какие страницы на пустоту не смотреть:
+`--skip-page N` (повторяемо) и `--cover` (= не смотреть страницу 1). Потолок
+высоты фигуры — верхняя граница, а не приказ: авторский `max-height` меньше
+потолка остаётся в силе, больше — зажимается до `min(потолок, значение)`.
+Когда страница падает как пустая, в проблеме названа причина в терминах
+вёрстки: какой полосы занимает хвост, сколько свободно снизу и сколько
+просит следующая фигура.
+
 CLI:
 
     python -m pdf_.pdf_report build report-dir --out report.pdf --landscape
-    python -m pdf_.pdf_report check report.pdf [--figure-mm 132] [--min-ink 8]
+    python -m pdf_.pdf_report build report-dir --out report.pdf --cover
+    python -m pdf_.pdf_report build report-dir --out report.pdf --skip-page 1 --skip-page 5
+    python -m pdf_.pdf_report check report.pdf [--figure-max-height 132] [--min-ink 8]
     python -m pdf_.pdf_report build report-dir --out report.pdf --forbid secrets.txt
 """
 import argparse
@@ -107,7 +119,12 @@ def pdf_report_check(pdf_path: str, figure_mm: float | None = None,
     нарисованного Image-XObject — выше потолка фигуры значит картинка не
     влезает в тело и толкает за собой остаток секции. `figure_mm` по умолчанию
     берётся по ориентации первой страницы.
+
+    Пустая страница получает причину в терминах вёрстки: полоса хвоста,
+    сколько свободно снизу самой страницы и какой высоты ближайшая фигура, —
+    `free_mm` и `figure_mm` лежат в проблеме отдельными полями.
     """
+    import numpy as np
     from PIL import Image
 
     from pdf_.pdf_ import pdf_info, pdf_render
@@ -120,36 +137,78 @@ def pdf_report_check(pdf_path: str, figure_mm: float | None = None,
     issues = []
     with tempfile.TemporaryDirectory(prefix='pdfreport-') as tmp:
         rasters = pdf_render(pdf_path, tmp, dpi=PDF_REPORT_INK_DPI)
+        px_mm = 25.4 / PDF_REPORT_INK_DPI
+        rows = []  # по растеру на страницу: (номера тёмных строк, высота строки в mm)
+        xos = []
         for number, raster in enumerate(rasters, start=1):
-            page = info['mediabox'][min(number - 1, len(info['mediabox']) - 1)]
             try:
-                xobjects = pdf_xobject_get(pdf_path, page=number - 1)
+                got = pdf_xobject_get(pdf_path, page=number - 1)
             except Exception as exc:  # разбор потока чужого PDF может не удаться
-                xobjects = None
+                got = None
                 issues.append({'page': number, 'kind': 'unreadable',
                                'detail': f'потоки страницы не разобраны: {exc}'})
+            xos.append(got or ())
+            img = Image.open(raster).convert('L')
+            rows.append(np.flatnonzero((np.asarray(img) < PDF_REPORT_INK_CUTOFF).any(axis=1)))
+            del img
+        for number, raster in enumerate(rasters, start=1):
+            page = info['mediabox'][min(number - 1, len(info['mediabox']) - 1)]
             if number in skip_pages:
                 continue
             img = Image.open(raster).convert('L')
             hist = img.histogram()
             ink = 100.0 * sum(hist[:PDF_REPORT_INK_CUTOFF]) / max(1, img.width * img.height)
             cover = 0.0
-            for xo in xobjects or ():  # clipping не вернём — считаем площадь прямоугольника
+            for xo in xos[number - 1]:  # clipping не вернём — считаем площадь прямоугольника
                 x, y, w, h = xo['rect_mm']
                 clipped = (max(0.0, min(x + w, page[2] * _MM) - max(x, 0.0))
                            * max(0.0, min(y + h, page[3] * _MM) - max(y, 0.0)))
                 cover += 100.0 * clipped / max(1.0, (page[2] - page[0]) * (page[3] - page[1]) * _MM ** 2)
             if ink < min_ink and cover < PDF_REPORT_COVER_MIN:
-                issues.append({'page': number, 'kind': 'empty-page',
-                               'ink_pct': round(ink, 1), 'cover_pct': round(cover, 1),
-                               'detail': f'чернил {ink:.1f}% < {min_ink}%, картинок {cover:.0f}%'})
-            for xo in xobjects or ():
+                page_h = img.height * px_mm
+                free_mm = page_h - (rows[number - 1][-1] + 1) * px_mm if len(rows[number - 1]) else page_h
+                nxt = _next_figure(xos, number)
+                issue = {'page': number, 'kind': 'empty-page',
+                         'ink_pct': round(ink, 1), 'cover_pct': round(cover, 1),
+                         'free_mm': round(free_mm, 1)}
+                if nxt:
+                    issue['figure_mm'] = round(nxt[1], 1)
+                issue['detail'] = _empty_reason(number, ink, min_ink, rows[number - 1],
+                                                free_mm, nxt, px_mm)
+                issues.append(issue)
+            for xo in xos[number - 1]:
                 height_mm = xo['rect_mm'][3]
                 if height_mm > cap + 0.5:
                     issues.append({'page': number, 'kind': 'tall-figure', 'name': xo['name'],
                                    'height_mm': round(height_mm, 1),
                                    'detail': f'фигура {height_mm:.0f} mm выше тела {cap} mm'})
     return issues
+
+
+def _next_figure(xos: list, number: int):
+    """Ближайшая фигура от страницы `number` (с 1) и дальше: (страница, высота mm) или None."""
+    for offset in (0, 1):  # на этой странице или следующей: дальше гадать нечем
+        idx = number - 1 + offset
+        if idx < len(xos) and xos[idx]:
+            xo = max(xos[idx], key=lambda one: one['rect_mm'][3])
+            return idx + 1, xo['rect_mm'][3]
+    return None
+
+
+def _empty_reason(number: int, ink: float, min_ink: float, dark_rows, free_mm: float,
+                  nxt, px_mm: float) -> str:
+    """Причина пустоты страницы в терминах вёрстки: хвост, свободное место, следующая фигура."""
+    if not len(dark_rows):
+        where = 'ни одной строки'
+    else:
+        top, bottom = dark_rows[0] * px_mm, (dark_rows[-1] + 1) * px_mm
+        where = f'хвост {bottom - top:.0f} mm в полосе {top:.0f}–{bottom:.0f} mm от верха'
+    if nxt:
+        return (f'чернил {ink:.1f}% < {min_ink}%, {where}; снизу свободно {free_mm:.0f} mm, '
+                f'следующая фигура {nxt[1]:.0f} mm на стр. {nxt[0]} — '
+                + ('не влезла, правь её размер или поля' if nxt[1] > free_mm
+                   else 'влезла бы — правь переносы/page-break'))
+    return f'чернил {ink:.1f}% < {min_ink}%, {where}; фигур впереди нет — правь текст секции'
 
 
 # ── приватное ──
@@ -194,14 +253,41 @@ def _write_sibling(root: str, source_name: str, html_text: str) -> str:
 
 def _inject_css(body: str, cap: float) -> str:
     """Дописать исполнительский CSS ПОСЛЕ авторского: равная специфичность,
-    последние правила выигрывают; `!important` — против inline-стилей."""
-    style = ('<style>figure img,figure svg,img{max-width:100%!important;'
-             f'max-height:{cap}mm!important}}figure{{page-break-inside:avoid;'
-             'break-inside:avoid}}</style>')
+    последние правила выигрывают; `!important` — против inline-стилей.
+
+    Потолок — верхняя граница, а не приказ: inline `max-height` сворачивается
+    в `min(потолок, значение)` и такие теги выводятся из-под `!important`-правила
+    через `:not()` — меньшее значение автора остаётся в силе, большее всё равно
+    зажимается. `!important` у inline-декларации (автор настаивает) не трогаем."""
+    body = _clamp_inline_max(body, cap)
+    style = ('<style>figure img,figure svg,img{max-width:100%!important}'
+             'figure img:not([style*="max-height"]),figure svg:not([style*="max-height"]),'
+             f'img:not([style*="max-height"]){{max-height:{cap:g}mm!important}}'
+             'figure{page-break-inside:avoid;break-inside:avoid}</style>')
     head = re.search(r'</head\s*>', body, flags=re.I)
     if head:
         return body[:head.start()] + style + body[head.start():]
     return style + body
+
+
+def _clamp_inline_max(body: str, cap: float) -> str:
+    """Inline `max-height` у img/svg свернуть в `min(потолок, значение)`."""
+    def fix_style(match):
+        quote, value = match.group(1), match.group(2)
+
+        def fix_decl(decl):
+            if '!important' in decl.group(0) or 'min(' in decl.group(1).lower():
+                return decl.group(0)
+            return f'max-height:min({cap:g}mm,{decl.group(1).strip()})'
+
+        return f'style={quote}{re.sub(r"max-height\s*:\s*([^;\"]+)", fix_decl, value,
+                                      flags=re.I)}{quote}'
+
+    def fix_tag(match):
+        return re.sub(r'''style\s*=\s*(["'])(.*?)\1''', fix_style, match.group(0),
+                      flags=re.I | re.S)
+
+    return re.sub(r'<(?:img|svg)\b[^>]*>', fix_tag, body, flags=re.I)
 
 
 def _shell(landscape: bool, cap: float, body: str) -> str:
@@ -321,24 +407,29 @@ def _cli(argv=None):
     ap.add_argument('src', help='каталог с report.html/report.md/sections.json (build) или PDF (check)')
     ap.add_argument('--out', default='report.pdf', help='build: путь PDF')
     ap.add_argument('--landscape', action='store_true', help='build: альбомная A4')
-    ap.add_argument('--figure-mm', type=float, default=None, metavar='MM',
-                    help='потолок высоты фигуры; по умолчанию 132 (landscape) / 160')
+    ap.add_argument('--figure-mm', '--figure-max-height', dest='figure_mm', type=float,
+                    default=None, metavar='MM',
+                    help='потолок высоты фигуры (он же --figure-max-height); '
+                         'по умолчанию 132 (landscape) / 160')
     ap.add_argument('--min-ink', type=float, default=PDF_REPORT_INK_MIN_PCT, metavar='PCT',
                     help='доля чернил, ниже которой страница считается пустой')
     ap.add_argument('--skip-page', action='append', default=[], type=int,
                     help='страница (с 1), не проверять на пустоту; можно несколько')
+    ap.add_argument('--cover', action='store_true',
+                    help='страницу 1 (обложку) не проверять на пустоту; то же, что --skip-page 1')
     ap.add_argument('--forbid', default='', metavar='FILE',
                     help='список значений (JSON-массив или построчно), которым нельзя попасть в отчёт')
     ns = ap.parse_args(argv)
     forbid = ns.forbid
+    skip_pages = list(ns.skip_page) + ([1] if ns.cover else [])
     if ns.cmd == 'build':
         got = pdf_report_build(ns.src, ns.out, landscape=ns.landscape, figure_mm=ns.figure_mm,
-                               min_ink=ns.min_ink, skip_pages=ns.skip_page, forbid=forbid)
+                               min_ink=ns.min_ink, skip_pages=skip_pages, forbid=forbid)
         print(f"PDF: {got['pdf']}\nпревью: {os.path.dirname(got['pages'][0]) if got['pages'] else '?'}"
               f"\nлист: {got['sheet']}")
     else:
         issues = pdf_report_check(ns.src, figure_mm=ns.figure_mm, min_ink=ns.min_ink,
-                                  skip_pages=ns.skip_page)
+                                  skip_pages=skip_pages)
         hits = []
         if forbid:
             values, err = data_mask_values(forbid)

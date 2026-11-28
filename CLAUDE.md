@@ -52,7 +52,7 @@ namespace-папок, которые проекты импортируют на�
 | `adb_/adb_rec.py` | `docs/mobile_rec.md` — запись экрана, разбор на кадры, обзорный лист, сверка двух записей |
 | любой `adb_` с координатами и пикселями | `docs/mobile_hardware.md` — px/dp, даунсемплинг, почему координата уехала |
 | `pdf_/` | `docs/pdf_tooling.md` — структурный осмотр, сверка, печать |
-| `pdf_/pdf_report.py` | `docs/pdf_report.md` — PDF-отчёт из папки с артефактами: печать источника, превью и contact sheet, проверки пустых страниц и фигур выше тела; ⚠ enforcement-CSS после авторского |
+| `pdf_/pdf_report.py` | `docs/pdf_report.md` — PDF-отчёт из папки с артефактами: печать источника, превью и contact sheet, проверки пустых страниц (причина — хвост, свободное место, фигура) и фигур выше тела; `--cover`/`--skip-page`, `--figure-max-height`; ⚠ потолок enforcement-CSS — `min()`: меньшее авторское остаётся |
 | `web_/web_shot.py` | `docs/web_shot.md` — раздача каталога, бюджет времени, inject-js, кроп кадра; там же про `web_probe.py` — JSON-зонд страницы через dump-dom (rect'ы, состояние, посев localStorage) и про страницу панели без бойлерплейта (`web_drive_page`: вход из `.env`, модуль с любыми кавычками, `wait` с базой) |
 | `web_/web_peek.py` | `docs/web_peek.md` — сырой ответ живой страницы без браузера: статус, тело, маркеры |
 | `web_/web_signup.py`, `web_/web_wall.py`, `web_/web_ledger.py`, `mail_/mail_wait.py` | `docs/web_signup_flow.md` — чужая площадка: стена-стоп, регистрация, письмо-подтверждение, один аккаунт на площадку |
@@ -92,9 +92,10 @@ namespace-папок, которые проекты импортируют на�
 | `google_drive_/` | `docs/google_drive.md` — чужая папка Диска сервисным аккаунтом: токен подписью, обход вглубь, превью вместо оригинала; ⚠ «не расшарили» приходит пустым списком, а не отказом |
 | `comfyui_/comfyui_gen.py` | `docs/comfyui_gen.md` — workflow в API-форме с маркерами, память чистится перед отправкой, гейт `_mem`, забор артефакта по prefix, рестарт при смене лоры |
 | `comfyui_/comfyui_collection.py` | `docs/comfyui_gen.md`, §5 — приёмка коллекции: манифест журнал, вердикт о закрытых/проваленных сценах — там |
+| `html_/html_translate.py` | `docs/html_translate.md` — перевод HTML-отчёта локальной моделью: рез по `<h2>`, сверка тегов и `<img>` после каждого куска; ⚠⚠ `<code>`, JSON, URL, uuid и PASS/FAIL переводу не подлежат |
 | `http_/http_mock.py` | `docs/testing_rules.md`, §5.1 — сторож «живого HTTP в тестах не бывает»: на транспорте httpx и на весь прогон, а не на сокете и не на тест |
 | `http_/` | `docs/http_heartbeat.md` — чужая сессия без браузера; ⚠ там же граница с `http_pool.py`: один долгий клиент против общего транспорта под разовые |
-| `http_/http_card.py` | `docs/http_card.md` — карточка «запрос → ответ» картинкой: маска секретов по имени ключа (заголовки, тела, query URL), метки по JSON-пути; ⚠⚠ метки по пути, не по DOM-порядку |
+| `http_/http_card.py` | `docs/http_card.md` — карточка «запрос → ответ» картинкой: маска секретов по имени ключа (заголовки, тела, query URL), метки по JSON-пути; ⚠⚠ метки по пути, не по DOM-порядку; плашка метки — справа на высоте строки (`image_arrow`) |
 | `data_/data_mask.py` | `docs/data_mask.md` — маска секретов из дампа + sweep по значениям; ⚠ маска по имени ключа слепа к секрету под другим именем или в URL |
 | `socketio_/` | `docs/socketio.md` — чат socket.io 2 без браузера; ⚠ пинг шлёт клиент, третье поколение не подходит |
 | `mysql_/` | `docs/database_rules.md`; дамп и выгрузка — ещё `docs/backup_rules.md`; журнал запросов и маскировка секретов — `docs/observability_rules.md`, §10 |
@@ -281,6 +282,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `http_.http_watch` | `URL [--field путь.в.json --header к=в --format value\|json --expect Z]` → значение поля сейчас + проба сторожу; индекс списка числом (`items.0.state`); отказ — не трейсбек |
 | `http_.http_rest` | `call URL [--method --body --auth $КЛЮЧ]` / `schema URL` → вызов с угаданным заголовком, схема тела из ошибки валидации |
 | `http_.http_card` | `--spec card.json --out card.png [--width 1548] [--forbid файл]` → карточка «запрос → ответ» с метками по JSON-пути; метка мимо — код 2, секрет из `--forbid` — PNG не пишется |
+| `html_.html_translate` | `report.html [--out … --lang ru --glossary файл --keep Имя]` → HTML-отчёт переведённым, рез по `<h2>`; разметка куска не сошлась — повтор, снова — падение (код 1) |
 | `crypto_.crypto_pow` | `SEED --bits N [--check NONCE]` → nonce с N ведущими нулями sha256(seed+nonce); сверка готового nonce |
 | `crypto_.crypto_ed25519` | `pair [--seed-text]` / `sign КЛЮЧ «челлендж»` / `verify PUB «челлендж» SIG` `[--encoding hex\|base64url\|base58]` |
 | `evm_.evm_typed` | `domain имя версия chain контракт` / `typehash «тип»` / `digest «тип» --fields '{}' --domain 0x…` → EIP-712 руками |
@@ -328,7 +330,7 @@ CLI есть у модулей, которыми пользуются «рука
 | `pdf_.pdf_` | `info`, `text`, `render`, `diff`, `diff-multi`, `whiteout`, `print`, `extract` |
 | `pdf_.pdf_spans` | `get <файл> [--page N]` |
 | `pdf_.pdf_xobject` | `list <файл> [--page N]` |
-| `pdf_.pdf_report` | `build <каталог> [--landscape --out report.pdf --forbid файл]` / `check <файл> [--min-ink 8 --skip-page N]` → PDF + превью + contact sheet + вердикт |
+| `pdf_.pdf_report` | `build <каталог> [--landscape --out report.pdf --forbid файл --cover --skip-page N]` / `check <файл> [--min-ink 8 --skip-page N --cover --figure-max-height MM]` → PDF + превью + contact sheet + вердикт; пустая страница — с причиной вёрсткой |
 | `font_.font_` | `info`, `coverage`, `compare`, `render`, `ink`, `fit`, `textdiff`, `baseline-top` |
 | `image_.image_` | `measure`, `match`, `audit`, `seam`, `diff`, `rect-seams`, `literals`, `stroke`, `expose`, `contract`, `frac` `[--json]` |
 | `image_.image_scan` | `runs`, `bbox [--tone --tol --rect --alpha-thresh]`, `rows`, `glyph`, `windows`, `diff` |
