@@ -25,7 +25,7 @@ import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_auto, \
-    dsh_board_revive_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
+    dsh_board_revive_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, DshBoardPending, \
     dsh_board_ask, dsh_board_archive, dsh_board_brief, dsh_board_cancel, dsh_board_inbox, \
     dsh_board_inbox_count, dsh_board_inbox_take, \
     dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
@@ -55,6 +55,10 @@ def dsh_board_cli_main(argv: list = None, prog: str = 'dsh-board') -> int:
         return 2
     try:
         return _run(args)
+    except DshBoardPending as pending:
+        # Срок нашего ожидания вышел, субагент работает: не ошибка (код 0, не stderr).
+        print(f'{prog}: ⏳ {pending}')
+        return 0
     except (DshBoardError, DshApiError, ValueError, OSError) as error:
         print(f'{prog}: {error}', file=sys.stderr)
         return 1
@@ -586,7 +590,10 @@ def _fanout_text(rows: list) -> str:
     blocks = []
     for index, row in enumerate(rows, 1):
         head = f"#{index} {row['session'] or '—'}"
-        if row['error']:
+        if row.get('pending'):
+            blocks.append(f"{head}  ⏳ ещё работает — не ошибка; ответ придёт сам "
+                          f"(`dsh-board wait` / `inbox` / `collect <каталог>`)")
+        elif row['error']:
             blocks.append(f"{head}  ✗ {row['error']}")
         elif 'out' in row:
             blocks.append(f"{head}\n{row['brief']}\n(полный ответ: {row['out']})")

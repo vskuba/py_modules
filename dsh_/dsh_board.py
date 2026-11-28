@@ -142,7 +142,17 @@ DSH_BOARD_TITLES_TTL = 600
 DSH_BOARD_HTTP_TIMEOUT = 60
 
 class DshBoardError(RuntimeError):
-    """Отказ плагина доски или круг не кончился вовремя."""
+    """Отказ плагина доски."""
+
+
+class DshBoardPending(DshBoardError):
+    """Круг ещё идёт: ждать перестали, а не он сорвался. Это НЕ ошибка.
+
+    Субагент может работать часами, `timeout` — только предел нашего ожидания. Цель на
+    доске и круг живы, ответ придёт сам: `dsh-board wait` / `inbox` / `collect`. Наследует
+    `DshBoardError`, чтобы старые `except DshBoardError` не промахнулись, но CLI и
+    `dsh_board_fanout` отличают его и ошибкой не называют.
+    """
 
 
 def dsh_board_state(session: str = '', *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
@@ -258,19 +268,23 @@ def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     (`DSH_BOARD_TITLES`); тяжёлый `session/list` — только для незнакомых карточек.
 
     Returns:
-        `{capacity, queued, working: [{session, title, kind, goal, motor, model, robot}]}`:
+        `{capacity, queued, waiting: [{session, goal}], working: [{session, title, kind, goal,
+        motor, model, robot}]}` — `waiting` — очередь (чьи задачи), `queued` — её длина:
         `kind` — `run` (заход промпта доски) или `hand` (работа руками), `title` — подпись.
     """
     keys = ('session', 'title', 'kind', 'goal', 'motor', 'model', 'robot')
     try:
         answer = dsh_api_get('continuous-agent.working', base=base, timeout=DSH_BOARD_HTTP_TIMEOUT) or {}
         working = [{key: row.get(key) for key in keys} for row in answer.get('working') or []]
-        if 'capacity' in answer and 'queued' in answer:
-            return {'capacity': answer['capacity'], 'queued': int(answer['queued'] or 0), 'working': working}
-        # Плагин старше счётчика очереди (хост не перезапускали) — очередь и ёмкость по доске.
+        if 'capacity' in answer and 'waiting' in answer:
+            waiting = [{'session': row.get('session'), 'goal': row.get('goal')} for row in answer['waiting']]
+            return {'capacity': answer['capacity'], 'queued': len(waiting), 'waiting': waiting,
+                    'working': working}
+        # Плагин старше списка очереди (хост не перезапускали) — очередь и ёмкость по доске.
         state = dsh_board_state(base=base)
-        return {'capacity': answer.get('capacity') or _capacity(state), 'queued': _queued(state),
-                'working': working}
+        waiting = _queue_of(state)
+        return {'capacity': answer.get('capacity') or _capacity(state), 'queued': len(waiting),
+                'waiting': waiting, 'working': working}
     except DshApiError as error:
         if 'HTTP 404' not in str(error):
             raise
@@ -282,7 +296,8 @@ def dsh_board_motors_busy(*, base: str = DSH_API_ADDR_DEFAULT) -> dict:
     working = [{'session': key, 'title': titles.get(key, ''), 'kind': brick.get('kind'),
                 'goal': brick.get('name') or '', 'motor': brick.get('motor'), 'model': brick.get('model'),
                 'robot': bool(brick.get('robot'))} for key, brick in zip(session_keys, bricks)]
-    return {'capacity': _capacity(state), 'queued': _queued(state), 'working': working}
+    waiting = _queue_of(state)
+    return {'capacity': _capacity(state), 'queued': len(waiting), 'waiting': waiting, 'working': working}
 
 
 def dsh_board_motors_set(provider: str, model: str, count: int, *,
@@ -418,7 +433,7 @@ def dsh_board_ask(session: str, text: str, wait: bool = False,
         Текст ответа при `wait`, иначе пустая строка.
 
     Raises:
-        DshBoardError: круг не кончился за `timeout`.
+        DshBoardPending: круг не кончился за `timeout` — он жив, это не ошибка.
 
     ⚠ Два одинаковых текста в одну карточку неразличимы: ни боксом, ни журналом.
     """
@@ -918,7 +933,8 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
 
     Returns:
         `[{session, answer, error}]` — у удавшейся `error` пустой; одна сорвавшаяся
-        задача остальных не роняет.
+        задача остальных не роняет. Круг, не кончившийся за `timeout`, — не сбой:
+        `{error: '', pending: True, note}`, ответ придёт позже (`wait`, `collect`).
     """
     results = [None] * len(tasks)
     plans = []
@@ -936,6 +952,12 @@ def dsh_board_fanout(tasks: list, timeout: float = DSH_BOARD_WAIT_TIMEOUT, on_st
                                  time.time() + timeout, base=base)
             results[index] = {'session': session, 'answer': answer, 'error': '',
                               **({'worktree': tree['path'], 'branch': tree['branch']} if tree else {})}
+        except DshBoardPending as pending:
+            # Не сбой: круг жив, ответ придёт на карточку. on_done не зовём — журнал раздачи
+            # оставляет задачу открытой, и `collect` дособирает её, когда круг кончится.
+            results[index] = {'session': session, 'answer': '', 'error': '', 'pending': True,
+                              'note': str(pending)}
+            return
         except Exception as error:   # noqa: BLE001 — контракт: у каждой задачи строка результата
             results[index] = {'session': session, 'answer': '', 'error': f'{type(error).__name__}: {error}'}
             tell(on_done, index, results[index])
@@ -1117,7 +1139,8 @@ def _box_answer(session: str, goal_id: str, mark: int, asked: str, deadline: flo
     промптом, и снимать на доске нечего.
 
     Raises:
-        DshBoardError: круг не кончился в срок или обрывался слишком много раз.
+        DshBoardPending: круг ещё идёт, когда вышел срок ожидания (не ошибка).
+        DshBoardError: круг обрывался слишком много раз.
     """
     started = time.time()
     # Пока ждём — карточка помечена: обрыв продолжаем здесь, `revive --auto` её не трогает.
@@ -1125,8 +1148,9 @@ def _box_answer(session: str, goal_id: str, mark: int, asked: str, deadline: flo
         for resumed in range(DSH_BOARD_RESUME_TRIES + 1):
             reply = dsh_session_turn_reply(session, mark, asked, max(0.0, deadline - time.time()), base=base)
             if reply is None:
-                raise DshBoardError(f'круг в {session} не кончился за {int(time.time() - started)} с — '
-                                    f'ответ потом: dsh-board inbox')
+                raise DshBoardPending(f'субагент в {session} ещё работает (ждали {int(time.time() - started)} с) — '
+                                      f'это не ошибка, круги идут часами; ответ придёт сам: '
+                                      f'dsh-board wait / inbox / collect')
             if reply['reason'] != 'interrupted' or resumed == DSH_BOARD_RESUME_TRIES:
                 break
             # Хост перезапустился посреди круга и закрыл его: промежуточная реплика — не
@@ -1221,9 +1245,10 @@ def _worktrees_mark(session: str, tree: dict) -> None:
     _json_write(path, rows)
 
 
-def _queued(state: dict) -> int:
+def _queue_of(state: dict) -> list:
     # Очередь моторов: кирпичики цепочки `wait` — срок цели подошёл, а машина занята.
-    return sum(1 for brick in state.get('chain') or [] if brick.get('kind') == 'wait')
+    return [{'session': brick.get('session'), 'goal': brick.get('name') or ''}
+            for brick in state.get('chain') or [] if brick.get('kind') == 'wait']
 
 
 def _capacity(state: dict) -> int:

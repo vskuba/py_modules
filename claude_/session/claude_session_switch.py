@@ -351,8 +351,14 @@ def _claude_session_switch_agents(agents: list) -> str:
     if not agents:
         return '\x1b[90m–\x1b[0m'
     # Между цифрой мотора и «?» — пробел: вплотную две плашки сливаются в одну.
-    return ' '.join(dsh_motor_badge(agent['motor']) + (' ' + dsh_motor_badge_ask() if agent.get('question') else '')
-                    for agent in sorted(agents, key=lambda agent: str(agent['motor'])))
+    working = [agent for agent in agents if not agent.get('queued')]
+    badges = [dsh_motor_badge(agent['motor']) + (' ' + dsh_motor_badge_ask() if agent.get('question') else '')
+              for agent in sorted(working, key=lambda agent: str(agent['motor']))]
+    # Задачи в очереди моторов — «+N» цветом мотора 4 (215), как «DSH 4/4 +N» в строке выше.
+    queued = len(agents) - len(working)
+    if queued:
+        badges.append(f'\x1b[38;5;215m+{queued}\x1b[0m')
+    return ' '.join(badges)
 
 
 def _claude_session_switch_pct(pct) -> str:

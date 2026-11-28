@@ -233,7 +233,7 @@ def test_ask_via_box_adds_in_card_name_and_drops_after_answer(sandbox, monkeypat
 def test_ask_via_box_keeps_goal_when_answer_not_awaited(sandbox, monkeypatch):
     """Не дождались ответа — цель на доске остаётся: живой круг добивает человек, не мы."""
     events = _box(monkeypatch, sandbox, {})                     # круг не кончится вовсе
-    with pytest.raises(dsh_board.DshBoardError):
+    with pytest.raises(dsh_board.DshBoardPending, match='не ошибка'):
         dsh_board.dsh_board_ask('card-1', 'долгая работа', wait=True, timeout=0.05)
     assert [e for e in events if e[0] == 'tool' and e[2] == 'continuous_add']
     assert not [e for e in events if e[0] == 'tool' and e[2] == 'continuous_drop']
@@ -316,7 +316,8 @@ def test_fanout_error_task_keeps_goal_and_others_answer(sandbox, monkeypatch):
     rows = dsh_board.dsh_board_fanout([{'cwd': '/p/1', 'text': 'первая'},
                                        {'cwd': '/p/2', 'text': 'вторая'}], timeout=5)
     assert rows[0]['answer'] == 'есть' and not rows[0]['error']
-    assert 'DshBoardError' in rows[1]['error'] and rows[1]['session'] == 'card-2'
+    # Круг, не кончившийся в срок, — не сбой: error пуст, задача помечена «ещё идёт».
+    assert rows[1]['error'] == '' and rows[1]['pending'] and rows[1]['session'] == 'card-2'
     drops = [e[3]['goal'] for e in events if e[0] == 'tool' and e[2] == 'continuous_drop']
     assert drops == ['goal-1']
 

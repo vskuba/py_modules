@@ -281,7 +281,8 @@ def _claude_session_live_agents_fetch():
     # Занятые моторы DSH и чья это работа: хозяин карточки — сессия Claude, что её завела.
     # Хост лёг — None (не «субагентов нет»): тогда берётся кэш, таблица из-за него не ломается.
     try:
-        working = dsh_board_motors_busy()['working']
+        busy = dsh_board_motors_busy()
+        working = busy['working']
         asking = dsh_session_asking([item.get('session') or '' for item in working])
     except Exception:
         return None
@@ -294,6 +295,12 @@ def _claude_session_live_agents_fetch():
                 'motor': item.get('motor'),
                 'question': asking.get(item.get('session') or '', ''),
                 'name': item.get('goal') or item.get('title') or item.get('session')})
+    # Очередь моторов — тем же списком с пометкой `queued` (мотора ещё нет): «+N» в колонке.
+    for item in busy.get('waiting') or []:
+        owner = dsh_wait_owner_of(item.get('session') or '') or dsh_saving_owner_of(item.get('session') or '')
+        if owner:
+            agents.setdefault(owner, []).append({'motor': None, 'question': '', 'queued': True,
+                                                 'name': item.get('goal') or item.get('session')})
     return agents
 
 
