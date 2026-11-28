@@ -17,8 +17,10 @@ Cookie привязана к авторитету (`Host:` запроса): од
 import base64
 import hashlib
 import hmac
+import http.client
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +45,10 @@ DSH_API_TIMEOUT = 10.0
 # Код ошибки хоста «служба ещё не поднялась» — первые секунды после перезапуска.
 DSH_API_UNAVAILABLE_CODE = 'gateway/service-unavailable'
 
+# Паузы между переспросами read-only опроса: хост молчит секунды (пишет большой снимок,
+# перезапускается), а ждун или застава не должны умирать от одного сбоя.
+DSH_API_POLL_BACKOFF = (1.0, 2.0, 4.0, 8.0)
+
 
 class DshApiError(RuntimeError):
     """Хост не ответил, ответил веткой ошибки или не пустил (401)."""
@@ -63,7 +69,30 @@ class DshApiUnreachable(DshApiError):
     Отдельным видом, потому что только его есть смысл переспросить: хост бывает занят
     секунды (после заведения карточки, после перезапуска), а отказ метода и 401 от
     повтора не исправятся.
+
+    ⚠ Сюда сворачиваются **все** транспортные сбои, включая `http.client.IncompleteRead`
+    (хост оборвал ответ на нуле, 28.11: `wait` упал им по живому хосту): этот класс и есть
+    граница «можно переспросить», наружу транспортная грязь не выходит.
     """
+
+
+def dsh_api_poll(fetch, *, backoff: tuple = DSH_API_POLL_BACKOFF):
+    """Read-only запрос в условиях молчаливого хоста: переспрос вместо падения.
+
+    `fetch` — нулеварная функция `dsh_api_get`/`dsh_api_call` (снимок доски, список
+    карточек, журнал): переспрашиваются только транспортные сбои (`DshApiUnreachable`),
+    отказ метода и 401 приходят наружу сразу — повтор их не исправит. Между попытками
+    паузы 1, 2, 4, 8 с, каждая заявлена строкой в stderr; когда попыток не осталось,
+    ошибка идёт выше как есть — опросный цикл продолжит по своему обычному интервалу,
+    а ждун (`dsh_wait_run`) и подавно: он сдаётся только по своему `--timeout`.
+    """
+    for pause in backoff:
+        try:
+            return fetch()
+        except DshApiUnreachable as error:
+            print(f'хост не ответил, повтор через {pause:g} с ({error})', file=sys.stderr)
+            time.sleep(pause)
+    return fetch()
 
 
 def dsh_api_call(method: str, args: dict = None, *, base: str = DSH_API_ADDR_DEFAULT,
@@ -230,7 +259,10 @@ def _send_raw(request, timeout: float) -> str:
             raise DshApiError(f'unauthorized (HTTP {error.code}): нечем подписать '
                               f'пропуск — секрет хоста не тот или cookie истекла') from error
         raise DshApiError(f'HTTP {error.code}: {raw[:200]}') from error
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    # HTTPException — это и IncompleteRead (обрыв тела, `response.read()` вне urlopen,
+    # в OSError не числится), и BadStatusLine: хост жив, просто ответ не дошёл — переспросить
+    # можно, ронять опросного клиента нельзя (`wait`, 28.11).
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as error:
         raise DshApiUnreachable(f'хост не ответил: {error}') from error
 
 

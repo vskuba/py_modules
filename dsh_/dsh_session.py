@@ -28,7 +28,7 @@ import time
 import uuid
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, DshApiUnavailable, DshApiUnreachable, \
-    dsh_api_call
+    dsh_api_call, dsh_api_poll
 
 # Сколько записей журнала брать на одну видимую реплику: между промптом и ответом лежат
 # шаги инструментов и служебные вставки хоста, а окно хост режет по сообщениям.
@@ -84,8 +84,9 @@ def dsh_session_list(fresh: bool = False, *, base: str = DSH_API_ADDR_DEFAULT) -
         if again is not None and (again['at'] > (cached or {}).get('at', 0) or
                                   (not fresh and time.time() - again['at'] < DSH_SESSION_LIST_TTL)):
             return again['items']
-        items = (dsh_api_call('session/list', {'_request': {}}, base=base,
-                              timeout=DSH_SESSION_PAGE_TIMEOUT) or {}).get('items', [])
+        items = (dsh_api_poll(lambda: dsh_api_call('session/list', {'_request': {}}, base=base,
+                                                  timeout=DSH_SESSION_PAGE_TIMEOUT))
+                 or {}).get('items', [])
         _cache_write(path, {'at': time.time(), 'items': items})
         return items
 
@@ -205,8 +206,8 @@ def dsh_session_history(session: str, messages: int = DSH_SESSION_SPAN, cursor: 
         return []
     request = {'address': {'kind': 'session', 'sessionId': session},
                'maxMessages': messages, 'throughSeq': cursor, 'beforeSeq': cursor + 1}
-    page = dsh_api_call('session/page', {'request': request}, base=base,
-                        timeout=DSH_SESSION_PAGE_TIMEOUT) or {}
+    page = dsh_api_poll(lambda: dsh_api_call('session/page', {'request': request}, base=base,
+                                             timeout=DSH_SESSION_PAGE_TIMEOUT)) or {}
     return [entry.get('event', entry) for entry in page.get('records') or []
             if isinstance(entry, dict)]
 
@@ -221,7 +222,7 @@ def dsh_session_cursor(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> int
     request = {'address': {'kind': 'session', 'sessionId': session}, 'maxMessages': 1,
                'throughSeq': DSH_SESSION_PROBE_SEQ, 'beforeSeq': DSH_SESSION_PROBE_SEQ + 1}
     try:
-        dsh_api_call('session/page', {'request': request}, base=base)
+        dsh_api_poll(lambda: dsh_api_call('session/page', {'request': request}, base=base))
     except (DshApiUnreachable, DshApiUnavailable):
         raise
     except DshApiError as error:

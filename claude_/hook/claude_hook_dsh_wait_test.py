@@ -94,3 +94,21 @@ def test_gate_frees_a_cancelled_and_archived_card(home, monkeypatch):
                         lambda session='', **kw: {'archived': [card], 'goals': []})
     assert gate.claude_hook_dsh_wait_check({'session_id': OWNER}) == ''
     assert dsh_wait.dsh_wait_pending(OWNER) == []
+
+
+def test_gate_silent_for_cancelled_card(home):
+    """Отменённая карточка заставу не занимает: `cancel` снял метку — ждать нечего, ход свободен."""
+    card = 'continuous-cccc0001'
+    dsh_wait.dsh_wait_expect(card, owner=OWNER)
+    assert '1 шт.' in gate.claude_hook_dsh_wait_check({'session_id': OWNER})   # до отмены бдит
+    dsh_wait.dsh_wait_done(card)                       # как это делает `dsh-board cancel <карточка>`
+    assert gate.claude_hook_dsh_wait_check({'session_id': OWNER}) == ''
+
+
+def test_gate_silent_for_cancelled_card(home):
+    """Отменённая карточка заставу не занимает: `cancel` снял метку — ждать нечего, ход свободен."""
+    card = 'continuous-cccc0001'
+    dsh_wait.dsh_wait_expect(card, owner=OWNER)
+    assert '1 шт.' in gate.claude_hook_dsh_wait_check({'session_id': OWNER})   # до отмены бдит
+    dsh_wait.dsh_wait_done(card)                       # как это делает `dsh-board cancel <карточка>`
+    assert gate.claude_hook_dsh_wait_check({'session_id': OWNER}) == ''

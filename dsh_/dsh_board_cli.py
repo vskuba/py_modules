@@ -26,10 +26,11 @@ import time
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DshApiError
 from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_auto, \
     dsh_board_revive_auto, DSH_BOARD_WAIT_TIMEOUT, DshBoardError, \
-    dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_count, dsh_board_inbox_take, \
+    dsh_board_ask, dsh_board_archive, dsh_board_brief, dsh_board_cancel, dsh_board_inbox, \
+    dsh_board_inbox_count, dsh_board_inbox_take, \
     dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
     dsh_board_gc, dsh_board_eta, dsh_board_stats, dsh_board_verify, \
-    dsh_board_box_drop, dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
+    dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool, \
     dsh_board_worktree_forget, dsh_board_worktree_head, dsh_board_worktree_row, \
@@ -38,8 +39,8 @@ from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh
 from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_done, dsh_wait_key, dsh_wait_run
 from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
-from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_asking, \
-    dsh_session_cancel, dsh_session_dialog, dsh_session_find
+from dsh_.dsh_session import dsh_session_answer_last, dsh_session_asking, \
+    dsh_session_dialog, dsh_session_find
 from dsh_.dsh_motor_badge import dsh_motor_badge, dsh_motor_badge_ask
 from dsh_.dsh_working_log import dsh_working_log_link, dsh_working_log_write
 from dsh_.dsh_worktree import dsh_worktree_diff, dsh_worktree_drop, dsh_worktree_land, dsh_worktree_new
@@ -175,8 +176,8 @@ def _run(args) -> int:
         message = args.message or f"dsh: {(item.get('projections') or {}).get('values', {}).get('title') or args.session}"
         result = dsh_worktree_land(cwd, message)
         # Работа принята: карточка и проект её копии на панели больше не нужны.
-        dsh_session_archive(args.session, base=base)
-        dsh_wait_done(args.session)   # работа в репо: ответа не ждём, метка мертва
+        # Архивируем через отмену — queued в очереди карточки задание не должно пережить land.
+        dsh_board_archive(args.session, base=base)
         dsh_board_workspace_drop(cwd, base=base)   # у новой карточки копия — не проект, не снимется
         dsh_board_worktree_forget(args.session)
         return _print(args, result, lambda v: f"ветка {v['branch']} слита: {v['merged']}; копия и карточка убраны")
@@ -234,19 +235,19 @@ def _run(args) -> int:
         return _print(args, dsh_session_dialog(args.session, args.n, base=base), _history_text)
 
     if command == 'cancel':
-        # Сперва задачу с доски — иначе мотор взял бы её снова; потом круг, если идёт.
-        dropped = dsh_board_box_drop(args.session, base=base)
-        dsh_session_cancel(args.session, base=base)
+        # Отмена полная: прервать идущий круг **и** снять с очереди то, что ждёт после него
+        # (`session/cancel` очередь бережёт) — иначе снятая с глаз карточка потом всё равно пойдёт.
+        result = dsh_board_cancel(args.session, base=base)
         # Круг снят руками — ответа по этой метке уже не ждут: иначе ждун и застава `Stop`
         # держали бы ход по карточке, которую сами же и отменили (28.11, `cff7d2ff`).
         dsh_wait_done(args.session)
-        return _print(args, {'ok': True, 'dropped': dropped},
-                      lambda v: 'отменено' + (f", снято с доски задач: {len(v['dropped'])}" if v['dropped'] else ''))
+        return _print(args, result, _cancel_text)
 
     if command == 'archive':
-        dsh_session_archive(args.session, base=base)
-        dsh_wait_done(args.session)   # в архиве ответа не бывает — метка мертва
-        return _print(args, {'ok': True}, lambda v: 'в архиве')
+        # Отменить раньше архива: архив промпт из очереди карточки не снимает.
+        result = dsh_board_archive(args.session, base=base)
+        return _print(args, {'ok': True, **result},
+                      lambda v: 'в архиве' + (' (снято с очереди)' if v['removed'] or v['stopped'] else ''))
 
     if command == 'board':
         state = dsh_board_state(args.session or '', base=base)
@@ -402,8 +403,8 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     history.add_argument('session')
     history.add_argument('-n', type=int, default=10, help='сколько последних реплик')
 
-    command('cancel', 'прервать идущий круг карточки и снять её задачи с доски').add_argument('session')
-    command('archive', 'убрать карточку в архив').add_argument('session')
+    command('cancel', 'отменить карточку: прервать идущий круг и снять ждущие в очереди').add_argument('session')
+    command('archive', 'убрать карточку в архив (сначала отменив круг и очередь)').add_argument('session')
 
     command('board', 'доска: промпты, статусы, круги, моторы').add_argument(
         '--session', default=None, help='только промпты этой карточки')
@@ -495,6 +496,18 @@ def _history_text(rows: list) -> str:
         return 'сообщений нет'
     return '\n\n'.join(f"{'▶ промпт' if row['role'] == 'user' else '◀ ответ'} · "
                        f"{_clock(row['time'])}\n{row['text']}" for row in rows)
+
+
+def _cancel_text(value: dict) -> str:
+    """Что отмена сделала: прервала идущий круг, сняла ждущие — или отменять было нечего."""
+    parts = []
+    if value.get('dropped'):
+        parts.append(f"снято с доски задач: {len(value['dropped'])}")
+    if value.get('stopped'):
+        parts.append('прерван идущий круг')
+    if value.get('removed'):
+        parts.append(f"снято из очереди: {len(value['removed'])}")
+    return '; '.join(parts) if parts else 'нечего отменять'
 
 
 def _working_text(rows: list) -> str:

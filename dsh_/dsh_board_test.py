@@ -105,7 +105,7 @@ def test_cli_land_finds_copy_by_metadata(sandbox, monkeypatch, capsys):
     landed = []
     monkeypatch.setattr(dsh_board_cli, 'dsh_session_find',
                         lambda session, **kw: {'cwd': str(sandbox.technical)})
-    monkeypatch.setattr(dsh_board_cli, 'dsh_session_archive', lambda session, **kw: None)
+    monkeypatch.setattr(dsh_board_cli, 'dsh_board_archive', lambda session, **kw: {})
     monkeypatch.setattr(dsh_board_cli, 'dsh_worktree_land',
                         lambda path, message: landed.append(path) or {'branch': 'dsh/pravka', 'merged': True})
     dsh_board.dsh_board_session_new(COPY, 'правка', worktree=_tree())
@@ -122,7 +122,7 @@ def test_cli_land_old_card_falls_back_to_cwd(sandbox, monkeypatch, capsys):
     """Старая карточка (метаданных нет) — копия по-прежнему в её cwd, проект снимается."""
     landed = []
     monkeypatch.setattr(dsh_board_cli, 'dsh_session_find', lambda session, **kw: {'cwd': COPY_OLD})
-    monkeypatch.setattr(dsh_board_cli, 'dsh_session_archive', lambda session, **kw: None)
+    monkeypatch.setattr(dsh_board_cli, 'dsh_board_archive', lambda session, **kw: {})
     monkeypatch.setattr(dsh_board_cli, 'dsh_worktree_land',
                         lambda path, message: landed.append(path) or {'branch': 'dsh/staraya', 'merged': True})
     sandbox.state['workspaces'] = [{'id': 'w-old', 'path': COPY_OLD}]
@@ -474,3 +474,115 @@ def test_working_line_shows_queue_after_busy_motors():
     assert _working_line({'working': rows, 'capacity': 4, 'queued': 2}).startswith('DSH 4/4 +2: ')
     assert _working_line({'working': rows, 'capacity': 4, 'queued': 0}).startswith('DSH 4/4: ')
     assert _working_line({'working': [], 'capacity': 4}) == 'DSH 0/4'
+
+
+# ── отмена карточки: круг и очередь ──
+
+def _cancel_host(sandbox, monkeypatch, *, next_step=(), next_turn=(), running=False, cold=False):
+    """Хост с очередью карточки: `session/projections` отдаёт `inbox`, `updateQueue` снимает.
+
+    `cold` — агент не прикреплён, `session/cancel` отвечает `session/not-found` (так бывает
+    у карточки, чей промпт просто лежит в очереди); `running` — список хоста показывает круг.
+    """
+    state = {'next-turn': [dict(m) for m in next_turn], 'next-step': [dict(m) for m in next_step]}
+
+    def call(route, body, **_kw):
+        sandbox.calls.append((route, body))
+        if route == 'session/projections':
+            return {'asOfSeq': 14, 'values': {'inbox': {k: list(v) for k, v in state.items()}}}
+        if route == 'session/updateQueue':
+            gone = body['request']['itemId']
+            for target in state.values():
+                target[:] = [m for m in target if m.get('id') != gone]
+            return {'accepted': True}
+        return {}
+
+    def cancel(session, **_kw):
+        sandbox.calls.append(('session/cancel', {'sessionId': session}))
+        if cold:
+            raise dsh_board.DshApiError('session/not-found: карточка не прикреплена')
+        return {}
+
+    monkeypatch.setattr(dsh_board, 'dsh_api_call', call)
+    monkeypatch.setattr(dsh_board, 'dsh_session_find',
+                        lambda session, **kw: {'sessionId': session, 'running': running})
+    monkeypatch.setattr(dsh_board, 'dsh_session_cancel', cancel)
+    monkeypatch.setattr(dsh_board, 'dsh_board_box_drop', lambda session, **kw: [])
+    monkeypatch.setattr(dsh_board, 'dsh_session_archive',
+                        lambda session, **kw: sandbox.calls.append(('workspace/archiveSession',
+                                                                    {'sessionId': session})) or [])
+    return state
+
+
+def test_cancel_queued_card_removes_parked_prompt(sandbox, monkeypatch):
+    """`session/cancel` очередь бережёт (`keepInbox`) — снятый с глаз промпт всё равно пошёл бы.
+
+    Отмена обязана снять его из `inbox` карточки (`session/updateQueue`, действие `remove`),
+    иначе «отменённая» карточка дождётся свободного мотора и начнёт круг.
+    """
+    state = _cancel_host(sandbox, monkeypatch, next_step=[{'id': 'parked-1'}], cold=True)
+    result = dsh_board.dsh_board_cancel('continuous-card')
+    assert result == {'stopped': False, 'removed': ['parked-1'], 'dropped': []}
+    removals = [c for c in sandbox.calls if c[0] == 'session/updateQueue']
+    assert len(removals) == 1                          # второй заход очереди пуст — дублей нет
+    assert removals[0][1]['request'] == {'sessionId': 'continuous-card', 'itemId': 'parked-1',
+                                         'action': {'kind': 'remove'}}
+    assert state['next-step'] == []
+
+
+def test_cancel_running_card_interrupts_round(sandbox, monkeypatch):
+    """Идущий круг прерван `session/cancel`, а ждущий после него промпт снят с очереди."""
+    _cancel_host(sandbox, monkeypatch, next_turn=[{'id': 'wait-1'}], running=True)
+    result = dsh_board.dsh_board_cancel('continuous-card')
+    assert result == {'stopped': True, 'removed': ['wait-1'], 'dropped': []}
+    assert ('session/cancel', {'sessionId': 'continuous-card'}) in sandbox.calls
+
+
+def test_cancel_without_round_and_queue_is_empty(sandbox, monkeypatch):
+    """Ни круга, ни очереди — отмена молчалива и безопасна: `{'stopped': False, 'removed': [], 'dropped': []}`."""
+    _cancel_host(sandbox, monkeypatch, cold=True)
+    assert dsh_board.dsh_board_cancel('continuous-card') == {'stopped': False, 'removed': [], 'dropped': []}
+
+
+def test_cancel_unknown_card_raises(sandbox, monkeypatch):
+    """Опечатка в id — ошибка хоста, а не «нечего отменять»: молча съеденная опечатка дороже."""
+    def call(route, body, **_kw):
+        sandbox.calls.append((route, body))
+        return None                                    # проекции нет — карточки на хосте нет
+
+    def cancel(session, **_kw):
+        raise dsh_board.DshApiError('session/not-found: карточки нет')
+
+    monkeypatch.setattr(dsh_board, 'dsh_api_call', call)
+    monkeypatch.setattr(dsh_board, 'dsh_session_find', lambda session, **kw: {})
+    monkeypatch.setattr(dsh_board, 'dsh_session_cancel', cancel)
+    with pytest.raises(dsh_board.DshApiError, match='not-found'):
+        dsh_board.dsh_board_cancel('continuous-нет-такой')
+
+
+def test_archive_cancels_queued_before_archiving(sandbox, monkeypatch):
+    """Архив промпт из очереди не снимает — archive сначала отменяет, потом убирает в архив."""
+    _cancel_host(sandbox, monkeypatch, next_step=[{'id': 'parked-1'}], cold=True)
+    sandbox.home.mkdir(exist_ok=True)                 # DSH_HOME в tmp создаётся лениво, как в бою
+    dsh_wait_mark = sandbox.home / 'dsh-board.expected.json'
+    dsh_wait_mark.write_text('{"continuous-card": {"owner": "orch-1", "at": 1}}')
+
+    result = dsh_board.dsh_board_archive('continuous-card')
+
+    assert result['removed'] == ['parked-1']
+    routes = [c[0] for c in sandbox.calls]
+    assert routes.index('session/updateQueue') < routes.index('workspace/archiveSession')
+    assert json.loads(dsh_wait_mark.read_text()) == {}    # метка снята — в архиве ждать нечего
+
+
+def test_cli_cancel_reports_what_it_stopped(sandbox, monkeypatch, capsys):
+    """CLI `cancel` словами говорит, что сделал: круг, очередь — или что отменять было нечего."""
+    monkeypatch.setattr(dsh_board_cli, 'dsh_board_cancel',
+                        lambda session, **kw: {'stopped': True, 'removed': ['a', 'b'], 'dropped': []})
+    assert dsh_board_cli_main(['cancel', 'continuous-card']) == 0
+    assert capsys.readouterr().out.strip() == 'прерван идущий круг; снято из очереди: 2'
+
+    monkeypatch.setattr(dsh_board_cli, 'dsh_board_cancel',
+                        lambda session, **kw: {'stopped': False, 'removed': [], 'dropped': []})
+    assert dsh_board_cli_main(['cancel', 'continuous-card']) == 0
+    assert capsys.readouterr().out.strip() == 'нечего отменять'

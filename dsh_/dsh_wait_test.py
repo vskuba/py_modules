@@ -11,6 +11,7 @@ import time
 import pytest
 
 from dsh_ import dsh_board, dsh_session, dsh_wait
+from dsh_.dsh_api import DshApiUnreachable
 
 
 @pytest.fixture
@@ -320,7 +321,11 @@ def test_cancel_and_archive_drop_the_wait_mark(home, monkeypatch):
     card = 'continuous-gone0001'
     for command in ('cancel', 'archive'):
         dsh_wait.dsh_wait_expect(card, owner='orch-1')
-        monkeypatch.setattr(dsh_board_cli, f'dsh_session_{command}', lambda session, **kw: None)
+        # Сам хост подставной (сети нет); снятие метки — контракт самих `dsh_board_*`
+        # (у cancel это делает и CLI, у archive — он внутри; проверено в `dsh_board_test`).
+        monkeypatch.setattr(dsh_board_cli, f'dsh_board_{command}',
+                            lambda session, **kw: (dsh_wait.dsh_wait_done(session),
+                                                   {'stopped': False, 'removed': []})[1])
         assert dsh_board_cli.dsh_board_cli_main([command, card]) == 0
         assert dsh_wait.dsh_wait_pending('orch-1') == []
 
@@ -380,3 +385,83 @@ def test_answer_of_unregistered_card_is_found_in_journal(home, monkeypatch):
            history=lambda session, span=2, **kw: _end(t0))
     dsh_board.dsh_board_inbox_take(card, 1)                        # ответ уже забран другим
     assert dsh_wait.dsh_wait_answered([card], marked_at={card: t0 - 100}) == []
+
+
+def test_named_waiter_exits_when_card_was_cancelled(home, monkeypatch):
+    """Отменённая карточка не вешает названного ждуна: снятая метка — сигнал, а не потеря.
+
+    Ждун `wait <карточка>` держит список фиксированным; без учёта снятия метки отменённая
+    (или забранная чужим забором) карточка висиела бы до `timeout` — ход оркестратора
+    заперт карточкой, ответа от которой уже никто не ждёт.
+    """
+    card = 'continuous-cancel00001'
+    dsh_wait.dsh_wait_expect(card, owner='orch-cancel')
+    fired = []
+
+    def answered(sessions, **_kw):
+        if not fired:                        # имитируем параллельный `dsh-board cancel <card>`:
+            fired.append(1)                  # круг прерван, очередь снята, метка убрана
+            dsh_wait.dsh_wait_done(card)
+        return []
+
+    monkeypatch.setattr(dsh_wait, 'dsh_wait_answered', answered)
+    monkeypatch.setattr(dsh_wait, 'dsh_wait_unreachable', lambda *a, **kw: [])
+    monkeypatch.setattr(dsh_wait, 'DSH_WAIT_POLL', 0.05)
+
+    started = time.time()
+    taken = dsh_wait.dsh_wait_run('orch-cancel', str(home / 'out'), timeout=60, sessions=[card])
+
+    assert taken == [] and fired and time.time() - started < 5   # не дождался бы и до timeout
+
+
+def test_waiter_survives_flaky_host(home, monkeypatch):
+    """Хост рвёт ответ посреди опроса — ждун пропускает виток и ждёт дальше, а не умирает.
+
+    28.11: `IncompleteRead(0 bytes read)` по живому хосту (транспорт сворачивает его в
+    `DshApiUnreachable`) вешал `wait` трейсбеком с кодом 1 — карточка оставалась неотвеченной.
+    """
+    card = 'continuous-flak00001'
+    dsh_wait.dsh_wait_expect(card, owner='orch-flaky')
+    monkeypatch.setattr(dsh_wait, 'DSH_WAIT_POLL', 0.05)
+    monkeypatch.setattr(dsh_board, 'dsh_board_inbox',
+                        lambda **kw: [{'session': card, 'title': card, 'turns': 1, 'brief': ''}])
+    monkeypatch.setattr(dsh_wait, 'dsh_wait_unreachable', lambda *a, **kw: [])
+    left = {'fails': 2}
+
+    def history(session, span=2, **kw):
+        if left['fails']:                          # два витка хост рвёт ответ, третий — отвечает
+            left['fails'] -= 1
+            raise DshApiUnreachable('хост не ответил: IncompleteRead(0 bytes read)')
+        return _end(time.time())
+    monkeypatch.setattr(dsh_session, 'dsh_session_history', history)
+    _took_fast(monkeypatch)
+
+    started = time.time()
+    taken = dsh_wait.dsh_wait_run('orch-flaky', str(home / 'out'), timeout=60)
+
+    assert [row['session'] for row in taken] == [card] and time.time() - started < 10
+
+
+def test_waiter_retries_a_failed_take(home, monkeypatch):
+    """Ответ не удалось забрать из-за сбоя — не потеря: забор повторится на следующем витке."""
+    card = 'continuous-flak00002'
+    dsh_wait.dsh_wait_expect(card, owner='orch-flaky2')
+    monkeypatch.setattr(dsh_wait, 'DSH_WAIT_POLL', 0.05)
+    monkeypatch.setattr(dsh_board, 'dsh_board_inbox',
+                        lambda **kw: [{'session': card, 'title': card, 'turns': 1, 'brief': ''}])
+    monkeypatch.setattr(dsh_wait, 'dsh_wait_unreachable', lambda *a, **kw: [])
+    monkeypatch.setattr(dsh_session, 'dsh_session_history',
+                        lambda session, span=2, **kw: _end(time.time()))
+    _took_fast(monkeypatch)
+    calls = {'n': 0}
+
+    def answer_last(session, after=0, **kw):
+        calls['n'] += 1
+        if calls['n'] == 1:                        # забор ответа споткнулся о сетевой сбой —
+            raise DshApiUnreachable('хост не ответил: таймаут')   # повторится на следующем витке
+        return 'готово'
+    monkeypatch.setattr(dsh_session, 'dsh_session_answer_last', answer_last)
+
+    taken = dsh_wait.dsh_wait_run('orch-flaky2', str(home / 'out'), timeout=60)
+
+    assert [row['session'] for row in taken] == [card]

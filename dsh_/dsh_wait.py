@@ -46,9 +46,11 @@ import fcntl
 import json
 import os
 import re
+import sys
 import time
 
-from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError
+from dsh_.dsh_api import (DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError,
+                          DshApiUnavailable, DshApiUnreachable)
 
 DSH_WAIT_FILE = 'dsh-board.expected.json'
 DSH_WAIT_OWNER_ENV = 'CLAUDE_CODE_SESSION_ID'
@@ -61,6 +63,16 @@ DSH_WAIT_DEAD_GRACE = 600.0
 # Расхождение часов метки (`time.time`) и журнала хоста: ответ чуть раньше метки — не повод
 # зацикливать ждун на пропущенном ответе.
 DSH_WAIT_CLOCK_SKEW = 2.0
+
+# Транспортные сбои, из-за которых ждун не умирает, а пропускает виток: `dsh_api_poll`
+# уже переспросил с паузами, хост всё равно молчит — идём дальше по своему интервалу,
+# сдаёмся только по `timeout` (28.11: `IncompleteRead` по живому хосту ронял `wait` кодом 1).
+DSH_WAIT_TRANSIENT = (DshApiUnreachable, DshApiUnavailable)
+
+
+def _host_silent(error: Exception) -> None:
+    """Одна строка в stderr: хост молчит посреди опроса — ждун продолжает, это не исход."""
+    print(f'хост не ответил, ждун продолжит опрос на следующем витке: {error}', file=sys.stderr)
 
 
 def dsh_wait_expect(session: str, owner: str = None) -> None:
@@ -314,7 +326,9 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: 
     выдержки на 107 ответах). Поэтому `dsh-board wait <карточка>` — по процессу на карточку.
     ⚠ Ответ, уже забранный кем-то другим, в «входящих» не лежит. Безымянный ждун перечитывает
     метки каждый виток — снятая чужим забором он пустит сразу; названному карточка фиксирована
-    на старте — такую он дождётся разве что до `timeout`.
+    на старте — такую он дождётся разве что до `timeout`. Но снятие метки (чужой забор ответа,
+    `cancel`/`archive` карточки) выводит и названного сразу: ждать ответа, которого уже никто
+    не ждёт, — вешать ход до истечения срока.
 
     Returns:
         `[{session, title, out, brief}]` — забранные ответы; пусто — ждать было нечего
@@ -328,6 +342,10 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: 
         handle.write(str(os.getpid()))
     named = sessions is not None
     want = [dsh_wait_key(key) for key in sessions] if named else dsh_wait_pending(owner)
+    # Метки на старте: названному ждуну карточки фиксированы, а безымянный перечитывает
+    # метки каждый виток. У названной карточки без метки своего начала нет — её снятие
+    # (чужой забор ответа, `cancel`/`archive`) для него сигнал, а не молчаливая потеря.
+    start_marked = {key for key in want if named and isinstance(_read().get(key), dict)}
     taken, deadline = [], time.time() + timeout
     try:
         while want and time.time() < deadline:
@@ -336,15 +354,29 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: 
             rows = _read()
             marked_at = {key: (rows.get(key) or {}).get('at') or 0
                          for key in want if isinstance(rows.get(key), dict)}
+            dropped = [key for key in want if key in start_marked and key not in marked_at]
+            if dropped:
+                want = [key for key in want if key not in dropped]
+                start_marked -= set(dropped)
+                if not want:
+                    break
             got = set()
-            for row in dsh_wait_answered(want, marked_at=marked_at, base=base):
+            try:
+                ready = dsh_wait_answered(want, marked_at=marked_at, base=base)
+            except DSH_WAIT_TRANSIENT as error:
+                ready, _ = [], _host_silent(error)   # хост молчит — виток пропустим, не помрём
+            for row in ready:
                 session = row['session']
-                answer = dsh_session_answer_last(session, base=base) or ''
-                path = os.path.join(out_dir, f'{dsh_wait_key(session)}.md')
-                with open(path, 'w', encoding='utf-8', errors='replace') as out:
-                    out.write(answer)
-                dsh_board_inbox_take(session, row['turns'])  # снимает и метку
-                dsh_board_box_clear(session, base=base)
+                try:
+                    answer = dsh_session_answer_last(session, base=base) or ''
+                    path = os.path.join(out_dir, f'{dsh_wait_key(session)}.md')
+                    with open(path, 'w', encoding='utf-8', errors='replace') as out:
+                        out.write(answer)
+                    dsh_board_inbox_take(session, row['turns'])  # снимает и метку
+                    dsh_board_box_clear(session, base=base)
+                except DSH_WAIT_TRANSIENT as error:
+                    _host_silent(error)              # ответ не забран — забор повторится на витке
+                    continue
                 taken.append({'session': session, 'title': row['title'], 'out': path,
                               'brief': dsh_board_brief(answer)})
                 got.add(dsh_wait_key(session))
@@ -356,7 +388,10 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: 
                 break
             # Мёртвые метки снимаем и здесь, не дожидаясь 12 ч: архивная карточка или
             # уснувшая без цели вешала бы весь отряд (`d98f4f43`, 27–28.11).
-            dead = set(dsh_wait_unreachable(want, marked_at, base=base))
+            try:
+                dead = set(dsh_wait_unreachable(want, marked_at, base=base))
+            except DSH_WAIT_TRANSIENT as error:
+                dead, _ = set(), _host_silent(error)
             for key in dead:
                 dsh_wait_done(key)
             if dead:

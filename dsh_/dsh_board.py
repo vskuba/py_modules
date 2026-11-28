@@ -43,12 +43,12 @@ import threading
 import time
 
 from dsh_.dsh_api import DSH_API_ADDR_DEFAULT, DSH_API_HOME_DEFAULT, DshApiError, \
-    DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_post
+    DshApiUnavailable, DshApiUnreachable, dsh_api_call, dsh_api_get, dsh_api_poll, dsh_api_post
 from dsh_.dsh_saving import dsh_saving_owner_mark, dsh_saving_sent
 from dsh_.dsh_wait import dsh_wait_done, dsh_wait_expect
 from dsh_.dsh_worktree import DshWorktreeError, dsh_worktree_dirty, dsh_worktree_drop, dsh_worktree_merged, \
     dsh_worktree_new
-from dsh_.dsh_session import dsh_session_archive, dsh_session_cursor, \
+from dsh_.dsh_session import dsh_session_archive, dsh_session_cancel, dsh_session_cursor, \
     dsh_session_find, dsh_session_history, dsh_session_image_part, dsh_session_list, \
     dsh_session_prompt, dsh_session_round_pair, dsh_session_title, dsh_session_turn_log, \
     dsh_session_turn_reply
@@ -156,8 +156,9 @@ def dsh_board_state(session: str = '', *, base: str = DSH_API_ADDR_DEFAULT) -> d
         `{goals, chain, machines, schedule, paused, executors, motors,
         models, catalog, workspaces, archived, sessionModel, now}`.
     """
-    return dsh_api_get('continuous-agent.state', query=f'session={session or "-"}',
-                       base=base, timeout=DSH_BOARD_HTTP_TIMEOUT)
+    return dsh_api_poll(lambda: dsh_api_get('continuous-agent.state',
+                                            query=f'session={session or "-"}',
+                                            base=base, timeout=DSH_BOARD_HTTP_TIMEOUT))
 
 
 def dsh_board_tool(session: str, name: str, args: dict, *,
@@ -460,6 +461,88 @@ def dsh_board_box_drop(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> lis
             dsh_board_tool(session, 'continuous_drop', {'goal': goal['id']}, base=base)
             dropped.append(goal['id'])
     return dropped
+
+
+# Очередь карточки у хоста — проекция `inbox` с двумя мишенями: в `next-turn` ложатся
+# промпты, ждущие конца идущего круга, в `next-step` — обслуженные на границе шага
+# (базовые инструкции, возвращённый после отмены контекст). Отменять — обе.
+DSH_BOARD_QUEUE_TARGETS = ('next-turn', 'next-step')
+# Хостовский отказ «этого предмета в очереди уже нет» — гонка с заходом, не поломка.
+DSH_BOARD_QUEUE_GONE = 'session/queue-item-not-found'
+
+
+def dsh_board_cancel(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Отменить карточку: прервать идущий круг и снять с очереди всё, что ждёт после него.
+
+    `session/cancel` у хоста прерывает **только идущий круг** и бережно сохраняет очередь
+    (на хосте `keepInbox: true`) — после такой отмены на карточке оставался принятый промпт,
+    и он дожидался свободного мотора, а потом шёл. Очередь карточки — проекция `inbox`
+    (`next-turn` + `next-step`): читаем её лёгким `session/projections`, снимаем предмет за
+    предметом `session/updateQueue` (действие `remove`) — тот же путь, каким Remove чистит
+    очередь в интерфейсе хоста. Порядок: снять очередь, прервать круг, снять ещё раз —
+    прерванный круг мог вернуть в `next-step` контекст, заявленный на шаге.
+
+    Returns:
+        `{'stopped': был ли прерван идущий круг, 'removed': [id снятых из очереди],
+        'dropped': [id задач, снятых с доски]}`.
+
+    Raises:
+        DshApiError: хост отказал прерыванием или снятием не-«уже-пусто».
+    """
+    # Сперва задачи с доски — иначе мотор взял бы их снова (b0a94fc); потом очередь и круг.
+    dropped = dsh_board_box_drop(session, base=base)
+    removed: dict = {}
+    alive = [False]        # карточка на хосте есть (проекция живая) — отличаем опечатку в id
+
+    def clear_queue() -> None:
+        view = dsh_api_call('session/projections', {'request': {'sessionId': session}},
+                            base=base)
+        alive[0] = alive[0] or bool(view)
+        inbox = ((view or {}).get('values') or {}).get('inbox') or {}
+        for target in DSH_BOARD_QUEUE_TARGETS:
+            for message in inbox.get(target) or []:
+                item_id = (message or {}).get('id')
+                if not item_id or item_id in removed:
+                    continue
+                try:
+                    dsh_api_call('session/updateQueue', {'request': {'sessionId': session,
+                                                                     'itemId': item_id,
+                                                                     'action': {'kind': 'remove'}}},
+                                 base=base)
+                except DshApiError as error:
+                    if not str(error).startswith(DSH_BOARD_QUEUE_GONE):
+                        raise
+                    # предмет уже забран в гонке с заходом — его в очереди нет, этого и добивались
+                removed[item_id] = target
+
+    clear_queue()
+    stopped = (dsh_session_find(session, base=base) or {}).get('running') or False
+    # Прерываем и когда список (кэш 60 с) показывает покой: карточка могла успеть начаться
+    # после снимка; холодный агент (`session/not-found`) — не поломка, прерывать нечего.
+    try:
+        dsh_session_cancel(session, base=base)
+    except DshApiError as error:
+        # Холодный агент — не поломка, прерывать нечего; но только если карточка на хосте
+        # вообще есть, иначе это опечатка в id и молчать об ней нельзя.
+        if not str(error).startswith('session/not-found') or not (stopped or alive[0]):
+            raise
+    clear_queue()   # прерванный круг мог вернуть в очередь заявленный контекст
+    return {'stopped': bool(stopped), 'removed': sorted(removed), 'dropped': dropped}
+
+
+def dsh_board_archive(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> dict:
+    """Убрать карточку в архив, сначала отменив её: круг и очередь переживают архив молча.
+
+    Архив сам по себе промпт из очереди `inbox` не снимает: снятая с глаз карточка
+    дожидалась свободного мотора и шла, а метка `dsh_wait` висела. Отменяем, потом архивируем.
+
+    Returns:
+        То же, что `dsh_board_cancel` — что успели отменить до архива.
+    """
+    result = dsh_board_cancel(session, base=base)
+    dsh_session_archive(session, base=base)
+    dsh_wait_done(session)   # в архиве ответа не бывает — метка мертва
+    return result
 
 
 def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:

@@ -96,7 +96,7 @@ PYTHONPATH=. python -m dsh_.dsh_board ask <session> "прогони тесты" 
 PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # N задач разом
 PYTHONPATH=. python -m dsh_.dsh_board answer <session>           # последний ответ
 PYTHONPATH=. python -m dsh_.dsh_board history <session> -n 5     # промпты и ответы
-PYTHONPATH=. python -m dsh_.dsh_board cancel <session>           # прервать круг и снять задачи с доски
+PYTHONPATH=. python -m dsh_.dsh_board cancel <session>           # прервать круг, снять задачи с доски и очередь
 PYTHONPATH=. python -m dsh_.dsh_board archive <session>
 PYTHONPATH=. python -m dsh_.dsh_board working [--line] [--eta]   # кто работает сейчас
 PYTHONPATH=. python -m dsh_.dsh_board wait --out-dir <каталог> [карточка …]  # фоновый ждун
@@ -334,6 +334,19 @@ dsh-board fanout tasks.json --out-dir <каталог>        # независи
   грабель: карточке вне реестра `robots` ответ не виден во «входящих» даже после конца
   круга — под меткой ждун ищет его и в журнале (`turn/end` позже метки), иначе `wait` не
   возвращался, когда жданная карточка уже ответила (`d98f4f43`, 28.11).
+  ⚠⚠ `cancel` прерывает идущий круг (`session/cancel`, который бережёт очередь через
+  `keepInbox`) **и** вычищает лежащий в `inbox` ждущий промпт (`session/updateQueue`,
+  действие `remove`) — до отмены и после: снятый круг мог вернуть в очередь заявленный
+  контекст. Без второй половины «отменённая» карточка дожидалась свободного мотора и
+  начинала круг (28.11: `cancel` трогал только идущий круг, queued промпт выживал).
+  `archive`/`land` отменяют карточку раньше архивации — архив queued промпт не снимает.
+  ⚠⚠ Сбой транспорта ждун не считает исходом: обрывы ответа (`IncompleteRead`,
+  `RemoteDisconnected`, таймауты) транспорт сворачивает в `DshApiUnreachable`, read-only
+  опрос (доска, список карточек, журнал) переспрашивается с паузами 1, 2, 4, 8 с
+  (`dsh_api_poll`, строка «хост не ответил, повтор через N с» в stderr), а не дождавшись —
+  пропускает виток и ждёт дальше по своему интервалу; сдаётся ждун только по `--timeout`.
+  28.11 `wait` падал трейсбеком с кодом 1 на `IncompleteRead(0 bytes read)` по живому хосту:
+  он не `OSError` и проскакивал сквозь «хост не ответил» — карточка оставалась неотвеченной.
   ⚠ Ждун считает ответом только круг, кончившийся **позже** метки: непрочитанным мог лежать
   ответ прошлого круга, и по новой метке (`ask` репликой) ждун забрал бы старый хвост да ещё
   и снял метку — новый круг остался без watchdog'а, а следом `wait` докладывал «ждать было
