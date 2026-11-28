@@ -35,7 +35,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_worktree_forget, dsh_board_worktree_head, dsh_board_worktree_row, \
     dsh_board_worktree_test_ask
 from dsh_.dsh_fanout_log import dsh_fanout_log_collect, dsh_fanout_log_done, dsh_fanout_log_start
-from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_key, dsh_wait_run
+from dsh_.dsh_wait import DSH_WAIT_OWNER_ENV, dsh_wait_done, dsh_wait_key, dsh_wait_run
 from dsh_.dsh_mode import DSH_MODE_ALL, dsh_mode_get, dsh_mode_set
 from dsh_.dsh_saving import DSH_SAVING_OWNER_ENV, dsh_saving_badge, dsh_saving_report
 from dsh_.dsh_session import dsh_session_answer_last, dsh_session_archive, dsh_session_asking, \
@@ -176,6 +176,7 @@ def _run(args) -> int:
         result = dsh_worktree_land(cwd, message)
         # Работа принята: карточка и проект её копии на панели больше не нужны.
         dsh_session_archive(args.session, base=base)
+        dsh_wait_done(args.session)   # работа в репо: ответа не ждём, метка мертва
         dsh_board_workspace_drop(cwd, base=base)   # у новой карточки копия — не проект, не снимется
         dsh_board_worktree_forget(args.session)
         return _print(args, result, lambda v: f"ветка {v['branch']} слита: {v['merged']}; копия и карточка убраны")
@@ -234,10 +235,14 @@ def _run(args) -> int:
 
     if command == 'cancel':
         dsh_session_cancel(args.session, base=base)
+        # Круг снят руками — ответа по этой метке уже не ждут: иначе ждун и застава `Stop`
+        # держали бы ход по карточке, которую сами же и отменили (28.11, `cff7d2ff`).
+        dsh_wait_done(args.session)
         return _print(args, {'ok': True}, lambda v: 'отменено')
 
     if command == 'archive':
         dsh_session_archive(args.session, base=base)
+        dsh_wait_done(args.session)   # в архиве ответа не бывает — метка мертва
         return _print(args, {'ok': True}, lambda v: 'в архиве')
 
     if command == 'board':

@@ -26,6 +26,21 @@ dsh-board wait --out-dir <каталог>      # фоном (run_in_background):
 ⚠ Обрыв (`turn/end interrupted`) — не ответ: его продолжит `revive --auto`, ждун ждёт дальше.
 ⚠ Ждёт по «входящим» на кэше списка карточек (60 с) — задержка до минуты, зато без тяжёлых
 вызовов в цикле: они однажды уже уложили хост.
+⚠ «Входящие» — это реестр `robots`; карточка, в реестр не попавшая, ответа там не покажет и
+после конца круга. Поэтому под меткой ответ ищется и в журнале карточки напрямую
+(`turn/end` позже метки) — иначе ждун не возвращался, даже когда жданная карточка уже
+ответила (28.11, `d98f4f43`).
+⚠⚠ Метка мертва, когда ответа карточки уже не будет: она в архиве, или, пережив
+`DSH_WAIT_DEAD_GRACE`, не идёт, цели на доске не имеет, в очередь следующего захода ничего
+не поставила и после метки не кончала круг (`dsh_wait_unreachable`). Круг, ждущий свободного
+мотора, — не мёртвый и не готовый: он лежит в очереди заходов карточки, а в `running` и
+журнале его ещё нет. Такие метки ждун и застава снимают сами (`dsh_wait_prune`), иначе одна
+архивная карточка вешала всё ожидание на `DSH_WAIT_MAX_AGE` — 12 ч вместо ответа
+(грабель 27–28.11, карточка `d98f4f43`).
+⚠ Ответ карточки считается ответом на **нашу** метку, только если круг кончился позже неё:
+у карточки мог лежать непрочитанным ответ прошлого круга, и ждун, забрав его по новой
+метке, ещё и снял бы её — новый круг остался бы без watchdog'а, а сессия слышала бы
+«ждать было нечего» при работающем субагенте (грабель 27.11, `ask` репликой).
 """
 import fcntl
 import json
@@ -40,6 +55,12 @@ DSH_WAIT_OWNER_ENV = 'CLAUDE_CODE_SESSION_ID'
 DSH_WAIT_POLL = 20.0
 # Метка старше — субагент или хост пропали насовсем; ждать её вечно нельзя.
 DSH_WAIT_MAX_AGE = 12 * 3600
+# Карточка спит, цели на доске и контента в очереди заходов нет — сколько даём встать
+# кругу по прямой очереди промптов (`ask` репликой, `revive`): дольше — метку считать мёртвой.
+DSH_WAIT_DEAD_GRACE = 600.0
+# Расхождение часов метки (`time.time`) и журнала хоста: ответ чуть раньше метки — не повод
+# зацикливать ждун на пропущенном ответе.
+DSH_WAIT_CLOCK_SKEW = 2.0
 
 
 def dsh_wait_expect(session: str, owner: str = None) -> None:
@@ -100,7 +121,8 @@ def dsh_wait_waiter_alive(owner: str) -> bool:
     return any(_waiter_alive(path) for path in _waiter_paths(owner))
 
 
-def dsh_wait_waiter_gaps(owner: str, pending: list = None) -> list:
+def dsh_wait_waiter_gaps(owner: str, pending: list = None, *,
+                         base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Какие метки сессии `owner` остались без живого ждуна — пробелы ожидания.
 
     Ждун без ряда (`wait` без карточек) покрывает **все** метки сессии; ждун
@@ -112,6 +134,10 @@ def dsh_wait_waiter_gaps(owner: str, pending: list = None) -> list:
     Returns:
         Непокрытые метки (порядок `pending`); пусто — ждать нечего или всё под ждуном.
     """
+    if pending is None:
+        # Мёртвые метки (архив, уснувшая карточка без цели) ход не держат: без снятия
+        # одна убранная карточка гоняла бы заставу по кругу вечно (28.11, `cff7d2ff`).
+        dsh_wait_prune(owner, base=base)
     want = list(pending) if pending is not None else dsh_wait_pending(owner)
     if not want:
         return []
@@ -124,7 +150,8 @@ def dsh_wait_waiter_gaps(owner: str, pending: list = None) -> list:
     return want
 
 
-def dsh_wait_answered(sessions: list, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+def dsh_wait_answered(sessions: list, marked_at: dict = None, *,
+                      base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Из карточек `sessions` — те, чей ответ уже лежит непрочитанным; обрывы — мимо.
 
     Признак «ответ есть» один у ждуна и у заставы «жди живого субагента»
@@ -132,20 +159,138 @@ def dsh_wait_answered(sessions: list, *, base: str = DSH_API_ADDR_DEFAULT) -> li
     ответ не забран) и последний её `turn/end` — не `interrupted`: обрыв продолжит
     `revive --auto`, ответа нет.
 
+    Args:
+        marked_at: {карточка: минута метки «ждём ответ»}; с ней ответ, кончившийся
+            **раньше** метки, — прошлый круг: его уже могли забрать, и к нашей задаче он
+            не относится. Без неё — как раньше, любой непрочитанный.
+
     ⚠ «Входящие» недоступны — пустой список: пока хост молчит, про ответ не известно.
     ⚠ Сбой `dsh_session_history` не глотается — как в цикле ждуна до вынесения сюда.
+    ⚠ С `marked_at` к «входящим» добавляется **журнал**: «входящие» показывают только
+    карточки из реестра `robots`, а ждун ждёт карточку по метке — та могла в реестр и не
+    попасть (ожидание `d98f4f43`, 28.11: карточка не в `robots`, круг кончился, ответа во
+    «входящих» нет — ждун висел до `DSH_WAIT_MAX_AGE`). Ответом здесь считается `turn/end`
+    позже метки, когда карточка не идёт и круг не забран (`turns` против реестра заборов).
+    Без меток (`claude_gate_dsh_alive`, `rearm`) — прежний путь, только «входящие»:
+    для них реестр и есть источник.
     """
-    from dsh_.dsh_board import dsh_board_inbox  # ленивый: цикл импорта
-    from dsh_.dsh_session import dsh_session_history
+    from dsh_.dsh_board import (dsh_board_inbox, dsh_board_inbox_taken,  # ленивый: цикл импорта
+                                dsh_board_turns)
+    from dsh_.dsh_session import dsh_session_history, dsh_session_list, dsh_session_title
 
     want = {_key(key) for key in sessions or []}
+    marked_at = marked_at or {}
 
     try:
         rows = [row for row in dsh_board_inbox(base=base) if _key(row['session']) in want]
     except DshApiError:
-        return []
+        rows = []
+    out = []
+    for row in rows:
+        events = dsh_session_history(row['session'], 2, base=base)
+        if _interrupted(events):
+            continue
+        at = marked_at.get(_key(row['session'])) or 0
+        end = _turn_end_at(events)
+        if at and end and end < at - DSH_WAIT_CLOCK_SKEW:
+            continue                     # ответ прошлого круга: нашей метки он не касается
+        out.append(row)
 
-    return [row for row in rows if not _interrupted(dsh_session_history(row['session'], 2, base=base))]
+    rest = want - {_key(row['session']) for row in out}
+    rest = {key for key in rest if (marked_at.get(key) or 0) > 0}
+    if not rest:
+        return out
+    try:
+        items = {_key(item.get('sessionId') or ''): item for item in dsh_session_list(base=base)}
+    except (DshApiError, OSError):
+        return out                       # хост молчит — про ответ не известно
+    for key in sorted(rest):
+        item = items.get(key)
+        if item is None or item.get('running'):
+            continue                     # карточка круг ещё не кончила (или её ещё нет)
+        turns = dsh_board_turns(item)
+        if turns <= dsh_board_inbox_taken(key):
+            continue                     # кругов после забранных нет — того, нашего, ещё нет
+        try:
+            events = dsh_session_history(key, 2, base=base)
+        except (DshApiError, OSError):
+            continue
+        if _interrupted(events):
+            continue                     # обрыв продолжит `revive --auto`
+        if _turn_end_at(events) < marked_at[key] - DSH_WAIT_CLOCK_SKEW:
+            continue                     # кончился раньше метки — прошлый круг
+        out.append({'session': key, 'title': dsh_session_title(item), 'turns': turns,
+                    'brief': ''})
+    return out
+
+
+def dsh_wait_unreachable(sessions: list, marked_at: dict = None, *,
+                         base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Карточки, чьего ответа ждать некому и незачем: метка мертва.
+
+    Живая надежда на ответ — это круг, который **идёт**, цель на доске, которая ещё
+    отработает (ждёт мотора, в очереди), круг, кончившийся **после** метки, или контент,
+    поставленный в **очередь заходов** карточки: когда все моторы заняты чужим, принятый
+    промпт лежит в проекции `inbox` (`next-step`/`next-turn`), а карточка выглядит мёртвой
+    — `running` ложь, `turns` прежний, журнала круга ещё нет (28.11: четыре мотора таскали
+    чужие карточки, жданная стояла в очереди часами). Архивная карточка не ответит
+    никогда; карточка без цели, без очереди и без конца круга после метки, пережившая
+    `DSH_WAIT_DEAD_GRACE`, — тоже.
+
+    ⚠ Карточки, которой нет в списке хоста (завелась минуту назад, кэш списка молчит), —
+    живые: незнание хоста не повод хоронить метку; то же при недоступном хосте — пустой список.
+    """
+    from dsh_.dsh_board import dsh_board_state, dsh_board_turns  # ленивый: цикл импорта
+    from dsh_.dsh_session import dsh_session_history, dsh_session_list
+
+    keys = sorted({_key(session) for session in sessions or [] if session})
+    if not keys:
+        return []
+    try:
+        state = dsh_board_state(base=base)
+        items = {_key(item.get('sessionId') or ''): item for item in dsh_session_list(base=base)}
+    except (DshApiError, OSError):
+        return []
+    archived = {_key(session) for session in state.get('archived') or []}
+    queued = {_key(goal.get('session') or '') for goal in state.get('goals') or []
+              if goal.get('status') in ('active', 'paused', 'blocked')}
+    now, dead = time.time(), []
+    for key in keys:
+        if key in archived:
+            dead.append(key)
+            continue
+        item = items.get(key)
+        if key in queued or item is None or item.get('running') or _queue_waiting(item):
+            continue                     # круг идёт, в очереди или ещё не дорос до решения
+        at = (marked_at or {}).get(key) or 0
+        if not at or now - at < DSH_WAIT_DEAD_GRACE:
+            continue
+        if dsh_board_turns(item):
+            try:
+                end = _turn_end_at(dsh_session_history(key, 2, base=base))
+            except (DshApiError, OSError):
+                continue
+            if end > at - DSH_WAIT_CLOCK_SKEW:
+                continue                 # после метки был круг — его заберёт `dsh_wait_answered`
+        dead.append(key)
+    return dead
+
+
+def dsh_wait_prune(owner: str, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Снять метки сессии, ответа которых уже не будет; вернуть их ключи.
+
+    Мёртвая метка живее живой: без снятия она держит ждун до `DSH_WAIT_MAX_AGE` и не
+    отпускает ход на `Stop` (`dsh_wait_waiter_gaps`) — оркестратор в петле «субагент ещё
+    работает» по карточке, убранной в архив руками или `gc`.
+    """
+    marks = dsh_wait_marks(owner)
+    if not marks:
+        return []
+    dead = dsh_wait_unreachable(list(marks), {k: row.get('at') or 0 for k, row in marks.items()},
+                                base=base)
+    for key in dead:
+        dsh_wait_done(key)
+    return dead
 
 
 def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: list = None,
@@ -186,8 +331,13 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: 
     taken, deadline = [], time.time() + timeout
     try:
         while want and time.time() < deadline:
+            # `at` меток — по нему ответ сверяется с меткой: ответом считается лишь круг,
+            # кончившийся позже неё (у карточки мог лежать непрочитанным прошлый круг).
+            rows = _read()
+            marked_at = {key: (rows.get(key) or {}).get('at') or 0
+                         for key in want if isinstance(rows.get(key), dict)}
             got = set()
-            for row in dsh_wait_answered(want, base=base):
+            for row in dsh_wait_answered(want, marked_at=marked_at, base=base):
                 session = row['session']
                 answer = dsh_session_answer_last(session, base=base) or ''
                 path = os.path.join(out_dir, f'{dsh_wait_key(session)}.md')
@@ -204,6 +354,13 @@ def dsh_wait_run(owner: str, out_dir: str, timeout: float = 6 * 3600, sessions: 
                 want = [key for key in want if key not in got]
             if first and taken:
                 break
+            # Мёртвые метки снимаем и здесь, не дожидаясь 12 ч: архивная карточка или
+            # уснувшая без цели вешала бы весь отряд (`d98f4f43`, 27–28.11).
+            dead = set(dsh_wait_unreachable(want, marked_at, base=base))
+            for key in dead:
+                dsh_wait_done(key)
+            if dead:
+                want = [key for key in want if key not in dead]
             if not named:
                 # Метки безымянного ждуна живут в файле: их мог снять чужой забор ответа
                 # (`answer`, `inbox --take`) или добавить новую — перечитываем каждый
@@ -251,6 +408,33 @@ def _interrupted(events: list) -> bool:
     ends = [event for event in events if event.get('type') == 'turn/end']
     reason = ((ends[-1].get('data') or {}).get('reason') or {}) if ends else {}
     return isinstance(reason, dict) and reason.get('kind') == 'interrupted'
+
+
+def _queue_waiting(item: dict) -> bool:
+    """Стоит ли в очереди следующего захода карточки контент (проекция `inbox` хоста)?
+
+    Пока все моторы заняты чужим, принятый промпт лежит в `next-step`/`next-turn` и ждёт
+    свободного мотора: `running` — ложь, `turns` — прежний, круга в журнале ещё нет.
+    Для ждуна и заставы это **pending**: круг не кончен и не мёртв (28.11).
+    """
+    queue = ((item.get('projections') or {}).get('values') or {}).get('inbox') or {}
+    return bool(queue.get('next-turn') or queue.get('next-step'))
+
+
+def _turn_end_at(events: list) -> float:
+    """Число эпохи последнего `turn/end` из хвоста журнала, с; записи нет — 0 (не выдумывать).
+
+    Разбор времени — как `_event_clock` в `dsh_session.py` (хост пишет мс); сюда не зовём:
+    через чужое приватное ход — грабель на первый же рефакторинг того слоя.
+    """
+    ends = [event for event in events or [] if event.get('type') == 'turn/end']
+    if not ends:
+        return 0.0
+    try:
+        value = float(ends[-1].get('time') or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value / 1000 if value > 1e11 else value
 
 
 def _key(session: str) -> str:

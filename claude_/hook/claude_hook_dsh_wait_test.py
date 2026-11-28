@@ -9,16 +9,30 @@ import sys
 import pytest
 
 from claude_.hook import claude_hook_dsh_wait as gate
-from dsh_ import dsh_wait
+from dsh_ import dsh_board, dsh_session, dsh_wait
 
 OWNER = 'orch-1'
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
+    """Дом хоста и временный каталог — в `tmp_path`, `~/.dsh` не трогаем."""
     monkeypatch.setenv('DSH_HOME', str(tmp_path))
     monkeypatch.setenv('TMPDIR', str(tmp_path / 'tmp'))
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _silent_host(monkeypatch):
+    """Хост подставной и молчаливый: доски нет, карточек нет, сети нет — метки живые.
+
+    ⚠ `dsh_board` связал `dsh_session_*` своими именами на импорте — правим и там, и там.
+    """
+    monkeypatch.setattr(dsh_board, 'dsh_board_state', lambda session='', **kw: {})
+    monkeypatch.setattr(dsh_session, 'dsh_session_list', lambda **kw: [])
+    monkeypatch.setattr(dsh_board, 'dsh_session_list', lambda **kw: [])
+    monkeypatch.setattr(dsh_session, 'dsh_session_history', lambda session, span=2, **kw: [])
+    monkeypatch.setattr(dsh_board, 'dsh_session_history', lambda session, span=2, **kw: [])
 
 
 def _waiter(home, slot=''):
@@ -70,3 +84,13 @@ def test_gate_silent_without_marks(home):
     finally:
         waiter.kill()
         waiter.wait(timeout=5)
+
+
+def test_gate_frees_a_cancelled_and_archived_card(home, monkeypatch):
+    """Карточку убрали (`cancel`+`archive`, `gc`) — мёртвая метка ход не держит и сама снимается."""
+    card = 'continuous-dead0001'
+    dsh_wait.dsh_wait_expect(card, owner=OWNER)
+    monkeypatch.setattr(dsh_board, 'dsh_board_state',
+                        lambda session='', **kw: {'archived': [card], 'goals': []})
+    assert gate.claude_hook_dsh_wait_check({'session_id': OWNER}) == ''
+    assert dsh_wait.dsh_wait_pending(OWNER) == []

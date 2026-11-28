@@ -746,6 +746,11 @@ def dsh_board_inbox_take(session: str, turns: int) -> None:
         dsh_wait_done(session)
 
 
+def dsh_board_inbox_taken(session: str) -> int:
+    """До какого круга ответы карточки уже забраны (`dsh-board.inbox-turns.json`)."""
+    return int(_inbox_read().get(re.sub(r'-g\d+$', '', session)) or 0)
+
+
 def dsh_board_turns(item: dict) -> int:
     """Сколько кругов у карточки (`sessionStats.turns` из `session/list`)."""
     return int((((item.get('projections') or {}).get('values') or {}).get('sessionStats') or {}).get('turns') or 0)
