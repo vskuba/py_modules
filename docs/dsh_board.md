@@ -96,7 +96,7 @@ PYTHONPATH=. python -m dsh_.dsh_board ask <session> "прогони тесты" 
 PYTHONPATH=. python -m dsh_.dsh_board fanout tasks.json          # N задач разом
 PYTHONPATH=. python -m dsh_.dsh_board answer <session>           # последний ответ
 PYTHONPATH=. python -m dsh_.dsh_board history <session> -n 5     # промпты и ответы
-PYTHONPATH=. python -m dsh_.dsh_board cancel <session>           # прервать круг
+PYTHONPATH=. python -m dsh_.dsh_board cancel <session>           # прервать круг и снять задачи с доски
 PYTHONPATH=. python -m dsh_.dsh_board archive <session>
 PYTHONPATH=. python -m dsh_.dsh_board working [--line] [--eta]   # кто работает сейчас
 PYTHONPATH=. python -m dsh_.dsh_board wait --out-dir <каталог> [карточка …]  # фоновый ждун
@@ -181,7 +181,10 @@ worktree-workspace старых карточек снимаются, как ра
 строка для статусной строки: `DSH 0/4` в простое, `DSH 1/4: [1] ревью …` в работе — перед
 подписью значок мотора (`dsh_motor_badge`, цифра на плашке своего цвета; тот же значок
 стоит в таблице сессий Claude напротив хозяина работы)
-(`dsh_board_motors_busy`). **Очередь** — `DSH 4/4 +2`: заняты 4 мотора, 2 задачи ждут
+(`dsh_board_motors_busy`). **Снять задачу** — `dsh-board cancel <карточка>`: снимает с доски её задачи от оркестратора
+(`robot`) и отработавшие (`dsh_board_box_drop`), потом обрывает идущий круг. ⚠ Одна отмена
+круга (`dsh_session_cancel`) цель не трогала: задача в очереди ждала мотора дальше, «+3» не
+уходил. Цели человека остаются. **Очередь** — `DSH 4/4 +2`: заняты 4 мотора, 2 задачи ждут
 (кирпичики цепочки `wait` — срок подошёл, машина занята; маршрут отдаёт их числом `queued`,
 плагин старше счётчика — Python считает по `state` доски). «+2» красит статусная строка
 цветом мотора 4 (215): Python отдаёт строку без цвета — разбор `DSH N/M` в ней голый. С `--links КАТАЛОГ` каждая задача в строке — гиперссылка

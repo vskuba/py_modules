@@ -444,6 +444,24 @@ def dsh_board_box_clear(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> li
     return dropped
 
 
+def dsh_board_box_drop(session: str, *, base: str = DSH_API_ADDR_DEFAULT) -> list:
+    """Снять с доски задачи карточки, поставленные оркестратором (`robot`), и отработавшие.
+
+    Отмена круга (`dsh_session_cancel`) цель не трогает: задача в очереди (`wait`) так и
+    ждала мотора, а снятая на ходу вставала заново — «DSH 4/4 +3» не уходил после трёх
+    «отменено». Цели человека (из формы, периодические) остаются.
+
+    Returns:
+        id снятых целей.
+    """
+    dropped = []
+    for goal in dsh_board_state(session, base=base).get('goals') or []:
+        if _key(goal.get('session') or '') == _key(session) and (goal.get('robot') or goal.get('status') == 'done'):
+            dsh_board_tool(session, 'continuous_drop', {'goal': goal['id']}, base=base)
+            dropped.append(goal['id'])
+    return dropped
+
+
 def dsh_board_inbox(*, base: str = DSH_API_ADDR_DEFAULT) -> list:
     """Агентские карточки с ответами, которых оркестратор ещё не забрал.
 

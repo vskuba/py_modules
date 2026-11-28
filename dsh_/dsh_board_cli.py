@@ -29,7 +29,7 @@ from dsh_.dsh_board import DSH_BOARD_BRIEF_ASK, DSH_BOARD_GC_DAYS, dsh_board_gc_
     dsh_board_ask, dsh_board_brief, dsh_board_inbox, dsh_board_inbox_count, dsh_board_inbox_take, \
     dsh_board_resume, dsh_board_turns, dsh_board_workspace_drop, \
     dsh_board_gc, dsh_board_eta, dsh_board_stats, dsh_board_verify, \
-    dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
+    dsh_board_box_drop, dsh_board_fanout, dsh_board_goal_session, dsh_board_model_of, dsh_board_motors_busy, \
     dsh_board_motors_set, dsh_board_session_new, \
     dsh_board_sessions, dsh_board_settings, dsh_board_state, dsh_board_tool, \
     dsh_board_worktree_forget, dsh_board_worktree_head, dsh_board_worktree_row, \
@@ -234,11 +234,14 @@ def _run(args) -> int:
         return _print(args, dsh_session_dialog(args.session, args.n, base=base), _history_text)
 
     if command == 'cancel':
+        # Сперва задачу с доски — иначе мотор взял бы её снова; потом круг, если идёт.
+        dropped = dsh_board_box_drop(args.session, base=base)
         dsh_session_cancel(args.session, base=base)
         # Круг снят руками — ответа по этой метке уже не ждут: иначе ждун и застава `Stop`
         # держали бы ход по карточке, которую сами же и отменили (28.11, `cff7d2ff`).
         dsh_wait_done(args.session)
-        return _print(args, {'ok': True}, lambda v: 'отменено')
+        return _print(args, {'ok': True, 'dropped': dropped},
+                      lambda v: 'отменено' + (f", снято с доски задач: {len(v['dropped'])}" if v['dropped'] else ''))
 
     if command == 'archive':
         dsh_session_archive(args.session, base=base)
@@ -399,7 +402,7 @@ def _parser(prog: str) -> argparse.ArgumentParser:
     history.add_argument('session')
     history.add_argument('-n', type=int, default=10, help='сколько последних реплик')
 
-    command('cancel', 'прервать идущий круг карточки').add_argument('session')
+    command('cancel', 'прервать идущий круг карточки и снять её задачи с доски').add_argument('session')
     command('archive', 'убрать карточку в архив').add_argument('session')
 
     command('board', 'доска: промпты, статусы, круги, моторы').add_argument(
